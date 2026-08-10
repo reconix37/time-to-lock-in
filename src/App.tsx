@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CalendarHeatmap } from "./components/CalendarHeatmap";
+import { DayScorecard } from "./components/DayScorecard";
+import type { ProgressOverview } from "./progress";
 import "./styles/tokens.css";
 import "./App.css";
 
@@ -144,6 +147,7 @@ function App() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
+  const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [apps, setApps] = useState<AppToday[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +169,9 @@ function App() {
   const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
   const [kindLabelNeutral, setKindLabelNeutral] = useState(DEFAULT_KIND_LABELS.neutral);
   const [kindLabelWaste, setKindLabelWaste] = useState(DEFAULT_KIND_LABELS.waste);
+  const [usefulGoalMin, setUsefulGoalMin] = useState("120");
+  const [wasteLimitMin, setWasteLimitMin] = useState("60");
+  const [observedMin, setObservedMin] = useState("60");
   const [dbSizeMb, setDbSizeMb] = useState<number | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -185,18 +192,19 @@ function App() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextStats, nextApps, nextSettings, trackingPaused] =
+      const [nextSegments, nextCategories, nextProgress, nextApps, nextSettings, trackingPaused] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
-          invoke<TodayStats>("get_today_stats"),
+          invoke<ProgressOverview>("get_progress_overview"),
           invoke<AppToday[]>("get_apps_today"),
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
         ]);
       setSegments(nextSegments);
       setCategories(nextCategories);
-      setStats(nextStats);
+      setProgress(nextProgress);
+      setStats(nextProgress.today);
       setApps(nextApps);
       setSettings(nextSettings);
       setDark(nextSettings.theme === "dark");
@@ -358,6 +366,9 @@ function App() {
     setKindLabelUseful(settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful);
     setKindLabelNeutral(settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral);
     setKindLabelWaste(settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste);
+    setUsefulGoalMin(settings.useful_goal_min ?? "120");
+    setWasteLimitMin(settings.waste_limit_min ?? "60");
+    setObservedMin(settings.observed_min ?? "60");
     setDbSizeMb(null);
     setTokenCopied(false);
     setSettingsError(null);
@@ -555,9 +566,18 @@ function App() {
       setSettingsError("Названия типов должны содержать от 1 до 80 символов");
       return;
     }
+    const goals = [usefulGoalMin, wasteLimitMin, observedMin];
+    if (goals.some((value) => !/^\d+$/.test(value) || Number(value) > 1440)) {
+      setSettingsError("Цели должны быть целыми числами от 0 до 1440 минут");
+      return;
+    }
     setSettingsSaving(true);
     setSettingsError(null);
     try {
+      // Последовательная запись сохраняет целостный снимок целей на текущую дату.
+      await invoke<void>("set_setting", { key: "useful_goal_min", value: usefulGoalMin });
+      await invoke<void>("set_setting", { key: "waste_limit_min", value: wasteLimitMin });
+      await invoke<void>("set_setting", { key: "observed_min", value: observedMin });
       await Promise.all([
         invoke<void>("set_setting", { key: "extension_chrome_id", value: chromeId }),
         invoke<void>("set_setting", { key: "extension_edge_id", value: edgeId }),
@@ -572,9 +592,13 @@ function App() {
         kind_label_useful: nextKindLabels.useful,
         kind_label_neutral: nextKindLabels.neutral,
         kind_label_waste: nextKindLabels.waste,
+        useful_goal_min: usefulGoalMin,
+        waste_limit_min: wasteLimitMin,
+        observed_min: observedMin,
       }));
       setSettingsOpen(false);
       setError(null);
+      await loadDashboard();
     } catch (reason: unknown) {
       setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки");
     } finally {
@@ -695,6 +719,12 @@ function App() {
       </section>
 
       {error && <div className="error-banner">{error}. Данные обновятся автоматически.</div>}
+
+      {loading || !progress ? (
+        <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
+      ) : (
+        <DayScorecard overview={progress} formatDuration={formatDuration} />
+      )}
 
       <div className="dashboard-grid">
         <section className="card timeline-card">
@@ -874,6 +904,14 @@ function App() {
           </section>
         </aside>
       </div>
+
+      {progress && (
+        <CalendarHeatmap
+          days={progress.calendar}
+          todayDate={progress.today.local_date}
+          formatDuration={formatDuration}
+        />
+      )}
 
       {categoryManagerOpen && (
         <div className="settings-overlay">
@@ -1124,6 +1162,18 @@ function App() {
               <h2 id="settings-title">Настройки</h2>
             </div>
             <div className="settings-scroll">
+              <section className="settings-section" aria-labelledby="goal-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="goal-settings-title">Зачёт дня</h3>
+                  <span>Новые значения действуют с сегодняшней даты</span>
+                </div>
+                <div className="goal-settings-grid">
+                  <label className="settings-field"><span>Полезное · цель, мин</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>Потери · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>Наблюдение · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
+                </div>
+              </section>
+
               <section className="settings-section" aria-labelledby="kind-labels-title">
                 <div className="settings-section-heading">
                   <h3 id="kind-labels-title">Названия типов времени</h3>

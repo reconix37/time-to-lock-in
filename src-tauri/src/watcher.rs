@@ -210,13 +210,6 @@ fn finish_segment(connection: &mut Connection, id: i64, timestamp: i64) -> Resul
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
-    let local_date = transaction
-        .query_row(
-            "SELECT date(ts_start / 1000, 'unixepoch', 'localtime') FROM segments WHERE id = ?1",
-            [id],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "UPDATE segments SET ts_end = ?1 WHERE id = ?2",
@@ -229,7 +222,9 @@ fn finish_segment(connection: &mut Connection, id: i64, timestamp: i64) -> Resul
             [id.to_string()],
         )
         .map_err(|error| error.to_string())?;
-    db::refresh_daily_stats(&transaction, &local_date)?;
+    for local_date in db::segment_local_dates(&transaction, id)? {
+        db::refresh_daily_stats(&transaction, &local_date)?;
+    }
     transaction.commit().map_err(|error| error.to_string())
 }
 

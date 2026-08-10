@@ -45,6 +45,136 @@ struct TodayStats {
     observed_ms: i64,
 }
 
+#[derive(Clone, Serialize)]
+struct ProgressDay {
+    local_date: String,
+    useful_ms: i64,
+    neutral_ms: i64,
+    waste_ms: i64,
+    observed_ms: i64,
+    useful_goal_min: i64,
+    waste_limit_min: i64,
+    observed_min: i64,
+    useful_passed: bool,
+    waste_passed: bool,
+    observed_passed: bool,
+    passed: bool,
+    useful_level: u8,
+    waste_level: u8,
+    future: bool,
+}
+
+#[derive(Serialize)]
+struct ProgressOverview {
+    today: ProgressDay,
+    lifetime_xp: i64,
+    current_rank: &'static str,
+    current_rank_threshold: i64,
+    next_rank: Option<&'static str>,
+    next_rank_threshold: Option<i64>,
+    calendar: Vec<ProgressDay>,
+}
+
+const RANKS: [(&str, i64); 8] = [
+    ("Хомяк", 0),
+    ("Стажёр", 500),
+    ("Кодер", 2_000),
+    ("Фокусник", 5_000),
+    ("Тайм-ниндзя", 12_000),
+    ("Киберсамурай", 25_000),
+    ("Архитектор времени", 50_000),
+    ("Повелитель времени", 100_000),
+];
+
+fn heat_level(value_ms: i64, threshold_min: i64) -> u8 {
+    if value_ms <= 0 {
+        return 0;
+    }
+    let threshold_ms = threshold_min.saturating_mul(60_000);
+    if threshold_ms <= 0 {
+        return 4;
+    }
+    let ratio = value_ms as f64 / threshold_ms as f64;
+    if ratio <= 0.25 {
+        1
+    } else if ratio <= 0.5 {
+        2
+    } else if ratio <= 0.75 {
+        3
+    } else {
+        4
+    }
+}
+
+fn progress_day(record: db::DailyProgressRecord, today: &str) -> ProgressDay {
+    let observed_ms = record.useful_ms + record.neutral_ms + record.waste_ms;
+    let useful_passed = record.useful_ms >= record.useful_goal_min.saturating_mul(60_000);
+    let waste_passed = record.waste_ms <= record.waste_limit_min.saturating_mul(60_000);
+    let observed_passed = observed_ms >= record.observed_min.saturating_mul(60_000);
+    let future = record.local_date.as_str() > today;
+    ProgressDay {
+        local_date: record.local_date,
+        useful_ms: record.useful_ms,
+        neutral_ms: record.neutral_ms,
+        waste_ms: record.waste_ms,
+        observed_ms,
+        useful_goal_min: record.useful_goal_min,
+        waste_limit_min: record.waste_limit_min,
+        observed_min: record.observed_min,
+        useful_passed,
+        waste_passed,
+        observed_passed,
+        passed: !future && useful_passed && waste_passed && observed_passed,
+        useful_level: heat_level(record.useful_ms, record.useful_goal_min),
+        waste_level: heat_level(record.waste_ms, record.waste_limit_min),
+        future,
+    }
+}
+
+#[tauri::command]
+fn get_progress_overview() -> Result<ProgressOverview, String> {
+    let connection = db::open()?;
+    let today_date = connection
+        .query_row("SELECT date('now', 'localtime')", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?;
+    let calendar = db::progress_series(&connection)?
+        .into_iter()
+        .map(|record| progress_day(record, &today_date))
+        .collect::<Vec<_>>();
+    let today = calendar
+        .iter()
+        .find(|day| day.local_date == today_date)
+        .cloned()
+        .ok_or_else(|| "today is outside the progress calendar".to_string())?;
+    let historical_xp = connection
+        .query_row(
+            "SELECT COALESCE(SUM(xp), 0) FROM daily_stats
+             WHERE local_date < date('now', 'localtime')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let lifetime_xp = historical_xp + today.useful_ms / 60_000;
+    let rank_index = RANKS
+        .iter()
+        .rposition(|(_, threshold)| lifetime_xp >= *threshold)
+        .unwrap_or(0);
+    let (current_rank, current_rank_threshold) = RANKS[rank_index];
+    let next = RANKS.get(rank_index + 1).copied();
+
+    Ok(ProgressOverview {
+        today,
+        lifetime_xp,
+        current_rank,
+        current_rank_threshold,
+        next_rank: next.map(|(name, _)| name),
+        next_rank_threshold: next.map(|(_, threshold)| threshold),
+        calendar,
+    })
+}
+
 #[derive(Serialize)]
 struct Category {
     id: i64,
@@ -124,13 +254,12 @@ fn get_today_stats() -> Result<TodayStats, String> {
     connection
         .query_row(
             "SELECT
-                COALESCE(SUM(CASE WHEN c.kind = 'useful' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN c.kind = 'neutral' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN c.kind = 'waste' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END), 0)
-             FROM segments s
-             LEFT JOIN categories c ON c.id = COALESCE(s.category_id, 0)
-             WHERE date(s.ts_start / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-               AND s.status IN ('active', 'crashed')",
+                COALESCE(SUM(CASE WHEN c.kind = 'useful' THEN o.duration_ms ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN c.kind = 'neutral' THEN o.duration_ms ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN c.kind = 'waste' THEN o.duration_ms ELSE 0 END), 0)
+             FROM segment_day_overlaps o
+             LEFT JOIN categories c ON c.id = o.category_id
+             WHERE o.local_date = date('now', 'localtime')",
             [],
             |row| {
                 let useful_ms = row.get(0)?;
@@ -336,14 +465,7 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
     }
 
     let connection = db::open()?;
-    connection
-        .execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    db::set_setting(&connection, &key, &value)
 }
 
 #[tauri::command]
@@ -369,12 +491,11 @@ fn set_segment_category(
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
-    let (local_date, app) = transaction
+    let app = transaction
         .query_row(
-            "SELECT date(ts_start / 1000, 'unixepoch', 'localtime'), app
-             FROM segments WHERE id = ?1",
+            "SELECT app FROM segments WHERE id = ?1",
             [segment_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| row.get::<_, String>(0),
         )
         .optional()
         .map_err(|error| error.to_string())?
@@ -390,7 +511,9 @@ fn set_segment_category(
             db::upsert_exe_rule(&transaction, &app, id)?;
         }
     }
-    db::refresh_daily_stats(&transaction, &local_date)?;
+    for local_date in db::segment_local_dates(&transaction, segment_id)? {
+        db::refresh_daily_stats(&transaction, &local_date)?;
+    }
     transaction.commit().map_err(|error| error.to_string())
 }
 
@@ -412,14 +535,14 @@ fn get_apps_today() -> Result<Vec<AppToday>, String> {
     let mut statement = connection
         .prepare(
             "SELECT s.app,
-                    SUM(MAX(0, s.ts_end - s.ts_start)) AS duration_ms,
-                    SUM(CASE WHEN c.kind = 'useful' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END),
-                    SUM(CASE WHEN c.kind = 'neutral' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END),
-                    SUM(CASE WHEN c.kind = 'waste' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END)
-             FROM segments s
-             LEFT JOIN categories c ON c.id = s.category_id
-             WHERE date(s.ts_start / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-               AND s.status IN ('active', 'crashed')
+                    SUM(o.duration_ms) AS duration_ms,
+                    SUM(CASE WHEN c.kind = 'useful' THEN o.duration_ms ELSE 0 END),
+                    SUM(CASE WHEN c.kind = 'neutral' THEN o.duration_ms ELSE 0 END),
+                    SUM(CASE WHEN c.kind = 'waste' THEN o.duration_ms ELSE 0 END)
+             FROM segment_day_overlaps o
+             JOIN segments s ON s.id = o.segment_id
+             LEFT JOIN categories c ON c.id = o.category_id
+             WHERE o.local_date = date('now', 'localtime')
              GROUP BY s.app
              ORDER BY duration_ms DESC",
         )
@@ -498,6 +621,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_today_segments,
             get_today_stats,
+            get_progress_overview,
             get_categories,
             create_category,
             delete_category,
