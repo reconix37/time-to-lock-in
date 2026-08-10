@@ -225,6 +225,12 @@ function App() {
 
   useEffect(() => {
     if (!settingsOpen) return;
+    setExtensionChromeId(settings.extension_chrome_id ?? "");
+    setExtensionEdgeId(settings.extension_edge_id ?? "");
+  }, [settings.extension_chrome_id, settings.extension_edge_id, settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !settingsSaving) setSettingsOpen(false);
     };
@@ -1167,7 +1173,7 @@ function App() {
                   />
                 </label>
                 <p className="settings-hint" id="settings-hint">
-                  ID виден в chrome://extensions → TTLI Tracker → ID. Вставляется один раз, после этого браузер шлёт события в приложение.
+                  ID подхватывается автоматически при первом контакте расширения — достаточно вставить токен. Поля ниже заполняются сами; вручную править нужно только если что-то пошло не так (ID виден в chrome://extensions → TTLI Tracker → ID).
                 </p>
                 <div className="settings-token">
                   <span>Токен расширения</span>

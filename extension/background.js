@@ -1,5 +1,8 @@
-const API_URL = "http://127.0.0.1:43110/event";
+const API_BASE = "http://127.0.0.1:43110";
+const API_URL = `${API_BASE}/event`;
+const REGISTER_URL = `${API_BASE}/register`;
 const TOKEN_KEY = "ttli_token";
+const PAIRED_KEY = "ttli_paired_id";
 const DEBOUNCE_MS = 2_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 250;
@@ -60,6 +63,45 @@ async function readToken() {
   return typeof token === "string" ? token.trim() : "";
 }
 
+function browserName() {
+  return navigator.userAgent.includes("Edg/") ? "edge" : "chrome";
+}
+
+async function isPaired() {
+  const stored = await chrome.storage.local.get(PAIRED_KEY);
+  return stored[PAIRED_KEY] === chrome.runtime.id;
+}
+
+// Автоподключение: расширение само присылает свой ID; апка запоминает его.
+// Токен обязателен — без него апка отвечает 401. Origin браузер подделать не даёт.
+async function registerSelf() {
+  const token = await readToken();
+  if (!token) {
+    return { ok: false, status: 401 };
+  }
+
+  try {
+    const response = await fetch(REGISTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-TTLI-Token": token,
+        "X-TTLI-Extension-Id": chrome.runtime.id,
+        "X-TTLI-Browser": browserName(),
+      },
+      body: "{}",
+    });
+    if (!response.ok) {
+      return { ok: false, status: response.status };
+    }
+    await chrome.storage.local.set({ [PAIRED_KEY]: chrome.runtime.id });
+    return { ok: true, status: response.status };
+  } catch {
+    // Апка не запущена — ретраим при следующем событии.
+    return { ok: false, status: 0 };
+  }
+}
+
 async function postEvent(event, token) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -72,6 +114,11 @@ async function postEvent(event, token) {
         body: JSON.stringify(event),
       });
 
+      if (response.status === 401 || response.status === 403) {
+        // Отвязали/сменили токен — следующий контакт перепривяжет.
+        await chrome.storage.local.remove(PAIRED_KEY);
+        return;
+      }
       if (response.ok || response.status < 500) {
         return;
       }
@@ -91,6 +138,10 @@ async function captureActiveTab() {
     return;
   }
 
+  if (!(await isPaired())) {
+    await registerSelf();
+  }
+
   const [tab] = await chrome.tabs.query({
     active: true,
     lastFocusedWindow: true,
@@ -107,6 +158,19 @@ async function captureActiveTab() {
 function queueCapture() {
   captureQueue = captureQueue.then(captureActiveTab, captureActiveTab);
 }
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "ttli-register") {
+    registerSelf().then((result) => {
+      sendResponse(result);
+      if (result.ok) {
+        queueCapture();
+      }
+    });
+    return true; // асинхронный ответ
+  }
+  return undefined;
+});
 
 chrome.tabs.onActivated.addListener(queueCapture);
 

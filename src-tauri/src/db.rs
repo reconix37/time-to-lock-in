@@ -149,6 +149,17 @@ pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>, Str
         .map_err(|error| error.to_string())
 }
 
+pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRecord, String> {
     let normalized_name = name.trim();
     if normalized_name.is_empty() || normalized_name.chars().count() > 80 {
@@ -312,7 +323,7 @@ pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{upsert_exe_rule, MIGRATION};
+    use super::{set_setting, upsert_exe_rule, MIGRATION};
     use rusqlite::{params, Connection};
 
     #[test]
@@ -362,6 +373,26 @@ mod tests {
         assert_eq!(
             upsert_exe_rule(&connection, "example.exe", 0),
             Err("Без категории нельзя привязать".to_string())
+        );
+    }
+
+    #[test]
+    fn upserts_setting() {
+        let connection = Connection::open_in_memory().expect("in-memory database");
+        connection.execute_batch(MIGRATION).expect("schema");
+
+        set_setting(&connection, "extension_chrome_id", "first").expect("insert setting");
+        set_setting(&connection, "extension_chrome_id", "second").expect("update setting");
+
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'extension_chrome_id'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("stored setting"),
+            "second"
         );
     }
 }

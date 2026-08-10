@@ -48,6 +48,7 @@ async fn serve(sender: Sender<BrowserEvent>, stop: Arc<AtomicBool>) -> Result<()
     let app = Router::new()
         .route("/health", get(health))
         .route("/event", post(event).options(preflight))
+        .route("/register", post(register).options(register_preflight))
         .with_state(state);
     let address = SocketAddr::from(([127, 0, 0, 1], 43110));
     let listener = tokio::net::TcpListener::bind(address)
@@ -183,6 +184,80 @@ fn token_is_valid(headers: &HeaderMap) -> bool {
     token == Some(expected.as_str())
 }
 
+fn is_valid_extension_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .chars()
+            .all(|character| ('a'..='p').contains(&character))
+}
+
+// Автоподключение: расширение само присылает свой ID при первом контакте.
+// Origin (chrome-extension://<id>) выставляет браузер — это источник истины;
+// заголовок X-TTLI-Extension-Id обязан совпадать с ним. Токен обязателен.
+async fn register(headers: HeaderMap) -> Response {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+    else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let deny = |status| cors_response(status, Body::empty(), &origin);
+
+    if !token_is_valid(&headers) {
+        return deny(StatusCode::UNAUTHORIZED);
+    }
+    let Some(extension_id) = origin.strip_prefix("chrome-extension://") else {
+        return deny(StatusCode::FORBIDDEN);
+    };
+    if !is_valid_extension_id(extension_id) {
+        return deny(StatusCode::BAD_REQUEST);
+    }
+    let claimed = headers
+        .get("x-ttli-extension-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if claimed != extension_id {
+        return deny(StatusCode::FORBIDDEN);
+    }
+    let browser = headers
+        .get("x-ttli-browser")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let key = if browser == "edge" {
+        "extension_edge_id"
+    } else {
+        "extension_chrome_id"
+    };
+    let connection = match db::open() {
+        Ok(connection) => connection,
+        Err(_) => return deny(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    if db::set_setting(&connection, key, extension_id).is_err() {
+        return deny(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let body = Body::from(json!({ "paired": true, "id": extension_id }).to_string());
+    let mut response = cors_response(StatusCode::OK, body, &origin);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
+// Preflight для /register: origin ещё не привязан, поэтому authorize_origin
+// не применяется — только echo CORS-заголовков (preflight не меняет состояние).
+async fn register_preflight(headers: HeaderMap) -> Response {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    cors_response(StatusCode::NO_CONTENT, Body::empty(), origin)
+}
+
 fn authorize_origin(headers: &HeaderMap) -> Result<String, StatusCode> {
     let origin = headers
         .get(header::ORIGIN)
@@ -222,7 +297,22 @@ fn cors_response(status: StatusCode, body: Body, origin: &str) -> Response {
     );
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("authorization, content-type, x-ttli-token"),
+        HeaderValue::from_static(
+            "authorization, content-type, x-ttli-token, x-ttli-extension-id, x-ttli-browser",
+        ),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_extension_id;
+
+    #[test]
+    fn validates_chromium_extension_ids() {
+        assert!(is_valid_extension_id("abcdefghijklmnopabcdefghijklmnop"));
+        assert!(!is_valid_extension_id("abcdefghijklmnopabcdefghijklmno"));
+        assert!(!is_valid_extension_id("abcdefghijklmnopabcdefghijklmnoq"));
+        assert!(!is_valid_extension_id("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP"));
+    }
 }

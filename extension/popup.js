@@ -1,4 +1,3 @@
-const HEALTH_URL = "http://127.0.0.1:43110/health";
 const TOKEN_KEY = "ttli_token";
 
 const form = document.querySelector("#token-form");
@@ -9,23 +8,24 @@ function setStatus(message) {
   status.textContent = message;
 }
 
+// Проверка через /register: 200 = подключён И привязан (токен валиден),
+// 401 = токен не подходит, сетевая ошибка = приложение не запущено.
 async function checkConnection() {
   setStatus("Проверка подключения…");
 
   try {
-    const response = await fetch(HEALTH_URL);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    const response = await chrome.runtime.sendMessage({ type: "ttli-register" });
+    if (response?.ok === true) {
+      setStatus("TTLI подключён");
+    } else if (response?.status === 401) {
+      setStatus("Токен не подходит. Скопируй его из настроек приложения.");
+    } else if (response?.status === 0) {
+      setStatus("TTLI не подключён. Запусти приложение и попробуй ещё раз.");
+    } else {
+      setStatus("TTLI отклонил привязку. Проверь расширение и попробуй ещё раз.");
     }
-
-    const health = await response.json();
-    if (health.status !== "ok") {
-      throw new Error("Unexpected health response");
-    }
-
-    setStatus("TTLI подключён");
   } catch {
-    setStatus("TTLI не подключён. Запусти приложение и проверь привязку.");
+    setStatus("TTLI не подключён. Запусти приложение и попробуй ещё раз.");
   }
 }
 
@@ -43,7 +43,7 @@ form.addEventListener("submit", async (event) => {
   const token = tokenInput.value.trim();
   await chrome.storage.local.set({ [TOKEN_KEY]: token });
   tokenInput.value = token;
-  setStatus("Токен сохранён");
+  setStatus("Токен сохранён, привязываю…");
   await checkConnection();
 });
 
