@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "TTLI Tracker",
+  "version": "1.0.0",
+  "description": "Sends the active browser tab domain and title to the local TTLI app.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["http://127.0.0.1:43110/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TTLI Tracker"
+  }
+}

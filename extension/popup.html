@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TTLI Tracker</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      body {
+        box-sizing: border-box;
+        margin: 0;
+        min-width: 320px;
+        padding: 16px;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0 0 8px;
+      }
+
+      p {
+        font-size: 13px;
+        line-height: 1.4;
+        margin: 0 0 12px;
+      }
+
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+
+      input,
+      button {
+        box-sizing: border-box;
+        font: inherit;
+        width: 100%;
+      }
+
+      input {
+        margin-bottom: 8px;
+        padding: 8px;
+      }
+
+      button {
+        cursor: pointer;
+        padding: 8px;
+      }
+
+      #status {
+        margin: 12px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>TTLI Tracker</h1>
+    <p>Вставь токен из приложения TTLI.</p>
+
+    <form id="token-form">
+      <label for="token">Токен</label>
+      <input id="token" name="token" type="password" autocomplete="off" />
+      <button type="submit">Сохранить</button>
+    </form>
+
+    <p id="status" role="status" aria-live="polite">Проверка подключения…</p>
+    <script src="popup.js"></script>
+  </body>
+</html>
