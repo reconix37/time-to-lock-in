@@ -26,7 +26,7 @@
 }
 * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
 body { background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
-.mini { width:280px; padding:12px; }
+.mini { width:300px; padding:12px; }
 .drag { display:flex; align-items:center; gap:8px; padding-bottom:10px; border-bottom:var(--border); -webkit-app-region:drag; }
 .drag .pulse { width:8px; height:8px; border-radius:50%; background:var(--cat-useful); box-shadow:0 0 0 3px color-mix(in srgb, var(--cat-useful) 15%, transparent); }
 .drag .app { font-weight:500; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -49,10 +49,15 @@ body { background:var(--bg); color:var(--text); font-family:var(--sans); font-si
 .bar .tick { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--text); opacity:.6; }
 .bar .tick.danger { background:var(--bad); }
 
-.foot { display:flex; align-items:center; gap:8px; padding-top:10px; border-top:var(--border); }
-.rank { display:flex; align-items:center; gap:6px; font-size:12px; }
-.rank b { font-weight:700; }
-.rank .xp { font-family:var(--mono); font-size:11px; color:var(--muted); }
+.foot { display:flex; flex-direction:column; gap:8px; padding-top:10px; border-top:var(--border); }
+.foot-top { display:flex; align-items:center; gap:8px; }
+.rank-top { display:flex; align-items:baseline; gap:8px; font-size:12px; flex:1; min-width:0; }
+.rank-top b { font-weight:700; }
+.rank-top .xp { font-family:var(--mono); font-size:11px; color:var(--muted); }
+.rank-prog { display:flex; align-items:center; gap:8px; }
+.rank-track { flex:1; height:4px; border-radius:999px; background:var(--hl-low); overflow:hidden; }
+.rank-fill { height:100%; width:68%; border-radius:999px; background:var(--iris); }
+.rank-next { font-family:var(--mono); font-size:10px; color:var(--subtle); white-space:nowrap; }
 .spacer { flex:1; }
 .btn { border:var(--border); background:var(--hl-low); color:var(--text); border-radius:6px; padding:5px 10px; font-family:var(--sans); font-size:12px; cursor:pointer; }
 .btn:hover { background:var(--overlay); }
@@ -90,10 +95,15 @@ body { background:var(--bg); color:var(--text); font-family:var(--sans); font-si
   </div>
 
   <div class="foot">
-    <div class="rank">⚔ <b>Кодер</b> <span class="xp">3,420 XP · до «Фокусника» 580 XP</span></div>
-    <div class="spacer"></div>
-    <button class="btn pause" title="Пауза трекинга">⏸</button>
-    <button class="btn primary" title="Открыть дашборд">Дашборд →</button>
+    <div class="foot-top">
+      <div class="rank-top"><b>Кодер</b><span class="xp">3,420 XP</span></div>
+      <button class="btn pause" title="Пауза трекинга">⏸</button>
+      <button class="btn primary" title="Открыть дашборд">Дашборд</button>
+    </div>
+    <div class="rank-prog">
+      <div class="rank-track"><div class="rank-fill"></div></div>
+      <div class="rank-next">→ Фокусник · 580 XP</div>
+    </div>
   </div>
 </div>
 <script>
