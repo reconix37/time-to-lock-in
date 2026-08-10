@@ -129,9 +129,10 @@ timeforge/
 - **SQLite (source of truth — миграции):**
   - `categories(id, name, color, icon, kind[useful|neutral|waste], goal_multiplier, created_at)`
   - `rules(id, match_type[exe|title|domain], pattern, category_id, priority)`
-  - `segments(id, ts_start, ts_end, app, window_title, domain, category_id, status[active|idle|away])`
+  - `segments(id, ts_start, ts_end, app, window_title, domain, category_id, status[active|idle|away|paused])`
   - `daily_stats(date, category_id, duration_ms, xp)` — агрегат хитмапа/зачёта
   - `settings(key, value)` — цели (useful_goal, waste_limit), hourly_rate (nullable), observed_min
+- **Механика сегментов (канон):** сегмент = непрерывное время в одном состоянии (app + window_title + domain). Каждые 5 сек вотчер читает активное окно; состояние не изменилось → +5 сек в памяти (БД не трогается); изменилось → запись сегмента + старт нового. Закрытие сегмента: смена состояния, idle (status=away), пауза (status=paused, новые не создаются), exit/shutdown (flush, потеря ≤ 5 сек). Сегменты НЕ склеиваются (A→B→A = три сегмента); группировка — только на отображении. category_id проставляется правилами при записи; переклассификация = смена category_id + пересчёт daily_stats
 - Ранг = пороги по накопленному Public XP (8 мемных, без деградации). Зачёт дня — по правилу трёх условий
 - Челлендж: код `TF-<useful>-<waste>-<observed>` — чистая сериализация трёх чисел, без сервера
 
