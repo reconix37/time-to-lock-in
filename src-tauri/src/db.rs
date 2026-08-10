@@ -129,14 +129,14 @@ pub fn refresh_daily_stats(
     transaction
         .execute(
             "INSERT INTO daily_stats (local_date, category_id, duration_ms, xp)
-             SELECT date(s.ts_start / 1000, 'unixepoch', 'localtime'), s.category_id,
+             SELECT date(s.ts_start / 1000, 'unixepoch', 'localtime'), COALESCE(s.category_id, 0),
                     SUM(MAX(0, s.ts_end - s.ts_start)),
                     CASE WHEN c.kind = 'useful' THEN SUM(MAX(0, s.ts_end - s.ts_start)) / 60000 ELSE 0 END
              FROM segments s
-             JOIN categories c ON c.id = s.category_id
+             LEFT JOIN categories c ON c.id = COALESCE(s.category_id, 0)
              WHERE date(s.ts_start / 1000, 'unixepoch', 'localtime') = ?1
                AND s.status IN ('active', 'crashed')
-             GROUP BY s.category_id",
+             GROUP BY COALESCE(s.category_id, 0)",
             [local_date],
         )
         .map_err(|error| error.to_string())?;

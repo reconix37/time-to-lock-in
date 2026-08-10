@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS categories (
     sort_order     INTEGER NOT NULL DEFAULT 0
 );
 
+INSERT OR IGNORE INTO categories
+    (id, name, color, icon, kind, goal_multiplier, created_at, sort_order)
+VALUES
+    (0, 'Без категории', '#9893a5', '', 'neutral', 1.0, 0, -1);
+
 CREATE TABLE IF NOT EXISTS rules (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     match_type  TEXT    NOT NULL CHECK (match_type IN ('exe','title','domain')),

@@ -33,7 +33,7 @@ struct Segment {
     app: String,
     window_title: String,
     domain: String,
-    category_id: Option<i64>,
+    category_id: i64,
     status: String,
 }
 
@@ -79,7 +79,7 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
     let connection = db::open()?;
     let mut statement = connection
         .prepare(
-            "SELECT id, ts_start, ts_end, app, window_title, domain, category_id, status
+            "SELECT id, ts_start, ts_end, app, window_title, domain, COALESCE(category_id, 0), status
              FROM segments
              WHERE date(ts_start / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
              ORDER BY ts_start ASC",
@@ -114,7 +114,7 @@ fn get_today_stats() -> Result<TodayStats, String> {
                 COALESCE(SUM(CASE WHEN c.kind = 'neutral' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN c.kind = 'waste' THEN MAX(0, s.ts_end - s.ts_start) ELSE 0 END), 0)
              FROM segments s
-             JOIN categories c ON c.id = s.category_id
+             LEFT JOIN categories c ON c.id = COALESCE(s.category_id, 0)
              WHERE date(s.ts_start / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
                AND s.status IN ('active', 'crashed')",
             [],

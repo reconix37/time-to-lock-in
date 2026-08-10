@@ -114,6 +114,8 @@ button:focus-visible {
 .track-segment:hover { top: 0; height: 17px; }
 .track-segment.is-away { background: var(--cat-muted); opacity: .55; }
 .segment-list { border-top: 1px solid var(--hl-low); }
+.show-all-button { display: block; margin: 16px auto 0; padding: 7px 12px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
+.show-all-button:hover { background: var(--hl-low); }
 .segment-row { border-bottom: 1px solid var(--hl-low); }
 .segment-main { display: grid; grid-template-columns: 94px minmax(0, 1fr) auto 58px; gap: 12px; align-items: center; width: 100%; padding: 12px 4px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .segment-main:hover { background: var(--hl-low); }

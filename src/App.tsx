@@ -12,7 +12,7 @@ interface Segment {
   app: string;
   window_title: string;
   domain: string;
-  category_id: number | null;
+  category_id: number;
   status: "active" | "crashed" | "away" | "paused";
 }
 
@@ -56,6 +56,7 @@ const KIND_LABELS: Record<CategoryKind, string> = {
 
 function formatDuration(milliseconds: number): string {
   const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (milliseconds > 0 && totalMinutes === 0) return "<1м";
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   if (hours === 0) return `${minutes}м`;
@@ -84,6 +85,7 @@ function App() {
   const [now, setNow] = useState(Date.now());
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [showAllSegments, setShowAllSegments] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -140,6 +142,8 @@ function App() {
   ];
   let ringOffset = 0;
   const maxAppDuration = Math.max(...apps.map((app) => app.duration_ms), 1);
+  const reversedSegments = [...segments].reverse();
+  const visibleSegments = showAllSegments ? reversedSegments : reversedSegments.slice(0, 50);
 
   async function toggleTheme() {
     const nextDark = !dark;
@@ -256,7 +260,7 @@ function App() {
               </div>
 
               <div className="segment-list">
-                {[...segments].reverse().map((segment) => {
+                {visibleSegments.map((segment) => {
                   const category = categoryById.get(segment.category_id ?? -1);
                   const isCurrent = live?.id === segment.id;
                   const duration = (isCurrent ? now : segment.ts_end) - segment.ts_start;
@@ -281,6 +285,11 @@ function App() {
                   );
                 })}
               </div>
+              {!showAllSegments && segments.length > 50 && (
+                <button className="show-all-button" onClick={() => setShowAllSegments(true)}>
+                  Показать все ({segments.length})
+                </button>
+              )}
             </>
           )}
         </section>

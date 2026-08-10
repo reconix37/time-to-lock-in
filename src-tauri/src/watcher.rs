@@ -186,7 +186,7 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
         .unwrap_or(true)
 }
 
-fn classify(connection: &Connection, state: &ActivityState) -> Result<Option<i64>, String> {
+fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, String> {
     connection
         .query_row(
             "SELECT category_id FROM rules
@@ -201,6 +201,7 @@ fn classify(connection: &Connection, state: &ActivityState) -> Result<Option<i64
             |row| row.get(0),
         )
         .optional()
+        .map(|category_id| category_id.unwrap_or(0))
         .map_err(|error| error.to_string())
 }
 
@@ -234,7 +235,7 @@ mod platform {
             return Ok(None);
         }
 
-        let title = window_title(hwnd);
+        let title = normalize_title(&window_title(hwnd));
         let (app, protected_window) = match process_name(hwnd) {
             Ok(app) if !app.is_empty() => (app, false),
             _ => ("system".to_string(), true),
@@ -258,7 +259,7 @@ mod platform {
                     let age = now.saturating_sub(event.ts);
                     (0..=BROWSER_EVENT_MAX_AGE_MS).contains(&age)
                 })
-                .map(|event| (event.domain.clone(), event.title.clone()))
+                .map(|event| (event.domain.clone(), normalize_title(&event.title)))
                 .unwrap_or_else(|| (String::new(), title.clone()))
         } else {
             (String::new(), title.clone())
@@ -276,6 +277,35 @@ mod platform {
                 "active"
             },
         }))
+    }
+
+    fn normalize_title(title: &str) -> String {
+        if let Some(open_index) = title.rfind('(') {
+            if title.ends_with(')') {
+                let suffix = &title[open_index + 1..title.len() - 1];
+                let digits = suffix.strip_suffix('%').unwrap_or(suffix);
+                if !digits.is_empty()
+                    && digits
+                        .chars()
+                        .all(|character| character.is_ascii_digit())
+                {
+                    return title[..open_index].trim_end().to_string();
+                }
+            }
+        }
+
+        if let Some(dash_index) = title.rfind('-') {
+            let suffix = title[dash_index + 1..].trim_start();
+            if !suffix.is_empty()
+                && suffix
+                    .chars()
+                    .all(|character| character.is_ascii_digit())
+            {
+                return title[..dash_index].trim_end().to_string();
+            }
+        }
+
+        title.to_string()
     }
 
     fn window_title(hwnd: windows::Win32::Foundation::HWND) -> String {
