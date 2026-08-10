@@ -81,7 +81,9 @@ fn run(
                 }
             }
             match current.as_mut() {
-                Some(segment) if segment.state == state => checkpoint(&connection, segment.id, now)?,
+                Some(segment) if segment.state == state => {
+                    checkpoint(&connection, segment.id, now)?
+                }
                 Some(segment) => {
                     finish_segment(&mut connection, segment.id, now)?;
                     current = Some(start_segment(&mut connection, state, now)?);
@@ -117,7 +119,9 @@ fn start_segment(
     timestamp: i64,
 ) -> Result<ActiveSegment, String> {
     let category_id = classify(connection, &state)?;
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "INSERT INTO segments (ts_start, ts_end, app, window_title, domain, category_id, status)
@@ -152,7 +156,9 @@ fn checkpoint(connection: &Connection, id: i64, timestamp: i64) -> Result<(), St
 }
 
 fn finish_segment(connection: &mut Connection, id: i64, timestamp: i64) -> Result<(), String> {
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     let local_date = transaction
         .query_row(
             "SELECT date(ts_start / 1000, 'unixepoch', 'localtime') FROM segments WHERE id = ?1",
@@ -221,8 +227,7 @@ mod platform {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId,
+        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     };
 
     pub fn sample(
@@ -245,8 +250,8 @@ mod platform {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(5)
             .saturating_mul(60_000);
-        let forced_away = protected_window
-            || matches!(app_lower.as_str(), "lockapp.exe" | "logonui.exe");
+        let forced_away =
+            protected_window || matches!(app_lower.as_str(), "lockapp.exe" | "logonui.exe");
         let idle = is_idle(idle_timeout_ms);
 
         if is_own_window(&app_lower) {
@@ -264,8 +269,8 @@ mod platform {
         } else {
             (String::new(), title.clone())
         };
-        let media_playing = fused_title.contains('▶')
-            || fused_title.to_lowercase().contains("(playing)");
+        let media_playing =
+            fused_title.contains('▶') || fused_title.to_lowercase().contains("(playing)");
 
         Ok(Some(ActivityState {
             app,
@@ -284,10 +289,7 @@ mod platform {
             if title.ends_with(')') {
                 let suffix = &title[open_index + 1..title.len() - 1];
                 let digits = suffix.strip_suffix('%').unwrap_or(suffix);
-                if !digits.is_empty()
-                    && digits
-                        .chars()
-                        .all(|character| character.is_ascii_digit())
+                if !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit())
                 {
                     return title[..open_index].trim_end().to_string();
                 }
@@ -296,11 +298,7 @@ mod platform {
 
         if let Some(dash_index) = title.rfind('-') {
             let suffix = title[dash_index + 1..].trim_start();
-            if !suffix.is_empty()
-                && suffix
-                    .chars()
-                    .all(|character| character.is_ascii_digit())
-            {
+            if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
                 return title[..dash_index].trim_end().to_string();
             }
         }

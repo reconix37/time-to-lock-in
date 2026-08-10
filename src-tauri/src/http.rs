@@ -147,9 +147,7 @@ async fn event(
             }
             seen.insert(key, received_at).is_none()
         }
-        Err(_) => {
-            return cors_response(StatusCode::INTERNAL_SERVER_ERROR, Body::empty(), &origin)
-        }
+        Err(_) => return cors_response(StatusCode::INTERNAL_SERVER_ERROR, Body::empty(), &origin),
     };
     if is_new
         && state
@@ -168,12 +166,11 @@ async fn event(
 }
 
 fn token_is_valid(headers: &HeaderMap) -> bool {
-    let expected = match db::open()
-        .and_then(|connection| db::setting(&connection, "extension_token"))
-    {
-        Ok(Some(token)) if !token.is_empty() => token,
-        _ => return false,
-    };
+    let expected =
+        match db::open().and_then(|connection| db::setting(&connection, "extension_token")) {
+            Ok(Some(token)) if !token.is_empty() => token,
+            _ => return false,
+        };
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

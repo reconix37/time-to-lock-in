@@ -56,6 +56,20 @@ struct Category {
     sort_order: i64,
 }
 
+impl From<db::CategoryRecord> for Category {
+    fn from(category: db::CategoryRecord) -> Self {
+        Self {
+            id: category.id,
+            name: category.name,
+            color: category.color,
+            icon: category.icon,
+            kind: category.kind,
+            goal_multiplier: category.goal_multiplier,
+            sort_order: category.sort_order,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct Rule {
     id: i64,
@@ -161,6 +175,16 @@ fn get_categories() -> Result<Vec<Category>, String> {
 }
 
 #[tauri::command]
+fn create_category(name: String, color: String, kind: String) -> Result<Category, String> {
+    db::create_category(&name, &color, &kind).map(Category::from)
+}
+
+#[tauri::command]
+fn delete_category(id: i64) -> Result<(), String> {
+    db::delete_category(id)
+}
+
+#[tauri::command]
 fn get_rules() -> Result<Vec<Rule>, String> {
     let connection = db::open()?;
     let mut statement = connection
@@ -252,7 +276,9 @@ fn get_settings() -> Result<HashMap<String, String>, String> {
         .prepare("SELECT key, value FROM settings ORDER BY key")
         .map_err(|error| error.to_string())?;
     let settings = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|error| error.to_string())?
         .collect::<Result<HashMap<_, _>, _>>()
         .map_err(|error| error.to_string())?;
@@ -270,7 +296,10 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
         "extension_chrome_id" | "extension_edge_id" => {
             value.is_empty()
-                || (value.len() == 32 && value.chars().all(|character| ('a'..='p').contains(&character)))
+                || (value.len() == 32
+                    && value
+                        .chars()
+                        .all(|character| ('a'..='p').contains(&character)))
         }
         _ => false,
     };
@@ -314,7 +343,9 @@ fn set_segment_category(segment_id: i64, category_id: Option<i64>) -> Result<(),
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "segment does not exist".to_string())?;
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "UPDATE segments SET category_id = ?1 WHERE id = ?2",
@@ -403,11 +434,8 @@ pub fn run() {
             db::initialize().map_err(std::io::Error::other)?;
             let stop = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::channel();
-            let watcher_handle = watcher::spawn(
-                receiver,
-                Arc::clone(&stop),
-                Arc::clone(&setup_paused),
-            );
+            let watcher_handle =
+                watcher::spawn(receiver, Arc::clone(&stop), Arc::clone(&setup_paused));
             let http_handle = http::spawn(sender, Arc::clone(&stop));
             let mut handles = setup_handles
                 .lock()
@@ -421,6 +449,8 @@ pub fn run() {
             get_today_segments,
             get_today_stats,
             get_categories,
+            create_category,
+            delete_category,
             get_rules,
             create_rule,
             delete_rule,
@@ -436,7 +466,10 @@ pub fn run() {
 
     let exit_handles = Arc::clone(&service_handles);
     app.run(move |_, event| {
-        if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
             if let Ok(handles) = exit_handles.lock() {
                 if let Some((stop, _, _)) = handles.as_ref() {
                     stop.store(true, Ordering::Relaxed);

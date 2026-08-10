@@ -5,6 +5,16 @@ use uuid::Uuid;
 
 const MIGRATION: &str = include_str!("../migrations/001_init.sql");
 
+pub struct CategoryRecord {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub icon: String,
+    pub kind: String,
+    pub goal_multiplier: f64,
+    pub sort_order: i64,
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -37,22 +47,41 @@ pub fn open() -> Result<Connection, String> {
 
 pub fn initialize() -> Result<(), String> {
     let mut connection = open()?;
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     transaction
         .execute_batch(MIGRATION)
         .map_err(|error| error.to_string())?;
 
     let timestamp = now_ms();
-    for (name, color, icon, kind, sort_order) in [
-        ("Work", "#286983", "briefcase", "useful", 0),
-        ("Chill", "#ea9d34", "coffee", "neutral", 1),
-        ("Brainrot", "#b4637a", "skull", "waste", 2),
-    ] {
+    let categories_seeded = transaction
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'category_defaults_seeded'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .is_some();
+    if !categories_seeded {
+        for (name, color, icon, kind, sort_order) in [
+            ("Work", "#286983", "briefcase", "useful", 0),
+            ("Chill", "#ea9d34", "coffee", "neutral", 1),
+            ("Brainrot", "#b4637a", "skull", "waste", 2),
+        ] {
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO categories (name, color, icon, kind, created_at, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![name, color, icon, kind, timestamp, sort_order],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         transaction
             .execute(
-                "INSERT OR IGNORE INTO categories (name, color, icon, kind, created_at, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![name, color, icon, kind, timestamp, sort_order],
+                "INSERT INTO settings (key, value) VALUES ('category_defaults_seeded', '1')",
+                [],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -110,21 +139,113 @@ pub fn initialize() -> Result<(), String> {
 
 pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>, String> {
     connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            [key],
-            |row| row.get(0),
-        )
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
         .optional()
         .map_err(|error| error.to_string())
 }
 
-pub fn refresh_daily_stats(
-    transaction: &Transaction<'_>,
-    local_date: &str,
-) -> Result<(), String> {
+pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRecord, String> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() || normalized_name.chars().count() > 80 {
+        return Err("Название должно содержать от 1 до 80 символов".to_string());
+    }
+    if color.len() != 7
+        || !color.starts_with('#')
+        || !color[1..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("Цвет должен быть в формате #RRGGBB".to_string());
+    }
+    if !matches!(kind, "useful" | "neutral" | "waste") {
+        return Err("Недопустимый тип категории".to_string());
+    }
+
+    let connection = open()?;
+    let duplicate = connection
+        .query_row(
+            "SELECT 1 FROM categories WHERE lower(name) = lower(?1)",
+            [normalized_name],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(false);
+    if duplicate {
+        return Err("Категория с таким названием уже существует".to_string());
+    }
+
+    let sort_order = connection
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO categories (name, color, icon, kind, goal_multiplier, created_at, sort_order)
+             VALUES (?1, ?2, '', ?3, 1.0, ?4, ?5)",
+            params![normalized_name, color.to_lowercase(), kind, now_ms(), sort_order],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(CategoryRecord {
+        id: connection.last_insert_rowid(),
+        name: normalized_name.to_string(),
+        color: color.to_lowercase(),
+        icon: String::new(),
+        kind: kind.to_string(),
+        goal_multiplier: 1.0,
+        sort_order,
+    })
+}
+
+pub fn delete_category(id: i64) -> Result<(), String> {
+    if id == 0 {
+        return Err("Категорию «Без категории» нельзя удалить".to_string());
+    }
+    if id < 0 {
+        return Err("Недопустимый идентификатор категории".to_string());
+    }
+
+    let mut connection = open()?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let affected_dates = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT DISTINCT date(ts_start / 1000, 'unixepoch', 'localtime')
+                 FROM segments WHERE category_id = ?1",
+            )
+            .map_err(|error| error.to_string())?;
+        statement
+            .query_map([id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    let deleted = transaction
+        .execute("DELETE FROM categories WHERE id = ?1", [id])
+        .map_err(|error| error.to_string())?;
+    if deleted == 0 {
+        return Err("Категория не найдена".to_string());
+    }
+    for local_date in affected_dates {
+        refresh_daily_stats(&transaction, &local_date)?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> Result<(), String> {
     transaction
-        .execute("DELETE FROM daily_stats WHERE local_date = ?1", [local_date])
+        .execute(
+            "DELETE FROM daily_stats WHERE local_date = ?1",
+            [local_date],
+        )
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
