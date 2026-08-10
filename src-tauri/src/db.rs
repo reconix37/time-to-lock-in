@@ -222,11 +222,12 @@ pub fn delete_category(id: i64) -> Result<(), String> {
                  FROM segments WHERE category_id = ?1",
             )
             .map_err(|error| error.to_string())?;
-        statement
+        let dates = statement
             .query_map([id], |row| row.get::<_, String>(0))
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        dates
     };
     let deleted = transaction
         .execute("DELETE FROM categories WHERE id = ?1", [id])
