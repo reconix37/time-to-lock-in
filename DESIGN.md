@@ -49,6 +49,10 @@
   --shadow: 0 1px 2px rgba(87, 82, 121, 0.06); /* минимум, светлая тема */
   --font-sans: 'Space Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+  /* Терминальный лог (Печать дня) — в светлой теме тоже тёмный блок */
+  --term-bg:   #2a2534;
+  --term-text: #f4ede8;
+  --term-muted:#797593;
 }
 ```
 
