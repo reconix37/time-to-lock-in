@@ -85,7 +85,7 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
              ORDER BY ts_start ASC",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let segments = statement
         .query_map([], |row| {
             Ok(Segment {
                 id: row.get(0)?,
@@ -100,7 +100,8 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(segments)
 }
 
 #[tauri::command]
@@ -141,7 +142,7 @@ fn get_categories() -> Result<Vec<Category>, String> {
              FROM categories ORDER BY sort_order ASC, name ASC",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let categories = statement
         .query_map([], |row| {
             Ok(Category {
                 id: row.get(0)?,
@@ -155,7 +156,8 @@ fn get_categories() -> Result<Vec<Category>, String> {
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(categories)
 }
 
 #[tauri::command]
@@ -170,7 +172,7 @@ fn get_rules() -> Result<Vec<Rule>, String> {
                       id ASC",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let rules = statement
         .query_map([], |row| {
             Ok(Rule {
                 id: row.get(0)?,
@@ -182,7 +184,8 @@ fn get_rules() -> Result<Vec<Rule>, String> {
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(rules)
 }
 
 #[tauri::command]
@@ -248,11 +251,12 @@ fn get_settings() -> Result<HashMap<String, String>, String> {
     let mut statement = connection
         .prepare("SELECT key, value FROM settings ORDER BY key")
         .map_err(|error| error.to_string())?;
-    statement
+    let settings = statement
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
         .map_err(|error| error.to_string())?
         .collect::<Result<HashMap<_, _>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -339,7 +343,7 @@ fn get_apps_today() -> Result<Vec<AppToday>, String> {
              ORDER BY duration_ms DESC",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let apps = statement
         .query_map([], |row| {
             Ok(AppToday {
                 app: row.get(0)?,
@@ -351,7 +355,8 @@ fn get_apps_today() -> Result<Vec<AppToday>, String> {
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(apps)
 }
 
 #[tauri::command]
@@ -445,5 +450,5 @@ pub fn run() {
             let _ = watcher_handle.join();
             let _ = http_handle.join();
         }
-    }
+    };
 }
