@@ -30,6 +30,53 @@ struct ActiveSegment {
     state: ActivityState,
 }
 
+fn is_task_switcher(state: &ActivityState) -> bool {
+    if !state.app.eq_ignore_ascii_case("explorer.exe") {
+        return false;
+    }
+
+    let title = state.title.to_lowercase();
+    title.contains("переключение задач")
+        || title.contains("task switching")
+        || title.contains("switch to")
+}
+
+fn normalize_title(title: &str) -> String {
+    let mut normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if let Some(open_index) = normalized.rfind('(') {
+        if normalized.ends_with(')') {
+            let suffix = &normalized[open_index + 1..normalized.len() - 1];
+            let digits = suffix.strip_suffix('%').unwrap_or(suffix);
+            if !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit()) {
+                normalized.truncate(open_index);
+                normalized = normalized.trim_end().to_string();
+            }
+        }
+    }
+
+    if let Some(dash_index) = normalized.rfind('-') {
+        let suffix = normalized[dash_index + 1..].trim_start();
+        if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
+            normalized.truncate(dash_index);
+            normalized = normalized.trim_end().to_string();
+        }
+    }
+
+    if let Some((separator_index, separator)) = normalized.char_indices().next_back() {
+        let has_leading_space = normalized[..separator_index]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        if has_leading_space && matches!(separator, '-' | '–' | '—' | '|') {
+            normalized.truncate(separator_index);
+            normalized = normalized.trim_end().to_string();
+        }
+    }
+
+    normalized
+}
+
 pub fn spawn(
     receiver: Receiver<BrowserEvent>,
     stop: Arc<AtomicBool>,
@@ -72,6 +119,10 @@ fn run(
         }
 
         if let Some(state) = platform::sample(&connection, browser_event.as_ref(), now)? {
+            if is_task_switcher(&state) {
+                wait_for_next_tick(stop, paused, false);
+                continue;
+            }
             if current
                 .as_ref()
                 .is_some_and(|segment| !same_local_date(&connection, segment.ts_start, now))
@@ -213,7 +264,7 @@ fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, Strin
 
 #[cfg(windows)]
 mod platform {
-    use super::{ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS};
+    use super::{normalize_title, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS};
     use crate::db;
     use rusqlite::Connection;
     use std::mem::size_of;
@@ -284,28 +335,6 @@ mod platform {
         }))
     }
 
-    fn normalize_title(title: &str) -> String {
-        if let Some(open_index) = title.rfind('(') {
-            if title.ends_with(')') {
-                let suffix = &title[open_index + 1..title.len() - 1];
-                let digits = suffix.strip_suffix('%').unwrap_or(suffix);
-                if !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit())
-                {
-                    return title[..open_index].trim_end().to_string();
-                }
-            }
-        }
-
-        if let Some(dash_index) = title.rfind('-') {
-            let suffix = title[dash_index + 1..].trim_start();
-            if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
-                return title[..dash_index].trim_end().to_string();
-            }
-        }
-
-        title.to_string()
-    }
-
     fn window_title(hwnd: windows::Win32::Foundation::HWND) -> String {
         let length = unsafe { GetWindowTextLengthW(hwnd) };
         if length <= 0 {
@@ -374,5 +403,50 @@ mod platform {
         _now: i64,
     ) -> Result<Option<ActivityState>, String> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_task_switcher, normalize_title, ActivityState};
+
+    #[test]
+    fn normalizes_volatile_title_suffixes_and_whitespace() {
+        for (title, expected) in [
+            ("Telegram (42)", "Telegram"),
+            ("Download (42%)", "Download"),
+            ("Chat - 42", "Chat"),
+            ("New  Chat - (42)", "New Chat"),
+            ("Title —", "Title"),
+            ("Title |", "Title"),
+        ] {
+            assert_eq!(normalize_title(title), expected);
+        }
+    }
+
+    #[test]
+    fn preserves_media_markers() {
+        assert_eq!(normalize_title("Song (playing)"), "Song (playing)");
+        assert_eq!(normalize_title("▶  Song"), "▶ Song");
+    }
+
+    #[test]
+    fn recognizes_windows_task_switcher() {
+        for title in ["Переключение задач", "Task Switching", "Switch To Desktop"]
+        {
+            assert!(is_task_switcher(&ActivityState {
+                app: "EXPLORER.EXE".to_string(),
+                title: title.to_string(),
+                domain: String::new(),
+                status: "active",
+            }));
+        }
+
+        assert!(!is_task_switcher(&ActivityState {
+            app: "other.exe".to_string(),
+            title: "Task Switching".to_string(),
+            domain: String::new(),
+            status: "active",
+        }));
     }
 }

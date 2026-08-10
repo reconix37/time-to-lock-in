@@ -219,6 +219,9 @@ fn create_rule(
     category_id: i64,
     priority: i64,
 ) -> Result<Rule, String> {
+    if category_id == 0 {
+        return Err("Без категории нельзя привязать".to_string());
+    }
     if !matches!(match_type.as_str(), "exe" | "title" | "domain") {
         return Err("invalid match type".to_string());
     }
@@ -258,6 +261,28 @@ fn create_rule(
 }
 
 #[tauri::command]
+fn update_rule(id: i64, category_id: i64) -> Result<(), String> {
+    if id <= 0 {
+        return Err("invalid rule id".to_string());
+    }
+    if category_id == 0 {
+        return Err("Без категории нельзя привязать".to_string());
+    }
+
+    let connection = db::open()?;
+    let updated = connection
+        .execute(
+            "UPDATE rules SET category_id = ?1 WHERE id = ?2",
+            params![category_id, id],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Err("rule does not exist".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn delete_rule(id: i64) -> Result<(), String> {
     if id <= 0 {
         return Err("invalid rule id".to_string());
@@ -294,6 +319,9 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         "hourly_rate" => value.is_empty() || value.parse::<f64>().is_ok_and(|number| number >= 0.0),
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
         "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
+        "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" => {
+            !value.trim().is_empty() && value.chars().count() <= 80
+        }
         "extension_chrome_id" | "extension_edge_id" => {
             value.is_empty()
                 || (value.len() == 32
@@ -319,7 +347,11 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_segment_category(segment_id: i64, category_id: Option<i64>) -> Result<(), String> {
+fn set_segment_category(
+    segment_id: i64,
+    category_id: Option<i64>,
+    remember: bool,
+) -> Result<(), String> {
     if segment_id <= 0 {
         return Err("invalid segment id".to_string());
     }
@@ -334,26 +366,44 @@ fn set_segment_category(segment_id: i64, category_id: Option<i64>) -> Result<(),
             return Err("category does not exist".to_string());
         }
     }
-    let local_date = connection
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let (local_date, app) = transaction
         .query_row(
-            "SELECT date(ts_start / 1000, 'unixepoch', 'localtime') FROM segments WHERE id = ?1",
+            "SELECT date(ts_start / 1000, 'unixepoch', 'localtime'), app
+             FROM segments WHERE id = ?1",
             [segment_id],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "segment does not exist".to_string())?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "UPDATE segments SET category_id = ?1 WHERE id = ?2",
             params![category_id, segment_id],
         )
         .map_err(|error| error.to_string())?;
+    if remember {
+        if let Some(id) = category_id.filter(|id| *id != 0) {
+            db::upsert_exe_rule(&transaction, &app, id)?;
+        }
+    }
     db::refresh_daily_stats(&transaction, &local_date)?;
     transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_db_size_mb() -> Result<f64, String> {
+    let path = db::database_path()?;
+    let bytes = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0.0),
+        Err(error) => return Err(error.to_string()),
+    };
+    let size_mb = bytes as f64 / (1024.0 * 1024.0);
+    Ok((size_mb * 10.0).round() / 10.0)
 }
 
 #[tauri::command]
@@ -453,10 +503,12 @@ pub fn run() {
             delete_category,
             get_rules,
             create_rule,
+            update_rule,
             delete_rule,
             get_settings,
             set_setting,
             set_segment_category,
+            get_db_size_mb,
             get_apps_today,
             set_tracking_paused,
             get_tracking_paused,

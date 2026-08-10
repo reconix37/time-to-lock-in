@@ -96,6 +96,9 @@ pub fn initialize() -> Result<(), String> {
         ("extension_token", Uuid::new_v4().to_string()),
         ("extension_chrome_id", String::new()),
         ("extension_edge_id", String::new()),
+        ("kind_label_useful", "Полезное".to_string()),
+        ("kind_label_neutral", "Нейтральное".to_string()),
+        ("kind_label_waste", "Потери".to_string()),
     ] {
         transaction
             .execute(
@@ -241,6 +244,48 @@ pub fn delete_category(id: i64) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
+pub fn upsert_exe_rule(
+    connection: &Connection,
+    app: &str,
+    category_id: i64,
+) -> Result<i64, String> {
+    if category_id == 0 {
+        return Err("Без категории нельзя привязать".to_string());
+    }
+
+    let normalized_app = app.trim().to_lowercase();
+    let existing_id = connection
+        .query_row(
+            "SELECT id FROM rules
+             WHERE match_type = 'exe' AND lower(pattern) = lower(?1)
+             ORDER BY id ASC
+             LIMIT 1",
+            [&normalized_app],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(rule_id) = existing_id {
+        connection
+            .execute(
+                "UPDATE rules SET category_id = ?1 WHERE id = ?2",
+                params![category_id, rule_id],
+            )
+            .map_err(|error| error.to_string())?;
+        return Ok(rule_id);
+    }
+
+    connection
+        .execute(
+            "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
+             VALUES ('exe', ?1, ?2, 0, ?3)",
+            params![normalized_app, category_id, now_ms()],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(connection.last_insert_rowid())
+}
+
 pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> Result<(), String> {
     transaction
         .execute(
@@ -263,4 +308,60 @@ pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> R
         )
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{upsert_exe_rule, MIGRATION};
+    use rusqlite::{params, Connection};
+
+    #[test]
+    fn upserts_exe_rule_case_insensitively() {
+        let connection = Connection::open_in_memory().expect("in-memory database");
+        connection.execute_batch(MIGRATION).expect("schema");
+        for (id, name) in [(1, "Work"), (2, "Chill")] {
+            connection
+                .execute(
+                    "INSERT INTO categories (id, name, color, kind, created_at) VALUES (?1, ?2, '#000000', 'neutral', 0)",
+                    params![id, name],
+                )
+                .expect("category");
+        }
+
+        let rule_id = upsert_exe_rule(&connection, "Example.EXE", 1).expect("insert rule");
+        let updated_id = upsert_exe_rule(&connection, "example.exe", 2).expect("update rule");
+
+        assert_eq!(updated_id, rule_id);
+        let stored = connection
+            .query_row(
+                "SELECT match_type, pattern, category_id FROM rules WHERE id = ?1",
+                [rule_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .expect("stored rule");
+        assert_eq!(stored, ("exe".to_string(), "example.exe".to_string(), 2));
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM rules", [], |row| row.get::<_, i64>(0))
+                .expect("rule count"),
+            1
+        );
+    }
+
+    #[test]
+    fn rejects_uncategorized_exe_rule() {
+        let connection = Connection::open_in_memory().expect("in-memory database");
+        connection.execute_batch(MIGRATION).expect("schema");
+
+        assert_eq!(
+            upsert_exe_rule(&connection, "example.exe", 0),
+            Err("Без категории нельзя привязать".to_string())
+        );
+    }
 }

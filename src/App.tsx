@@ -50,11 +50,21 @@ interface AppToday {
   waste_ms: number;
 }
 
-interface TimelineBlock {
-  id: number;
-  app: string;
-  category_id: number;
+interface AppTimelineItem extends AppToday {
   segments: Segment[];
+  lastSegment: Segment;
+  isLive: boolean;
+}
+
+interface SegmentGroup {
+  id: string;
+  isMicro: boolean;
+  segments: Segment[];
+}
+
+interface ClassificationTarget {
+  segmentId: number;
+  anchor: string;
 }
 
 const EMPTY_STATS: TodayStats = {
@@ -64,7 +74,7 @@ const EMPTY_STATS: TodayStats = {
   observed_ms: 0,
 };
 
-const KIND_LABELS: Record<CategoryKind, string> = {
+const DEFAULT_KIND_LABELS: Record<CategoryKind, string> = {
   useful: "Полезное",
   neutral: "Нейтральное",
   waste: "Потери",
@@ -104,25 +114,58 @@ function cleanAppName(app: string): string {
   return app.replace(/\.exe$/i, "");
 }
 
+function segmentDuration(segment: Segment, liveSegmentId: number | undefined, now: number): number {
+  const end = segment.id === liveSegmentId ? now : segment.ts_end;
+  return Math.max(0, end - segment.ts_start);
+}
+
+function groupSegments(segments: Segment[], liveSegmentId: number | undefined, now: number): SegmentGroup[] {
+  const groups: SegmentGroup[] = [];
+  const microSegments = segments.filter((segment) =>
+    segment.id !== liveSegmentId && segmentDuration(segment, liveSegmentId, now) < 60_000,
+  );
+  const microGroupId = microSegments.length > 1
+    ? `micro-${Math.min(...microSegments.map((segment) => segment.id))}`
+    : null;
+  for (const segment of [...segments].reverse()) {
+    const isMicro = segment.id !== liveSegmentId && segmentDuration(segment, liveSegmentId, now) < 60_000;
+    if (isMicro && microGroupId) {
+      const existingMicroGroup = groups.find((group) => group.id === microGroupId);
+      if (existingMicroGroup) existingMicroGroup.segments.push(segment);
+      else groups.push({ id: microGroupId, isMicro: true, segments: [segment] });
+      continue;
+    }
+    groups.push({ id: `segment-${segment.id}`, isMicro, segments: [segment] });
+  }
+  return groups;
+}
+
 function App() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
   const [apps, setApps] = useState<AppToday[]>([]);
-  const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [showAllBlocks, setShowAllBlocks] = useState(false);
-  const [expandedBlockIds, setExpandedBlockIds] = useState<Set<number>>(new Set());
+  const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
+  const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
+  const [classificationTarget, setClassificationTarget] = useState<ClassificationTarget | null>(null);
+  const [classificationCategoryId, setClassificationCategoryId] = useState(0);
+  const [classificationRemember, setClassificationRemember] = useState(true);
+  const [classificationSaving, setClassificationSaving] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [extensionChromeId, setExtensionChromeId] = useState("");
   const [extensionEdgeId, setExtensionEdgeId] = useState("");
+  const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
+  const [kindLabelNeutral, setKindLabelNeutral] = useState(DEFAULT_KIND_LABELS.neutral);
+  const [kindLabelWaste, setKindLabelWaste] = useState(DEFAULT_KIND_LABELS.waste);
+  const [dbSizeMb, setDbSizeMb] = useState<number | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categoryManagerTab, setCategoryManagerTab] = useState<"categories" | "rules">("categories");
@@ -198,6 +241,23 @@ function App() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [categoryManagerOpen, managerSaving]);
 
+  useEffect(() => {
+    if (!classificationTarget) return;
+    const closeMenu = (event: PointerEvent) => {
+      const element = event.target instanceof Element ? event.target : null;
+      if (!element?.closest('[data-classification-root="true"]')) setClassificationTarget(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !classificationSaving) setClassificationTarget(null);
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [classificationTarget, classificationSaving]);
+
   const categoryById = useMemo(
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
@@ -206,27 +266,34 @@ function App() {
     () => categories.filter((category) => category.id !== 0),
     [categories],
   );
-  const timelineBlocks = useMemo(() => {
-    const blocks: TimelineBlock[] = [];
-    for (const segment of segments) {
-      const previous = blocks[blocks.length - 1];
-      if (previous?.app === segment.app && previous.category_id === segment.category_id) {
-        previous.segments.push(segment);
-      } else {
-        blocks.push({
-          id: segment.id,
-          app: segment.app,
-          category_id: segment.category_id,
-          segments: [segment],
-        });
-      }
-    }
-    return blocks.reverse();
-  }, [segments]);
   const latestSegment = segments[segments.length - 1];
   const live = !paused && latestSegment?.status === "active" && now - latestSegment.ts_end <= 10_000
     ? latestSegment
     : undefined;
+  const kindLabels = useMemo<Record<CategoryKind, string>>(() => ({
+    useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
+    neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
+    waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
+  }), [settings]);
+  const appTimeline = useMemo<AppTimelineItem[]>(() => apps
+    .map((app) => {
+      const appSegments = segments.filter((segment) =>
+        segment.app === app.app,
+      );
+      const lastSegment = appSegments[appSegments.length - 1];
+      if (!lastSegment) return null;
+      const isLive = live?.app === app.app;
+      return {
+        ...app,
+        duration_ms: app.duration_ms + (isLive ? Math.max(0, now - live.ts_end) : 0),
+        segments: appSegments,
+        lastSegment,
+        isLive,
+      };
+    })
+    .filter((app): app is AppTimelineItem => app !== null)
+    .sort((left, right) => Number(right.isLive) - Number(left.isLive) || right.duration_ms - left.duration_ms),
+  [apps, live, now, segments]);
   const totalRing = Math.max(stats.observed_ms, 1);
   const ringParts = [
     { kind: "useful" as const, value: stats.useful_ms },
@@ -235,7 +302,7 @@ function App() {
   ];
   let ringOffset = 0;
   const maxAppDuration = Math.max(...apps.map((app) => app.duration_ms), 1);
-  const visibleBlocks = showAllBlocks ? timelineBlocks : timelineBlocks.slice(0, 30);
+  const maxTimelineAppDuration = Math.max(...appTimeline.map((app) => app.duration_ms), 1);
 
   async function toggleTheme() {
     const nextDark = !dark;
@@ -250,13 +317,20 @@ function App() {
     }
   }
 
-  async function reclassify(segmentId: number, categoryId: number | null) {
+  async function reclassify(segmentId: number, categoryId: number, remember: boolean) {
+    setClassificationSaving(true);
     try {
-      await invoke("set_segment_category", { segmentId, categoryId });
-      setSelectedSegment(null);
+      await invoke("set_segment_category", {
+        segmentId,
+        categoryId: categoryId === 0 ? null : categoryId,
+        remember: categoryId === 0 ? false : remember,
+      });
+      setClassificationTarget(null);
       await loadDashboard();
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : "Не удалось изменить категорию");
+    } finally {
+      setClassificationSaving(false);
     }
   }
 
@@ -272,12 +346,21 @@ function App() {
     }
   }
 
-  function openSettings() {
+  async function openSettings() {
     setExtensionChromeId(settings.extension_chrome_id ?? "");
     setExtensionEdgeId(settings.extension_edge_id ?? "");
+    setKindLabelUseful(settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful);
+    setKindLabelNeutral(settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral);
+    setKindLabelWaste(settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste);
+    setDbSizeMb(null);
     setTokenCopied(false);
     setSettingsError(null);
     setSettingsOpen(true);
+    try {
+      setDbSizeMb(await invoke<number>("get_db_size_mb"));
+    } catch (reason: unknown) {
+      setSettingsError(typeof reason === "string" ? reason : "Не удалось узнать размер базы данных");
+    }
   }
 
   async function openCategoryManager() {
@@ -393,6 +476,21 @@ function App() {
     }
   }
 
+  async function updateRuleCategory(ruleId: number, categoryId: number) {
+    setManagerSaving(true);
+    setManagerError(null);
+    try {
+      await invoke<void>("update_rule", { id: ruleId, categoryId });
+      setRules((current) => current.map((rule) =>
+        rule.id === ruleId ? { ...rule, category_id: categoryId } : rule,
+      ));
+    } catch (reason: unknown) {
+      setManagerError(typeof reason === "string" ? reason : "Не удалось изменить правило");
+    } finally {
+      setManagerSaving(false);
+    }
+  }
+
   async function copyExtensionToken() {
     const token = settings.extension_token ?? "";
     if (!token) return;
@@ -405,32 +503,50 @@ function App() {
     }
   }
 
-  function toggleBlock(blockId: number) {
-    setExpandedBlockIds((current) => {
+  function toggleApp(app: string) {
+    setExpandedApps((current) => {
       const next = new Set(current);
-      if (next.has(blockId)) next.delete(blockId);
-      else next.add(blockId);
+      if (next.has(app)) next.delete(app);
+      else next.add(app);
       return next;
     });
   }
 
   function selectTimelineSegment(segmentId: number) {
-    const block = timelineBlocks.find((item) =>
-      item.segments.some((segment) => segment.id === segmentId),
+    const segment = segments.find((item) => item.id === segmentId);
+    if (!segment) return;
+    setExpandedApps((current) => new Set(current).add(segment.app));
+    const groups = groupSegments(
+      segments.filter((item) => item.app === segment.app),
+      live?.id,
+      now,
     );
-    if (block) {
-      setExpandedBlockIds((current) => new Set(current).add(block.id));
-      if (timelineBlocks.indexOf(block) >= 30) setShowAllBlocks(true);
-    }
-    setSelectedSegment(segmentId);
+    const microGroup = groups.find((group) => group.isMicro && group.segments.some((item) => item.id === segmentId));
+    if (microGroup) setExpandedMicroGroups((current) => new Set(current).add(microGroup.id));
+    openClassification(segment, `segment-${segment.id}`);
   }
 
-  async function saveExtensionSettings() {
+  function openClassification(segment: Segment, anchor: string) {
+    setClassificationTarget({ segmentId: segment.id, anchor });
+    setClassificationCategoryId(segment.category_id || 0);
+    setClassificationRemember(segment.category_id !== 0);
+  }
+
+  async function saveSettings() {
     const chromeId = extensionChromeId.trim();
     const edgeId = extensionEdgeId.trim();
+    const nextKindLabels: Record<CategoryKind, string> = {
+      useful: kindLabelUseful.trim(),
+      neutral: kindLabelNeutral.trim(),
+      waste: kindLabelWaste.trim(),
+    };
     const isValidId = (value: string) => value === "" || /^[a-p]{32}$/.test(value);
     if (!isValidId(chromeId) || !isValidId(edgeId)) {
       setSettingsError("ID должен состоять из 32 символов от a до p");
+      return;
+    }
+    if (Object.values(nextKindLabels).some((label) => label.length === 0 || [...label].length > 80)) {
+      setSettingsError("Названия типов должны содержать от 1 до 80 символов");
       return;
     }
     setSettingsSaving(true);
@@ -439,19 +555,94 @@ function App() {
       await Promise.all([
         invoke<void>("set_setting", { key: "extension_chrome_id", value: chromeId }),
         invoke<void>("set_setting", { key: "extension_edge_id", value: edgeId }),
+        invoke<void>("set_setting", { key: "kind_label_useful", value: nextKindLabels.useful }),
+        invoke<void>("set_setting", { key: "kind_label_neutral", value: nextKindLabels.neutral }),
+        invoke<void>("set_setting", { key: "kind_label_waste", value: nextKindLabels.waste }),
       ]);
       setSettings((current) => ({
         ...current,
         extension_chrome_id: chromeId,
         extension_edge_id: edgeId,
+        kind_label_useful: nextKindLabels.useful,
+        kind_label_neutral: nextKindLabels.neutral,
+        kind_label_waste: nextKindLabels.waste,
       }));
       setSettingsOpen(false);
       setError(null);
     } catch (reason: unknown) {
-      setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки расширения");
+      setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки");
     } finally {
       setSettingsSaving(false);
     }
+  }
+
+  function renderCategoryControl(segment: Segment, anchor: string, label?: string) {
+    const category = categoryById.get(segment.category_id);
+    const isOpen = classificationTarget?.segmentId === segment.id && classificationTarget.anchor === anchor;
+    const selectedCategory = categoryById.get(classificationCategoryId);
+    return (
+      <div className="category-control" data-classification-root="true">
+        <button
+          type="button"
+          className={`category-tag category-tag-button kind-${category?.kind ?? "muted"}`}
+          aria-expanded={isOpen}
+          onClick={() => isOpen ? setClassificationTarget(null) : openClassification(segment, anchor)}
+        >
+          {label ?? category?.name ?? "Без категории"}
+        </button>
+        {isOpen && (
+          <div className="classification-popover" role="dialog" aria-label="Выбор категории и области действия">
+            <span className="classification-title">Переклассифицировать</span>
+            <label className="classification-category">
+              <span>Категория</span>
+              <select
+                autoFocus
+                value={classificationCategoryId}
+                onChange={(event) => {
+                  const categoryId = Number(event.target.value);
+                  setClassificationCategoryId(categoryId);
+                  setClassificationRemember(categoryId !== 0);
+                }}
+              >
+                <option value={0}>Без категории</option>
+                {manageableCategories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+            <span className="classification-scope-label">Применить</span>
+            {classificationCategoryId !== 0 && (
+              <label className="classification-option is-default">
+                <input
+                  type="radio"
+                  name={`classification-scope-${anchor}`}
+                  checked={classificationRemember}
+                  onChange={() => setClassificationRemember(true)}
+                />
+                <span><strong>Всегда относить {cleanAppName(segment.app)} к {selectedCategory?.name ?? "категории"}</strong><small>Запомнить правилом приложения</small></span>
+              </label>
+            )}
+            <label className="classification-option">
+              <input
+                type="radio"
+                name={`classification-scope-${anchor}`}
+                checked={!classificationRemember}
+                onChange={() => setClassificationRemember(false)}
+              />
+              <span><strong>Только этот отрезок</strong><small>Остальные сегменты не изменятся</small></span>
+            </label>
+            <button
+              type="button"
+              className="classification-apply"
+              disabled={classificationSaving}
+              onClick={() => void reclassify(segment.id, classificationCategoryId, classificationRemember)}
+            >
+              {classificationSaving ? "Сохраняем…" : "Применить"}
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -471,7 +662,7 @@ function App() {
         <button className="manager-open-button" onClick={() => void openCategoryManager()} aria-label="Открыть категории и правила">
           <span aria-hidden="true">🗂</span><span className="manager-open-label">Категории</span>
         </button>
-        <button className="icon-button" onClick={openSettings} aria-label="Открыть настройки">
+        <button className="icon-button" onClick={() => void openSettings()} aria-label="Открыть настройки">
           ⚙
         </button>
         <button className="icon-button" onClick={() => void toggleTheme()} aria-label="Переключить тему">
@@ -488,9 +679,7 @@ function App() {
         </div>
         {live && (
           <>
-            <span className={`category-tag kind-${categoryById.get(live.category_id)?.kind ?? "muted"}`}>
-              {categoryById.get(live.category_id ?? -1)?.name ?? "Без категории"}
-            </span>
+            {renderCategoryControl(live, "live")}
             <div className="live-clock">
               <strong>{formatDuration(now - live.ts_start)}</strong>
               <span>с {formatTime(live.ts_start)}</span>
@@ -504,8 +693,8 @@ function App() {
       <div className="dashboard-grid">
         <section className="card timeline-card">
           <div className="card-heading">
-            <div><span className="eyebrow">Сегодня</span><h1>Хронология дня</h1></div>
-            <span className="mono-meta">{segments.length} сегментов</span>
+            <div><span className="eyebrow">Хронология</span><h1>Приложения за день</h1></div>
+            <span className="mono-meta">{appTimeline.length} приложений · {segments.length} сегментов</span>
           </div>
 
           {loading ? (
@@ -539,52 +728,81 @@ function App() {
                 </div>
               </div>
 
-              <div className="segment-list">
-                {visibleBlocks.map((block) => {
-                  const firstSegment = block.segments[0];
-                  const lastSegment = block.segments[block.segments.length - 1];
-                  const category = categoryById.get(block.category_id);
-                  const isExpanded = expandedBlockIds.has(block.id);
-                  const blockEnd = live?.id === lastSegment.id ? now : lastSegment.ts_end;
-                  const duration = block.segments.reduce((total, segment) => {
-                    const segmentEnd = live?.id === segment.id ? now : segment.ts_end;
-                    return total + Math.max(0, segmentEnd - segment.ts_start);
-                  }, 0);
+              <div className="app-day-list">
+                {appTimeline.map((app) => {
+                  const isExpanded = expandedApps.has(app.app);
+                  const groups = groupSegments(app.segments, live?.id, now);
+                  const appCategory = categoryById.get(app.lastSegment.category_id);
                   return (
-                    <div className="segment-block" key={block.id}>
-                      <button
-                        className="segment-main"
-                        aria-expanded={isExpanded}
-                        onClick={() => toggleBlock(block.id)}
-                      >
-                        <span className="segment-time">{formatTime(firstSegment.ts_start)}–{formatTime(blockEnd)}</span>
-                        <span className="segment-app"><strong>{cleanAppName(block.app)}</strong><small>{lastSegment.domain || lastSegment.window_title || "Без заголовка"}</small></span>
-                        <span className={`category-tag kind-${category?.kind ?? "muted"}`}>{category?.name ?? (lastSegment.status === "away" ? "Перерыв" : "Без категории")}</span>
-                        <span className="segment-duration">{formatDuration(duration)}</span>
-                      </button>
+                    <div className={`app-day-item ${app.isLive ? "is-current" : ""}`} key={app.app}>
+                      <div className="app-day-main">
+                        <button
+                          type="button"
+                          className="app-expand-button"
+                          aria-expanded={isExpanded}
+                          onClick={() => toggleApp(app.app)}
+                        >
+                          <span className="app-chevron" aria-hidden="true">›</span>
+                          <span className="app-day-name">
+                            <strong>{cleanAppName(app.app)}</strong>
+                            <small>{app.isLive ? <span className="now-marker">сейчас</span> : `${app.segments.length} сегментов`}</small>
+                          </span>
+                          <span className="app-day-bar"><i style={{ width: `${(app.duration_ms / maxTimelineAppDuration) * 100}%`, backgroundColor: appCategory?.color ?? "var(--cat-muted)" }} /></span>
+                        </button>
+                        {renderCategoryControl(app.lastSegment, `app-${app.app}`)}
+                        <strong className="app-day-duration">{formatDuration(app.duration_ms)}</strong>
+                      </div>
                       {isExpanded && (
-                        <div className="nested-segment-list">
-                          {block.segments.map((segment) => {
-                            const segmentCategory = categoryById.get(segment.category_id);
-                            const isCurrent = live?.id === segment.id;
-                            const segmentEnd = isCurrent ? now : segment.ts_end;
+                        <div className="app-segment-list">
+                          {groups.map((group) => {
+                            const isMicroGroup = group.isMicro && group.segments.length > 1;
+                            const isMicroExpanded = expandedMicroGroups.has(group.id);
+                            const groupDuration = group.segments.reduce(
+                              (total, segment) => total + segmentDuration(segment, live?.id, now),
+                              0,
+                            );
+                            if (isMicroGroup) {
+                              return (
+                                <div className="micro-group" key={group.id}>
+                                  <button
+                                    type="button"
+                                    className="micro-group-main"
+                                    aria-expanded={isMicroExpanded}
+                                    onClick={() => setExpandedMicroGroups((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(group.id)) next.delete(group.id);
+                                      else next.add(group.id);
+                                      return next;
+                                    })}
+                                  >
+                                    <span className="segment-time">за день</span>
+                                    <span className="segment-app"><strong>Микросегменты · {group.segments.length}</strong><small>короче минуты · нажми, чтобы разобрать</small></span>
+                                    <span className="micro-cluster-mark" aria-label="Сгруппировано">···</span>
+                                    <span className="segment-duration">{formatDuration(groupDuration)}</span>
+                                  </button>
+                                  {isMicroExpanded && (
+                                    <div className="micro-segment-list">
+                                      {group.segments.map((segment) => (
+                                        <div className="app-segment-row is-micro" key={segment.id}>
+                                          <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segment.ts_end)}</span>
+                                          <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
+                                          {renderCategoryControl(segment, `segment-${segment.id}`)}
+                                          <span className="segment-duration">{formatDuration(segmentDuration(segment, live?.id, now))}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            const segment = group.segments[0];
+                            const segmentEnd = segment.id === live?.id ? now : segment.ts_end;
                             return (
-                              <div className="nested-segment" key={segment.id}>
-                                <button className="nested-segment-main" onClick={() => setSelectedSegment(segment.id)}>
-                                  <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segmentEnd)}</span>
-                                  <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
-                                  <span className={`category-tag kind-${segmentCategory?.kind ?? "muted"}`}>{segmentCategory?.name ?? (segment.status === "away" ? "Перерыв" : "Без категории")}</span>
-                                  <span className="segment-duration">{formatDuration(segmentEnd - segment.ts_start)}</span>
-                                </button>
-                                {selectedSegment === segment.id && (
-                                  <div className="category-picker">
-                                    <span>Переклассифицировать:</span>
-                                    {categories.map((item) => (
-                                      <button key={item.id} onClick={() => void reclassify(segment.id, item.id)}>{item.name}</button>
-                                    ))}
-                                    <button onClick={() => void reclassify(segment.id, null)}>Без категории</button>
-                                  </div>
-                                )}
+                              <div className="app-segment-row" key={group.id}>
+                                <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segmentEnd)}</span>
+                                <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
+                                {renderCategoryControl(segment, `segment-${segment.id}`)}
+                                <span className="segment-duration">{formatDuration(segmentDuration(segment, live?.id, now))}</span>
                               </div>
                             );
                           })}
@@ -594,11 +812,6 @@ function App() {
                   );
                 })}
               </div>
-              {!showAllBlocks && timelineBlocks.length > 30 && (
-                <button className="show-all-button" onClick={() => setShowAllBlocks(true)}>
-                  Показать все ({timelineBlocks.length})
-                </button>
-              )}
             </>
           )}
         </section>
@@ -623,7 +836,7 @@ function App() {
                 {ringParts.map((part) => (
                   <div className="stats-row" key={part.kind}>
                     <span className={`legend-dot kind-${part.kind}`} />
-                    <span>{KIND_LABELS[part.kind]}</span>
+                    <span>{kindLabels[part.kind]}</span>
                     <strong>{formatDuration(part.value)}</strong>
                   </div>
                 ))}
@@ -632,7 +845,7 @@ function App() {
             <div className="category-bars">
               {ringParts.map((part) => (
                 <div className="category-bar" key={part.kind}>
-                  <div><span>{KIND_LABELS[part.kind]}</span><strong>{stats.observed_ms ? Math.round((part.value / stats.observed_ms) * 100) : 0}%</strong></div>
+                  <div><span>{kindLabels[part.kind]}</span><strong>{stats.observed_ms ? Math.round((part.value / stats.observed_ms) * 100) : 0}%</strong></div>
                   <span className="bar-rail"><i className={`kind-${part.kind}`} style={{ width: `${stats.observed_ms ? (part.value / stats.observed_ms) * 100 : 0}%` }} /></span>
                 </div>
               ))}
@@ -715,9 +928,9 @@ function App() {
                       <label className="manager-field">
                         <span>Тип</span>
                         <select value={newCategoryKind} onChange={(event) => setNewCategoryKind(event.target.value as CategoryKind)}>
-                          <option value="useful">Полезное</option>
-                          <option value="neutral">Нейтральное</option>
-                          <option value="waste">Потери</option>
+                          <option value="useful">{kindLabels.useful}</option>
+                          <option value="neutral">{kindLabels.neutral}</option>
+                          <option value="waste">{kindLabels.waste}</option>
                         </select>
                       </label>
                       <div className="manager-field manager-color-field">
@@ -760,7 +973,7 @@ function App() {
                       <div className="category-manager-row" key={category.id}>
                         <span className="manager-color-dot" style={{ backgroundColor: category.color }} />
                         <strong>{category.name}</strong>
-                        <span className={`manager-kind kind-${category.kind}`}>{KIND_LABELS[category.kind]}</span>
+                        <span className={`manager-kind kind-${category.kind}`}>{kindLabels[category.kind]}</span>
                         <button
                           type="button"
                           className="manager-delete-button"
@@ -856,10 +1069,19 @@ function App() {
                           </span>
                           <span className="rule-pattern"><small>{rule.match_type}</small><strong>{rule.pattern}</strong></span>
                           <span className="rule-arrow">→</span>
-                          <span className="rule-category">
+                          <label className="rule-category">
                             <span className="manager-color-dot" style={{ backgroundColor: category?.color ?? "var(--cat-muted)" }} />
-                            {category?.name ?? "Без категории"}
-                          </span>
+                            <select
+                              value={rule.category_id}
+                              disabled={managerSaving}
+                              aria-label={`Категория правила ${rule.pattern}`}
+                              onChange={(event) => void updateRuleCategory(rule.id, Number(event.target.value))}
+                            >
+                              {manageableCategories.map((item) => (
+                                <option key={item.id} value={item.id}>{item.name}</option>
+                              ))}
+                            </select>
+                          </label>
                           <button
                             type="button"
                             className="manager-delete-button"
@@ -892,51 +1114,84 @@ function App() {
         <div className="settings-overlay">
           <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="settings-heading">
-              <span className="eyebrow">Браузер</span>
+              <span className="eyebrow">Система</span>
               <h2 id="settings-title">Настройки</h2>
             </div>
-            <label className="settings-field">
-              <span>ID расширения Chrome</span>
-              <input
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={settingsError !== null}
-                aria-describedby="settings-hint settings-error"
-                value={extensionChromeId}
-                onChange={(event) => setExtensionChromeId(event.target.value)}
-              />
-            </label>
-            <label className="settings-field">
-              <span>ID расширения Edge</span>
-              <input
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={settingsError !== null}
-                aria-describedby="settings-hint settings-error"
-                value={extensionEdgeId}
-                onChange={(event) => setExtensionEdgeId(event.target.value)}
-              />
-            </label>
-            <p className="settings-hint" id="settings-hint">
-              ID виден в chrome://extensions → TTLI Tracker → ID. Вставляется один раз, после этого браузер шлёт события в приложение.
-            </p>
-            <div className="settings-token">
-              <span>Токен расширения</span>
-              <div>
-                <code>{settings.extension_token || "—"}</code>
-                <button
-                  disabled={!settings.extension_token}
-                  onClick={() => void copyExtensionToken()}
-                >
-                  {tokenCopied ? "Скопировано" : "Скопировать"}
-                </button>
+            <div className="settings-scroll">
+              <section className="settings-section" aria-labelledby="kind-labels-title">
+                <div className="settings-section-heading">
+                  <h3 id="kind-labels-title">Названия типов времени</h3>
+                  <span>Отображаются в балансе и категориях</span>
+                </div>
+                <div className="kind-label-grid">
+                  <label className="settings-field">
+                    <span>Название {DEFAULT_KIND_LABELS.useful}</span>
+                    <input autoFocus required maxLength={80} value={kindLabelUseful} onChange={(event) => setKindLabelUseful(event.target.value)} />
+                  </label>
+                  <label className="settings-field">
+                    <span>Название {DEFAULT_KIND_LABELS.neutral}</span>
+                    <input required maxLength={80} value={kindLabelNeutral} onChange={(event) => setKindLabelNeutral(event.target.value)} />
+                  </label>
+                  <label className="settings-field">
+                    <span>Название {DEFAULT_KIND_LABELS.waste}</span>
+                    <input required maxLength={80} value={kindLabelWaste} onChange={(event) => setKindLabelWaste(event.target.value)} />
+                  </label>
+                </div>
+              </section>
+
+              <section className="settings-section" aria-labelledby="browser-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="browser-settings-title">Браузер</h3>
+                  <span>Локальное расширение Chrome / Edge</span>
+                </div>
+                <label className="settings-field">
+                  <span>ID расширения Chrome</span>
+                  <input
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={settingsError !== null}
+                    aria-describedby="settings-hint settings-error"
+                    value={extensionChromeId}
+                    onChange={(event) => setExtensionChromeId(event.target.value)}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span>ID расширения Edge</span>
+                  <input
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={settingsError !== null}
+                    aria-describedby="settings-hint settings-error"
+                    value={extensionEdgeId}
+                    onChange={(event) => setExtensionEdgeId(event.target.value)}
+                  />
+                </label>
+                <p className="settings-hint" id="settings-hint">
+                  ID виден в chrome://extensions → TTLI Tracker → ID. Вставляется один раз, после этого браузер шлёт события в приложение.
+                </p>
+                <div className="settings-token">
+                  <span>Токен расширения</span>
+                  <div>
+                    <code>{settings.extension_token || "—"}</code>
+                    <button
+                      disabled={!settings.extension_token}
+                      onClick={() => void copyExtensionToken()}
+                    >
+                      {tokenCopied ? "Скопировано" : "Скопировать"}
+                    </button>
+                  </div>
+                  <p>Вставляется в расширение TTLI Tracker (поп-ап расширения).</p>
+                </div>
+              </section>
+
+              <div className="database-size">
+                <span>Размер базы данных</span>
+                <strong>{dbSizeMb === null ? "…" : `${dbSizeMb.toFixed(1)} МБ`}</strong>
               </div>
-              <p>Вставляется в расширение TTLI Tracker (поп-ап расширения).</p>
             </div>
             {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
             <div className="settings-actions">
-              <button className="settings-done" disabled={settingsSaving} onClick={() => void saveExtensionSettings()}>
+              <button className="settings-done" disabled={settingsSaving} onClick={() => void saveSettings()}>
                 {settingsSaving ? "Сохраняем…" : "Готово"}
               </button>
             </div>
