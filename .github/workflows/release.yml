@@ -26,6 +26,14 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Bump version from tag
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          npm pkg set version="$VER"
+          sed -i "s/\"version\": \"[0-9.]*\"/\"version\": \"$VER\"/" src-tauri/tauri.conf.json
+          sed -i "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
