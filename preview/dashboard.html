@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TimeForge — Сегодня</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#faf4ed; --surface:#fffaf3; --overlay:#f2e9e1; --hl-low:#f4ede8; --hl-med:#dfcec4; --hl-high:#f0e0dc;
+  --text:#575279; --muted:#797593; --subtle:#9893a5;
+  --love:#b4637a; --love-hover:#c17f91; --iris:#907aa9;
+  --pine:#286983; --gold:#ea9d34; --foam:#56949f;
+  --border:1px solid var(--hl-med);
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px; --radius-pill:999px;
+  --shadow:0 1px 2px rgba(87,82,121,0.06);
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --sans:'Space Grotesk',system-ui,sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--sans); font-size:14px; }
+.wrap { max-width:1200px; margin:0 auto; padding:24px; }
+
+/* Header */
+header { display:flex; align-items:center; gap:16px; padding:12px 16px; background:var(--surface); border:var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow); margin-bottom:20px; }
+.logo { font-weight:700; font-size:16px; letter-spacing:-0.2px; display:flex; align-items:center; gap:8px; }
+.logo .dot { width:10px; height:10px; border-radius:50%; background:var(--pine); display:inline-block; }
+.spacer { flex:1; }
+.rank-pill { display:flex; align-items:center; gap:8px; background:var(--hl-low); border:var(--border); border-radius:var(--radius-pill); padding:4px 12px; font-size:13px; }
+.rank-pill b { font-weight:700; }
+.xp { font-family:var(--mono); font-size:13px; color:var(--muted); }
+.btn { background:var(--love); color:#faf4ed; border:none; border-radius:var(--radius-sm); padding:8px 16px; font-family:var(--sans); font-weight:500; font-size:13px; cursor:pointer; }
+.btn:hover { background:var(--love-hover); }
+.btn.ghost { background:transparent; color:var(--text); border:var(--border); }
+
+/* Layout */
+.grid { display:grid; grid-template-columns: 1.4fr 1fr; gap:20px; }
+.card { background:var(--surface); border:var(--border); border-radius:var(--radius-md); box-shadow:var(--shadow); padding:20px; }
+.card h2 { font-size:13px; font-weight:500; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:16px; }
+
+/* Live now */
+.live { display:flex; align-items:center; gap:14px; padding:14px 16px; border-radius:var(--radius-md); border:var(--border); background:var(--hl-low); margin-bottom:20px; }
+.live .pulse { width:10px; height:10px; border-radius:50%; background:var(--pine); box-shadow:0 0 0 4px rgba(40,105,131,0.15); }
+.live .app { font-weight:500; font-size:15px; }
+.live .cat { font-family:var(--mono); font-size:12px; color:var(--pine); background:rgba(40,105,131,0.10); padding:2px 8px; border-radius:var(--radius-pill); }
+.live .time { font-family:var(--mono); font-size:13px; color:var(--muted); margin-left:auto; }
+
+/* Timeline strip */
+.strip { display:flex; height:10px; border-radius:var(--radius-pill); overflow:hidden; border:var(--border); margin-bottom:16px; }
+.strip div { height:100%; }
+.c-pine{background:var(--pine);} .c-gold{background:var(--gold);} .c-love{background:var(--love);} .c-foam{background:var(--foam);} .c-iris{background:var(--iris);} .c-mut{background:var(--subtle);}
+
+/* Segments list */
+.seg { display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid var(--hl-low); }
+.seg:last-child { border-bottom:none; }
+.seg .t { font-family:var(--mono); font-size:12px; color:var(--subtle); width:96px; flex-shrink:0; }
+.seg .name { font-weight:500; font-size:14px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.seg .name .detail { color:var(--muted); font-weight:400; font-size:13px; }
+.seg .dur { font-family:var(--mono); font-size:13px; color:var(--text); }
+.seg .bar { width:70px; height:6px; border-radius:var(--radius-pill); background:var(--hl-low); overflow:hidden; flex-shrink:0; }
+.seg .bar i { display:block; height:100%; border-radius:var(--radius-pill); }
+
+/* Donut */
+.donut-wrap { display:flex; align-items:center; gap:24px; }
+.donut { position:relative; width:150px; height:150px; flex-shrink:0; }
+.donut svg { transform:rotate(-90deg); }
+.donut .center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.donut .center .val { font-family:var(--mono); font-size:26px; font-weight:700; }
+.donut .center .lbl { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; }
+.legend { display:flex; flex-direction:column; gap:10px; flex:1; }
+.legend .row { display:flex; align-items:center; gap:10px; font-size:13px; }
+.legend .sw { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+.legend .lname { flex:1; }
+.legend .lval { font-family:var(--mono); color:var(--muted); }
+
+/* Day check */
+.check { display:flex; flex-direction:column; gap:10px; margin-top:18px; }
+.check .item { display:flex; align-items:center; gap:10px; font-size:13px; }
+.check .mark { width:18px; height:18px; border-radius:5px; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:11px; font-weight:700; }
+.mark.ok { background:rgba(40,105,131,0.12); color:var(--pine); }
+.mark.no { background:rgba(180,99,122,0.12); color:var(--love); }
+.check .lbl { flex:1; }
+.check .val { font-family:var(--mono); font-size:12px; color:var(--muted); }
+
+/* Verdict */
+.verdict { margin-top:16px; padding:12px 14px; border-radius:var(--radius-md); border:var(--border); background:var(--hl-low); display:flex; align-items:center; gap:12px; }
+.verdict .st { font-family:var(--mono); font-weight:700; font-size:13px; letter-spacing:0.04em; }
+.verdict .st.good { color:var(--pine); }
+.verdict .st.mid { color:var(--gold); }
+.verdict .note { font-size:12px; color:var(--muted); }
+
+/* Heatmap */
+.hm { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin-top:4px; }
+.hm .d { aspect-ratio:1; border-radius:4px; background:var(--hl-low); border:1px solid transparent; }
+.hm .d.l1 { background:rgba(40,105,131,0.22); } .hm .d.l2 { background:rgba(40,105,131,0.45); } .hm .d.l3 { background:rgba(40,105,131,0.75); } .hm .d.l4 { background:var(--pine); }
+.hm .d.today { border-color:var(--love); }
+.hm-label { display:flex; justify-content:space-between; font-family:var(--mono); font-size:11px; color:var(--subtle); margin-top:8px; }
+
+/* Terminal log */
+.term { background:#2a2534; border-radius:var(--radius-md); padding:16px 18px; font-family:var(--mono); font-size:13px; line-height:1.8; box-shadow:var(--shadow); }
+.term .t-head { color:#9893a5; margin-bottom:8px; font-size:11px; letter-spacing:0.08em; }
+.term .t-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.term .t-time { color:#797593; }
+.term .t-app { color:#f4ede8; }
+.term .t-sep { color:#575279; }
+.term .t-cat-work { color:#56949f; }
+.term .t-cat-waste { color:#b4637a; }
+.term .t-cat-chill { color:#ea9d34; }
+.term .t-verdict { font-weight:700; }
+
+@media (max-width:900px){ .grid{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo"><span class="dot"></span>TimeForge</div>
+  <div class="spacer"></div>
+  <div class="rank-pill">⚔ <b>Кодер</b> <span class="xp">3,420 XP</span></div>
+  <button class="btn ghost">История</button>
+  <button class="btn">Скинуть Печать дня</button>
+</header>
+
+<!-- Live -->
+<div class="live">
+  <span class="pulse"></span>
+  <span class="app">VS Code — watcher.ts</span>
+  <span class="cat">WORK</span>
+  <span class="time">16:05 → 16:30 · 25m</span>
+</div>
+
+<div class="grid">
+
+  <!-- Left: timeline -->
+  <div class="card">
+    <h2>Сегодня · 10 августа</h2>
+    <div class="strip">
+      <div class="c-pine" style="width:19%"></div>
+      <div class="c-pine" style="width:13%"></div>
+      <div class="c-pine" style="width:15%"></div>
+      <div class="c-love" style="width:7%"></div>
+      <div class="c-love" style="width:20%"></div>
+      <div class="c-mut" style="width:10%"></div>
+      <div class="c-pine" style="width:28%"></div>
+      <div class="c-gold" style="width:6%"></div>
+      <div class="c-love" style="width:14%"></div>
+      <div class="c-pine" style="width:16%"></div>
+      <div class="c-love" style="width:10%"></div>
+      <div class="c-pine" style="width:10%"></div>
+    </div>
+    <div>
+      <div class="seg"><span class="t">09:14–10:02</span><span class="name">Figma <span class="detail">— landing redesign</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">48m</span></div>
+      <div class="seg"><span class="t">10:02–10:35</span><span class="name">Chrome <span class="detail">docs.google.com</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">33m</span></div>
+      <div class="seg"><span class="t">10:35–11:12</span><span class="name">VS Code <span class="detail">— prd-rewrite</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">37m</span></div>
+      <div class="seg"><span class="t">11:12–11:30</span><span class="name">Chrome <span class="detail">youtube.com</span></span><span class="bar"><i class="c-love" style="width:100%"></i></span><span class="dur">18m</span></div>
+      <div class="seg"><span class="t">11:30–12:20</span><span class="name">Steam <span class="detail">— CS2</span></span><span class="bar"><i class="c-love" style="width:100%"></i></span><span class="dur">50m</span></div>
+      <div class="seg"><span class="t">12:20–12:45</span><span class="name">— <span class="detail">перерыв (away)</span></span><span class="bar"><i class="c-mut" style="width:100%"></i></span><span class="dur">25m</span></div>
+      <div class="seg"><span class="t">13:00–14:10</span><span class="name">VS Code <span class="detail">— watcher.rs</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">70m</span></div>
+      <div class="seg"><span class="t">14:10–14:25</span><span class="name">Discord <span class="detail">— с кентами</span></span><span class="bar"><i class="c-gold" style="width:100%"></i></span><span class="dur">15m</span></div>
+      <div class="seg"><span class="t">14:25–15:00</span><span class="name">Chrome <span class="detail">twitter.com</span></span><span class="bar"><i class="c-love" style="width:100%"></i></span><span class="dur">35m</span></div>
+      <div class="seg"><span class="t">15:00–15:40</span><span class="name">Figma <span class="detail">— components</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">40m</span></div>
+      <div class="seg"><span class="t">15:40–16:05</span><span class="name">Chrome <span class="detail">youtube.com</span></span><span class="bar"><i class="c-love" style="width:100%"></i></span><span class="dur">25m</span></div>
+      <div class="seg"><span class="t">16:05–16:30</span><span class="name">VS Code <span class="detail">— сейчас</span></span><span class="bar"><i class="c-pine" style="width:100%"></i></span><span class="dur">25m · live</span></div>
+    </div>
+  </div>
+
+  <!-- Right: stats -->
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <h2>Категории</h2>
+      <div class="donut-wrap">
+        <div class="donut">
+          <svg width="150" height="150" viewBox="0 0 150 150">
+            <circle cx="75" cy="75" r="62" fill="none" stroke="#f4ede8" stroke-width="18"/>
+            <circle cx="75" cy="75" r="62" fill="none" stroke="#56949f" stroke-width="18" stroke-dasharray="287 0" stroke-dashoffset="0" opacity="0"/>
+            <circle cx="75" cy="75" r="62" fill="none" stroke="#286983" stroke-width="18" stroke-dasharray="183 389" stroke-dashoffset="0" stroke-linecap="round"/>
+            <circle cx="75" cy="75" r="62" fill="none" stroke="#ea9d34" stroke-width="18" stroke-dasharray="12 389" stroke-dashoffset="-183" stroke-linecap="round"/>
+            <circle cx="75" cy="75" r="62" fill="none" stroke="#b4637a" stroke-width="18" stroke-dasharray="93 389" stroke-dashoffset="-195" stroke-linecap="round"/>
+          </svg>
+          <div class="center"><span class="val">6h36</span><span class="lbl">observed</span></div>
+        </div>
+        <div class="legend">
+          <div class="row"><span class="sw" style="background:var(--pine)"></span><span class="lname">Work</span><span class="lval">4h13m · 64%</span></div>
+          <div class="row"><span class="sw" style="background:var(--gold)"></span><span class="lname">Chill</span><span class="lval">15m · 4%</span></div>
+          <div class="row"><span class="sw" style="background:var(--love)"></span><span class="lname">Brainrot</span><span class="lval">2h08m · 32%</span></div>
+        </div>
+      </div>
+
+      <div class="check">
+        <div class="item"><span class="mark ok">✓</span><span class="lbl">Useful-цель</span><span class="val">253 / 120 мин</span></div>
+        <div class="item"><span class="mark no">✕</span><span class="lbl">Waste-лимит</span><span class="val">128 / 60 мин</span></div>
+        <div class="item"><span class="mark ok">✓</span><span class="lbl">Observed</span><span class="val">396 / 60 мин</span></div>
+      </div>
+
+      <div class="verdict">
+        <span class="st mid">РАБОЧИЙ ДЕНЬ</span>
+        <span class="note">цель закрыта, но брейнрот перебрал · −2 133 ₽ (waste × 1 000 ₽/ч)</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <h2>Неделя</h2>
+      <div class="hm">
+        <div class="d l1"></div><div class="d l2"></div><div class="d l1"></div><div class="d l3"></div><div class="d l2"></div><div class="d"></div><div class="d l4 today"></div>
+      </div>
+      <div class="hm-label"><span>пн</span><span>вт</span><span>ср</span><span>чт</span><span>пт</span><span>сб</span><span>вс</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Печать дня</h2>
+      <div class="term">
+        <div class="t-head">TIMEFORGE // DAILY LOG — 2026-08-10</div>
+        <div class="t-line"><span class="t-time">[09:14]</span><span class="t-sep"> </span><span class="t-app">figma</span><span class="t-sep"> — </span><span class="t-cat-work">work 48m</span></div>
+        <div class="t-line"><span class="t-time">[10:35]</span><span class="t-sep"> </span><span class="t-app">code</span><span class="t-sep"> — </span><span class="t-cat-work">work 37m</span></div>
+        <div class="t-line"><span class="t-time">[11:30]</span><span class="t-sep"> </span><span class="t-app">steam</span><span class="t-sep"> — </span><span class="t-cat-waste">brainrot 50m</span></div>
+        <div class="t-line"><span class="t-time">[13:00]</span><span class="t-sep"> </span><span class="t-app">code</span><span class="t-sep"> — </span><span class="t-cat-work">work 70m</span></div>
+        <div class="t-line"><span class="t-time">[15:00]</span><span class="t-sep"> </span><span class="t-app">figma</span><span class="t-sep"> — </span><span class="t-cat-work">work 40m</span></div>
+        <div class="t-line"><span class="t-time">[16:05]</span><span class="t-sep"> </span><span class="t-app">code</span><span class="t-sep"> — </span><span class="t-cat-work">work 25m · live</span></div>
+        <div class="t-line t-verdict" style="color:#ea9d34">STATUS: РАБОЧИЙ ДЕНЬ · +253 XP</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+</body>
+</html>
