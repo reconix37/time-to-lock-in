@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>TimeForge — Mini</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#faf4ed; --surface:#fffaf3; --overlay:#f2e9e1; --hl-low:#f4ede8; --hl-med:#dfcec4;
+  --text:#575279; --muted:#797593; --subtle:#9893a5;
+  --love:#b4637a; --iris:#907aa9;
+  --cat-useful:#286983; --cat-neutral:#ea9d34; --cat-waste:#b4637a; --cat-foam:#56949f;
+  --ok:#286983; --warn:#ea9d34; --bad:#b4637a;
+  --border:1px solid var(--hl-med);
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --sans:'Space Grotesk',system-ui,sans-serif;
+}
+[data-theme="dark"] {
+  --bg:#232136; --surface:#2a273f; --overlay:#393552; --hl-low:#2a283e; --hl-med:#44415a;
+  --text:#e0def4; --muted:#6e6a86; --subtle:#908caa;
+  --love:#eb6f92; --iris:#c4a7e7;
+  --cat-useful:#3e8fb0; --cat-neutral:#f6c177; --cat-waste:#eb6f92; --cat-foam:#9ccfd8;
+  --ok:#9ccfd8; --warn:#f6c177; --bad:#eb6f92;
+  --border:1px solid var(--hl-med);
+}
+* { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+body { background:var(--bg); color:var(--text); font-family:var(--sans); font-size:13px; }
+.mini { width:280px; padding:12px; }
+.drag { display:flex; align-items:center; gap:8px; padding-bottom:10px; border-bottom:var(--border); -webkit-app-region:drag; }
+.drag .pulse { width:8px; height:8px; border-radius:50%; background:var(--cat-useful); box-shadow:0 0 0 3px color-mix(in srgb, var(--cat-useful) 15%, transparent); }
+.drag .app { font-weight:500; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.drag .cat { font-family:var(--mono); font-size:10px; color:var(--cat-useful); background:color-mix(in srgb, var(--cat-useful) 10%, transparent); padding:1px 6px; border-radius:999px; flex-shrink:0; }
+.drag .actions { margin-left:auto; display:flex; gap:2px; -webkit-app-region:no-drag; }
+.drag .act { background:none; border:none; color:var(--subtle); font-size:13px; cursor:pointer; padding:2px 4px; border-radius:6px; line-height:1; }
+.drag .act:hover { background:var(--hl-low); color:var(--text); }
+.drag .act.on { color:var(--iris); }
+
+.timer { text-align:center; padding:12px 0 8px; }
+.timer .t { font-family:var(--mono); font-weight:700; font-size:38px; letter-spacing:-0.5px; line-height:1; }
+.timer .s { font-size:11px; color:var(--muted); margin-top:3px; }
+.timer .s b { font-family:var(--mono); font-weight:500; }
+
+.bars { display:flex; flex-direction:column; gap:8px; padding-bottom:10px; }
+.bar .bh { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-bottom:3px; }
+.bar .bh b { font-family:var(--mono); font-weight:500; color:var(--text); }
+.bar .bt { position:relative; height:6px; border-radius:999px; background:var(--hl-low); }
+.bar .bf { height:100%; border-radius:999px; }
+.bar .tick { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--text); opacity:.6; }
+.bar .tick.danger { background:var(--bad); }
+
+.foot { display:flex; align-items:center; gap:8px; padding-top:10px; border-top:var(--border); }
+.rank { display:flex; align-items:center; gap:6px; font-size:12px; }
+.rank b { font-weight:700; }
+.rank .xp { font-family:var(--mono); font-size:11px; color:var(--muted); }
+.spacer { flex:1; }
+.btn { border:var(--border); background:var(--hl-low); color:var(--text); border-radius:6px; padding:5px 10px; font-family:var(--sans); font-size:12px; cursor:pointer; }
+.btn:hover { background:var(--overlay); }
+.btn.primary { background:var(--love); color:#faf4ed; border:none; }
+.btn.primary:hover { filter:brightness(1.05); }
+.btn.pause { background:transparent; color:var(--warn); }
+</style>
+</head>
+<body>
+<div class="mini">
+  <div class="drag">
+    <span class="pulse"></span>
+    <span class="app">VS Code — watcher.ts</span>
+    <span class="cat">WORK</span>
+    <div class="actions">
+      <button class="act" title="Поверх всех окон">📌</button>
+      <button class="act" title="Свернуть в трей" id="minBtn">—</button>
+    </div>
+  </div>
+
+  <div class="timer">
+    <div class="t">00:25:12</div>
+    <div class="s">текущая сессия · <b>+25 XP</b></div>
+  </div>
+
+  <div class="bars">
+    <div class="bar">
+      <div class="bh"><span>Полезно сегодня</span><b>253 / 120 мин</b></div>
+      <div class="bt"><div class="bf" style="background:var(--cat-useful);width:100%"></div><div class="tick" style="left:47%"></div></div>
+    </div>
+    <div class="bar">
+      <div class="bh"><span>Брейнрот</span><b>128 / 60 мин</b></div>
+      <div class="bt"><div class="bf" style="background:var(--cat-waste);width:100%"></div><div class="tick danger" style="left:47%"></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="rank">⚔ <b>Кодер</b> <span class="xp">3,420 XP · до «Фокусника» 580 XP</span></div>
+    <div class="spacer"></div>
+    <button class="btn pause" title="Пауза трекинга">⏸</button>
+    <button class="btn primary" title="Открыть дашборд">Дашборд →</button>
+  </div>
+</div>
+<script>
+const root = document.documentElement;
+// пример переключения темы (в реальном апп — из настроек)
+if (location.hash === '#dark') root.dataset.theme = 'dark';
+document.getElementById('minBtn').onclick = () => alert('→ трей');
+</script>
+</body>
+</html>
