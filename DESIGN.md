@@ -1,4 +1,4 @@
-# DESIGN.md — TimeForge (Desktop Activity Tracker)
+# DESIGN.md — Time To Lock In (Desktop Activity Tracker)
 
 > Машинный спека для Cursor/Codex. Основа: Rosé Pine Dawn (референс юзера — deploychan.webcam) + Linear (монитор-поверхность: luminance-степпинг, тонкие границы, акцент только на CTA).
 

@@ -1,7 +1,7 @@
-# PRD: TimeForge — Desktop Activity Tracker (v2, готова к разработке)
+# PRD: Time To Lock In — Desktop Activity Tracker (v2, готова к разработке)
 
-> Рабочее имя — TimeForge (семейство Forge). Нейминг открыт, варианты в конце.
-> Grill-me (2026-08-10) → PRD v1 → 6-раундовая дискуссия с Codex (gpt-5.6-sol) → v2. Консенсус и финальное утверждение в секции «Дискуссия».
+> Название утверждено: **Time To Lock In** («время врубиться»). App id: `com.timetolockin.app`, репо: `reconix37/time-to-lock-in`, asset: `time-to-lock-in-setup-<version>.exe`.
+> Grill-me (2026-08-10) → PRD v1 → 6-раундовая дискуссия с Codex (gpt-5.6-sol) → v2 + аудит раунда 7 (21 закрытая дыра).
 
 ## Problem
 
@@ -168,7 +168,7 @@ timeforge/
 | 8 | Исторические цели / XP | Переклассификация → пересчёт daily_stats за затронутые дни; lifetime XP = сумма daily_stats; ранг пересчитывается на лету. **Цели исторические**: изменение useful_goal/waste_limit применяется к дням С даты изменения, прошлая зачтённость не пересчитывается |
 | 9 | Lifecycle дня / челленджа | Зачтённость вычисляется: конец дня (23:59) или первое открытие на следующий день; переклассификация позже → пересчёт по целям того дня. Челлендж-код: `^TF-(\d+)-(\d+)-(\d+)$`, невалидный формат → ошибка ввода, импорт только цели |
 | 10 | PNG renderer | Рендер в JS через canvas (бары/текст простые, без html2canvas) → dataURL → save через dialog plugin. Размер Печати дня: 1080×1350 (4:5, Telegram). QR — JS-библиотека qrcode, офлайн |
-| 11 | Стабильный QR URL | Хостинг: GitHub Releases (reconix37/timeforge), asset `timeforge-setup-<version>.exe`, ссылка latest → https://github.com/reconix37/timeforge/releases/latest. QR ведёт туда |
+| 11 | Стабильный QR URL | Хостинг: GitHub Releases (reconix37/time-to-lock-in), asset `time-to-lock-in-setup-<version>.exe`, ссылка latest → https://github.com/reconix37/time-to-lock-in/releases/latest. QR ведёт туда |
 | 12 | Онбординг | Показывается в главном окне; трекинг работает ДО и ВО ВРЕМЯ онбординга (данные копятся с первого запуска). Расширение пропускаемо; повторно — пункт в настройках «Подключить браузер». После завершения онбординг не показывается; «Пройти заново» в настройках (данные не трогает) |
 | 13 | БД: миграции / WAL / рост | Миграции: `migrations/001_init.sql...`, применяются при старте в транзакции, `PRAGMA user_version`. `journal_mode=WAL`, `busy_timeout=5000`. Ротация сегментов — v1.1 (SQLite тянет ~2-4М строк/год); в v1 retention не нужен |
 | 14 | Mini-window geometry | Размер 300×~210 (фикс после рендера), позиция в settings; при старте — проверка видимости на мониторах (enum + clamp). always-on-top только по pin |
@@ -177,7 +177,7 @@ timeforge/
 | 17 | Uninstall | NSIS: данные НЕ удаляются по умолчанию; чекбокс «Удалить локальные данные» в uninstaller, осознанное действие |
 | 18 | Signing / SmartScreen | v1 без code-signing. SmartScreen warning — известный риск; на release page инструкция «More info → Run anyway». Решение принято осознанно |
 | 19 | Reminders / подсказки правил | Только in-app карточка на дашборде (при открытом окне). Никаких OS-toast и расписания |
-| 20 | Naming | Имя зашито в app id, mutex, пути, extension ID, PNG, installer — **выбрать ДО первого миграции/сборки**. Дефолт: **TimeForge** (семейство Forge). Даня подтверждает до старта кода |
+| 20 | Naming | **РЕШЕНО**: Time To Lock In. App id `com.timetolockin.app`, repo `reconix37/time-to-lock-in`, asset `time-to-lock-in-setup-<version>.exe`, mutex/extension/PNG — от этого имени. Зашито в доках до старта кода |
 | 21 | Normative sources | Норматив: PRD + DESIGN.md + контракты миграций/API. Prior art (WakaTime, ActivityWatch…) — НЕ норматив, поведение не заимствуется без описания |
 
 **Вердикт аудита: после секции выше — ДОКА ГОТОВА к разработке.**
@@ -213,12 +213,9 @@ timeforge/
 - Квесты из данных, Стена позора + Зал славы, Пятница-зарплата, Prestige (+5% навсегда)
 - Мультиюзер-дуэли для кентов (когда сам поюзает)
 
-## Нейминг (открытый вопрос)
+## Нейминг — РЕШЕНО
 
-- **TimeForge** — семейство Forge (HabitForge → TimeForge), консистентно
-- **Pulse** / **Momentum** / **Chrono** — коротко, вайб статистики
-- **FocusForge** — акцент на продуктивность
-- Решает Даня. Репо/папки переименовываются легко до первого коммита
+**Time To Lock In** («время врубиться»). App id: `com.timetolockin.app` · репо: `reconix37/time-to-lock-in` · asset: `time-to-lock-in-setup-<version>.exe` · QR: releases/latest. Краткая форма в UI: **TTLI** (лого, трей).
 
 ## References
 
