@@ -41,6 +41,13 @@ interface AppToday {
   waste_ms: number;
 }
 
+interface TimelineBlock {
+  id: number;
+  app: string;
+  category_id: number;
+  segments: Segment[];
+}
+
 const EMPTY_STATS: TodayStats = {
   useful_ms: 0,
   neutral_ms: 0,
@@ -85,13 +92,15 @@ function App() {
   const [now, setNow] = useState(Date.now());
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [showAllSegments, setShowAllSegments] = useState(false);
+  const [showAllBlocks, setShowAllBlocks] = useState(false);
+  const [expandedBlockIds, setExpandedBlockIds] = useState<Set<number>>(new Set());
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [extensionChromeId, setExtensionChromeId] = useState("");
   const [extensionEdgeId, setExtensionEdgeId] = useState("");
+  const [tokenCopied, setTokenCopied] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -146,6 +155,23 @@ function App() {
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
   );
+  const timelineBlocks = useMemo(() => {
+    const blocks: TimelineBlock[] = [];
+    for (const segment of segments) {
+      const previous = blocks[blocks.length - 1];
+      if (previous?.app === segment.app && previous.category_id === segment.category_id) {
+        previous.segments.push(segment);
+      } else {
+        blocks.push({
+          id: segment.id,
+          app: segment.app,
+          category_id: segment.category_id,
+          segments: [segment],
+        });
+      }
+    }
+    return blocks.reverse();
+  }, [segments]);
   const latestSegment = segments[segments.length - 1];
   const live = !paused && latestSegment?.status === "active" && now - latestSegment.ts_end <= 10_000
     ? latestSegment
@@ -158,8 +184,7 @@ function App() {
   ];
   let ringOffset = 0;
   const maxAppDuration = Math.max(...apps.map((app) => app.duration_ms), 1);
-  const reversedSegments = [...segments].reverse();
-  const visibleSegments = showAllSegments ? reversedSegments : reversedSegments.slice(0, 50);
+  const visibleBlocks = showAllBlocks ? timelineBlocks : timelineBlocks.slice(0, 30);
 
   async function toggleTheme() {
     const nextDark = !dark;
@@ -199,8 +224,41 @@ function App() {
   function openSettings() {
     setExtensionChromeId(settings.extension_chrome_id ?? "");
     setExtensionEdgeId(settings.extension_edge_id ?? "");
+    setTokenCopied(false);
     setSettingsError(null);
     setSettingsOpen(true);
+  }
+
+  async function copyExtensionToken() {
+    const token = settings.extension_token ?? "";
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      setTokenCopied(true);
+      setSettingsError(null);
+    } catch {
+      setSettingsError("Не удалось скопировать токен");
+    }
+  }
+
+  function toggleBlock(blockId: number) {
+    setExpandedBlockIds((current) => {
+      const next = new Set(current);
+      if (next.has(blockId)) next.delete(blockId);
+      else next.add(blockId);
+      return next;
+    });
+  }
+
+  function selectTimelineSegment(segmentId: number) {
+    const block = timelineBlocks.find((item) =>
+      item.segments.some((segment) => segment.id === segmentId),
+    );
+    if (block) {
+      setExpandedBlockIds((current) => new Set(current).add(block.id));
+      if (timelineBlocks.indexOf(block) >= 30) setShowAllBlocks(true);
+    }
+    setSelectedSegment(segmentId);
   }
 
   async function saveExtensionSettings() {
@@ -263,7 +321,7 @@ function App() {
         </div>
         {live && (
           <>
-            <span className={`category-chip kind-${categoryById.get(live.category_id ?? -1)?.kind ?? "muted"}`}>
+            <span className={`category-tag kind-${categoryById.get(live.category_id)?.kind ?? "muted"}`}>
               {categoryById.get(live.category_id ?? -1)?.name ?? "Без категории"}
             </span>
             <div className="live-clock">
@@ -306,7 +364,7 @@ function App() {
                           width: `${Math.max((duration / 86_400_000) * 100, 0.18)}%`,
                           "--segment-color": category?.color ?? "var(--cat-muted)",
                         } as React.CSSProperties}
-                        onClick={() => setSelectedSegment(segment.id)}
+                        onClick={() => selectTimelineSegment(segment.id)}
                         title={`${cleanAppName(segment.app)} · ${formatDuration(duration)}`}
                       />
                     );
@@ -315,34 +373,63 @@ function App() {
               </div>
 
               <div className="segment-list">
-                {visibleSegments.map((segment) => {
-                  const category = categoryById.get(segment.category_id ?? -1);
-                  const isCurrent = live?.id === segment.id;
-                  const duration = (isCurrent ? now : segment.ts_end) - segment.ts_start;
+                {visibleBlocks.map((block) => {
+                  const firstSegment = block.segments[0];
+                  const lastSegment = block.segments[block.segments.length - 1];
+                  const category = categoryById.get(block.category_id);
+                  const isExpanded = expandedBlockIds.has(block.id);
+                  const blockEnd = live?.id === lastSegment.id ? now : lastSegment.ts_end;
+                  const duration = block.segments.reduce((total, segment) => {
+                    const segmentEnd = live?.id === segment.id ? now : segment.ts_end;
+                    return total + Math.max(0, segmentEnd - segment.ts_start);
+                  }, 0);
                   return (
-                    <div className="segment-row" key={segment.id}>
-                      <button className="segment-main" onClick={() => setSelectedSegment(segment.id)}>
-                        <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(isCurrent ? now : segment.ts_end)}</span>
-                        <span className="segment-app"><strong>{cleanAppName(segment.app)}</strong><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
-                        <span className="segment-category" style={{ "--segment-color": category?.color ?? "var(--cat-muted)" } as React.CSSProperties}>{category?.name ?? (segment.status === "away" ? "Перерыв" : "Без категории")}</span>
+                    <div className="segment-block" key={block.id}>
+                      <button
+                        className="segment-main"
+                        aria-expanded={isExpanded}
+                        onClick={() => toggleBlock(block.id)}
+                      >
+                        <span className="segment-time">{formatTime(firstSegment.ts_start)}–{formatTime(blockEnd)}</span>
+                        <span className="segment-app"><strong>{cleanAppName(block.app)}</strong><small>{lastSegment.domain || lastSegment.window_title || "Без заголовка"}</small></span>
+                        <span className={`category-tag kind-${category?.kind ?? "muted"}`}>{category?.name ?? (lastSegment.status === "away" ? "Перерыв" : "Без категории")}</span>
                         <span className="segment-duration">{formatDuration(duration)}</span>
                       </button>
-                      {selectedSegment === segment.id && (
-                        <div className="category-picker">
-                          <span>Переклассифицировать:</span>
-                          {categories.map((item) => (
-                            <button key={item.id} onClick={() => void reclassify(segment.id, item.id)}>{item.name}</button>
-                          ))}
-                          <button onClick={() => void reclassify(segment.id, null)}>Без категории</button>
+                      {isExpanded && (
+                        <div className="nested-segment-list">
+                          {block.segments.map((segment) => {
+                            const segmentCategory = categoryById.get(segment.category_id);
+                            const isCurrent = live?.id === segment.id;
+                            const segmentEnd = isCurrent ? now : segment.ts_end;
+                            return (
+                              <div className="nested-segment" key={segment.id}>
+                                <button className="nested-segment-main" onClick={() => setSelectedSegment(segment.id)}>
+                                  <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segmentEnd)}</span>
+                                  <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
+                                  <span className={`category-tag kind-${segmentCategory?.kind ?? "muted"}`}>{segmentCategory?.name ?? (segment.status === "away" ? "Перерыв" : "Без категории")}</span>
+                                  <span className="segment-duration">{formatDuration(segmentEnd - segment.ts_start)}</span>
+                                </button>
+                                {selectedSegment === segment.id && (
+                                  <div className="category-picker">
+                                    <span>Переклассифицировать:</span>
+                                    {categories.map((item) => (
+                                      <button key={item.id} onClick={() => void reclassify(segment.id, item.id)}>{item.name}</button>
+                                    ))}
+                                    <button onClick={() => void reclassify(segment.id, null)}>Без категории</button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   );
                 })}
               </div>
-              {!showAllSegments && segments.length > 50 && (
-                <button className="show-all-button" onClick={() => setShowAllSegments(true)}>
-                  Показать все ({segments.length})
+              {!showAllBlocks && timelineBlocks.length > 30 && (
+                <button className="show-all-button" onClick={() => setShowAllBlocks(true)}>
+                  Показать все ({timelineBlocks.length})
                 </button>
               )}
             </>
@@ -435,6 +522,19 @@ function App() {
             <p className="settings-hint" id="settings-hint">
               ID виден в chrome://extensions → TTLI Tracker → ID. Вставляется один раз, после этого браузер шлёт события в приложение.
             </p>
+            <div className="settings-token">
+              <span>Токен расширения</span>
+              <div>
+                <code>{settings.extension_token || "—"}</code>
+                <button
+                  disabled={!settings.extension_token}
+                  onClick={() => void copyExtensionToken()}
+                >
+                  {tokenCopied ? "Скопировано" : "Скопировать"}
+                </button>
+              </div>
+              <p>Вставляется в расширение TTLI Tracker (поп-ап расширения).</p>
+            </div>
             {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
             <div className="settings-actions">
               <button className="settings-done" disabled={settingsSaving} onClick={() => void saveExtensionSettings()}>
