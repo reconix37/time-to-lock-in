@@ -86,10 +86,16 @@ function App() {
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
   const [showAllSegments, setShowAllSegments] = useState(false);
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [extensionChromeId, setExtensionChromeId] = useState("");
+  const [extensionEdgeId, setExtensionEdgeId] = useState("");
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextStats, nextApps, settings, trackingPaused] =
+      const [nextSegments, nextCategories, nextStats, nextApps, nextSettings, trackingPaused] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
@@ -102,7 +108,8 @@ function App() {
       setCategories(nextCategories);
       setStats(nextStats);
       setApps(nextApps);
-      setDark(settings.theme === "dark");
+      setSettings(nextSettings);
+      setDark(nextSettings.theme === "dark");
       setPaused(trackingPaused);
       setError(null);
     } catch (reason: unknown) {
@@ -125,6 +132,15 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "";
   }, [dark]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !settingsSaving) setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [settingsOpen, settingsSaving]);
 
   const categoryById = useMemo(
     () => new Map(categories.map((category) => [category.id, category])),
@@ -180,6 +196,42 @@ function App() {
     }
   }
 
+  function openSettings() {
+    setExtensionChromeId(settings.extension_chrome_id ?? "");
+    setExtensionEdgeId(settings.extension_edge_id ?? "");
+    setSettingsError(null);
+    setSettingsOpen(true);
+  }
+
+  async function saveExtensionSettings() {
+    const chromeId = extensionChromeId.trim();
+    const edgeId = extensionEdgeId.trim();
+    const isValidId = (value: string) => value === "" || /^[a-p]{32}$/.test(value);
+    if (!isValidId(chromeId) || !isValidId(edgeId)) {
+      setSettingsError("ID должен состоять из 32 символов от a до p");
+      return;
+    }
+    setSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      await Promise.all([
+        invoke<void>("set_setting", { key: "extension_chrome_id", value: chromeId }),
+        invoke<void>("set_setting", { key: "extension_edge_id", value: edgeId }),
+      ]);
+      setSettings((current) => ({
+        ...current,
+        extension_chrome_id: chromeId,
+        extension_edge_id: edgeId,
+      }));
+      setSettingsOpen(false);
+      setError(null);
+    } catch (reason: unknown) {
+      setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки расширения");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
   return (
     <main className="dashboard-shell">
       <header className="topbar">
@@ -194,6 +246,9 @@ function App() {
           }).format(now)}
         </span>
         <button className="pause-button" onClick={() => void toggleTracking()}>{paused ? "Продолжить" : "Пауза"}</button>
+        <button className="icon-button" onClick={openSettings} aria-label="Открыть настройки">
+          ⚙
+        </button>
         <button className="icon-button" onClick={() => void toggleTheme()} aria-label="Переключить тему">
           {dark ? "☀" : "☾"}
         </button>
@@ -346,6 +401,49 @@ function App() {
           </section>
         </aside>
       </div>
+
+      {settingsOpen && (
+        <div className="settings-overlay">
+          <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div className="settings-heading">
+              <span className="eyebrow">Браузер</span>
+              <h2 id="settings-title">Настройки</h2>
+            </div>
+            <label className="settings-field">
+              <span>ID расширения Chrome</span>
+              <input
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={settingsError !== null}
+                aria-describedby="settings-hint settings-error"
+                value={extensionChromeId}
+                onChange={(event) => setExtensionChromeId(event.target.value)}
+              />
+            </label>
+            <label className="settings-field">
+              <span>ID расширения Edge</span>
+              <input
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={settingsError !== null}
+                aria-describedby="settings-hint settings-error"
+                value={extensionEdgeId}
+                onChange={(event) => setExtensionEdgeId(event.target.value)}
+              />
+            </label>
+            <p className="settings-hint" id="settings-hint">
+              ID виден в chrome://extensions → TTLI Tracker → ID. Вставляется один раз, после этого браузер шлёт события в приложение.
+            </p>
+            {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
+            <div className="settings-actions">
+              <button className="settings-done" disabled={settingsSaving} onClick={() => void saveExtensionSettings()}>
+                {settingsSaving ? "Сохраняем…" : "Готово"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
