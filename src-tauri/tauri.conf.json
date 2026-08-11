@@ -27,12 +27,12 @@
         "height": 228,
         "minWidth": 300,
         "minHeight": 228,
-        "maxWidth": 300,
-        "maxHeight": 228,
+        "maxWidth": 480,
+        "maxHeight": 340,
         "decorations": false,
         "transparent": false,
         "alwaysOnTop": true,
-        "resizable": false,
+        "resizable": true,
         "skipTaskbar": true,
         "visible": false
       }

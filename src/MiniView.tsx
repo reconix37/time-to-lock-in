@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
@@ -18,6 +19,13 @@ interface LiveSegment {
   category_name: string;
   category_kind: CategoryKind;
   is_uncategorized: boolean;
+}
+
+interface MiniHourlyBucket {
+  hour_ts: number;
+  useful_ms: number;
+  neutral_ms: number;
+  waste_ms: number;
 }
 
 type ContextIdentity = Pick<LiveSegment, "app" | "window_title" | "domain">;
@@ -65,6 +73,42 @@ function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
   );
 }
 
+function MiniHourlyChart({ buckets }: { buckets: MiniHourlyBucket[] }) {
+  const { lang, t } = useI18n();
+  const locale = localeForLang(lang);
+
+  return (
+    <section className="mini-hourly" aria-label={t("mini.hourlyAria")}>
+      <span className="mini-expanded-label">{t("mini.hourlyTitle")}</span>
+      <div className="mini-hourly-columns">
+        {buckets.map((bucket, index) => {
+          const segments = [
+            ["useful", bucket.useful_ms],
+            ["neutral", bucket.neutral_ms],
+            ["waste", bucket.waste_ms],
+          ] as const;
+          return (
+            <div className="mini-hour" key={bucket.hour_ts}>
+              <div className="mini-hour-stack" aria-hidden="true">
+                {segments.map(([kind, value]) => (
+                  <i
+                    className={`kind-${kind}${value > 0 ? " is-present" : ""}`}
+                    key={kind}
+                    style={{ height: `${Math.min(100, value / 3_600_000 * 100)}%` }}
+                  />
+                ))}
+              </div>
+              <span>{index % 3 === 0 || index === buckets.length - 1
+                ? new Date(bucket.hour_ts).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+                : ""}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function MiniView() {
   const { lang, t } = useI18n();
   const defaultKindLabels: Record<CategoryKind, string> = {
@@ -73,6 +117,7 @@ export function MiniView() {
     waste: t("mini.defaultWaste"),
   };
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
+  const [hourly, setHourly] = useState<MiniHourlyBucket[]>([]);
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
   const [pinned, setPinned] = useState(true);
@@ -88,16 +133,18 @@ export function MiniView() {
 
   const loadMini = useCallback(async () => {
     try {
-      const [nextProgress, nextLiveSegment, trackingPaused, settings] = await Promise.all([
+      const [nextProgress, nextLiveSegment, trackingPaused, settings, nextHourly] = await Promise.all([
         invoke<ProgressOverview>("get_progress_overview"),
         invoke<LiveSegment | null>("get_live_segment"),
         invoke<boolean>("get_tracking_paused"),
         invoke<Record<string, string>>("get_settings"),
+        invoke<MiniHourlyBucket[]>("mini_hourly", { limitHours: 12 }),
       ]);
       setProgress(nextProgress);
       setLiveSegment(nextLiveSegment);
       setPaused(trackingPaused);
       setPinned(settings.mini_pinned === "1");
+      setHourly(nextHourly);
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
@@ -143,10 +190,22 @@ export function MiniView() {
   }, [t]);
 
   useEffect(() => {
-    void invoke("fix_mini_window");
     void loadMini();
+    let active = true;
+    let resizeTimer: number | null = null;
+    let stopResizeListener: (() => void) | null = null;
+    void getCurrentWindow().onResized(() => {
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => void invoke("save_mini_geometry"), 400);
+    }).then((unlisten) => {
+      if (active) stopResizeListener = unlisten;
+      else unlisten();
+    });
     const refresh = window.setInterval(() => void loadMini(), 5_000);
     return () => {
+      active = false;
+      stopResizeListener?.();
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       window.clearInterval(refresh);
       if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
     };
@@ -191,18 +250,32 @@ export function MiniView() {
   const verdictText = showSwitchExplanation
     ? t("mini.switchExplanation")
     : verdict ? t(verdict.key, verdict.vars) : t("mini.verdictInProgress");
-  const currentState = paused
+  const currentApp = paused
     ? t("mini.trackingPaused")
     : !loaded
       ? t("mini.determiningWindow")
       : away
         ? t("mini.nowBreak")
         : liveSegment
-          ? t("mini.nowCategory", {
-              app: cleanAppName(liveSegment.app),
-              category: liveSegment.is_uncategorized ? t("common.uncategorized") : liveSegment.category_name,
-            })
+          ? cleanAppName(liveSegment.app)
           : t("mini.noActiveWindow");
+  const currentCategory = !paused && loaded && !away && liveSegment
+    ? liveSegment.is_uncategorized ? t("common.uncategorized") : liveSegment.category_name
+    : null;
+  const currentTone = paused || away
+    ? "warning"
+    : !loaded || !liveSegment
+      ? "muted"
+      : liveSegment.is_uncategorized ? "muted" : liveSegment.category_kind;
+  const nextRankNeeded = progress?.next_rank_threshold === null || progress?.next_rank_threshold === undefined
+    ? null
+    : Math.max(0, progress.next_rank_threshold - progress.lifetime_xp);
+  const rankSpan = progress?.next_rank_threshold === null || progress?.next_rank_threshold === undefined
+    ? 0
+    : progress.next_rank_threshold - progress.current_rank_threshold;
+  const rankProgress = !progress || rankSpan <= 0
+    ? 100
+    : Math.min(100, Math.max(0, (progress.lifetime_xp - progress.current_rank_threshold) / rankSpan * 100));
 
   return (
     <main className="mini-shell">
@@ -233,7 +306,23 @@ export function MiniView() {
         </section>
       ) : <div className="mini-loading" aria-label={t("common.loading")} />}
 
-      <p className="mini-current" title={currentState}>{currentState}</p>
+      <section className={`mini-current tone-${currentTone}`} title={currentApp} aria-label={t("mini.currentContext")}>
+        <span>{t("mini.nowLabel")}</span>
+        <strong>{currentApp}</strong>
+        {currentCategory && <i className={`kind-${liveSegment?.category_kind ?? "neutral"}`}>{currentCategory}</i>}
+      </section>
+
+      <div className="mini-expanded">
+        <MiniHourlyChart buckets={hourly} />
+        <section className="mini-rank-progress">
+          <div>
+            <span>{progress?.next_rank && nextRankNeeded !== null
+              ? t("mini.rankUntil", { rank: progress.next_rank, xp: nextRankNeeded.toLocaleString(localeForLang(lang)) })
+              : t("mini.rankMaximum")}</span>
+          </div>
+          <span className="mini-rank-rail" aria-hidden="true"><i style={{ width: `${rankProgress}%` }} /></span>
+        </section>
+      </div>
 
       {error && <p className="mini-error">{error}</p>}
 
@@ -254,6 +343,7 @@ export function MiniView() {
           {pinned ? "●" : "○"}
         </button>
       </footer>
+      <span className="mini-resize-grip" aria-hidden="true" />
     </main>
   );
 }

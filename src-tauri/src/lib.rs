@@ -67,6 +67,14 @@ struct TodayCumulative {
 }
 
 #[derive(Serialize)]
+struct MiniHourlyBucket {
+    hour_ts: i64,
+    useful_ms: i64,
+    neutral_ms: i64,
+    waste_ms: i64,
+}
+
+#[derive(Serialize)]
 struct DailySeriesDay {
     local_date: String,
     useful_ms: i64,
@@ -351,6 +359,25 @@ fn get_afk_series(days: i64) -> Result<Vec<AfkDay>, String> {
             .map(|day| AfkDay {
                 local_date: day.local_date,
                 afk_ms: day.afk_ms,
+            })
+            .collect()
+    })
+}
+
+#[tauri::command]
+fn mini_hourly(limit_hours: i64) -> Result<Vec<MiniHourlyBucket>, String> {
+    if !(1..=24).contains(&limit_hours) {
+        return Err("limit_hours must be between 1 and 24".to_string());
+    }
+    let connection = db::open()?;
+    db::mini_hourly(&connection, db::now_ms(), limit_hours).map(|buckets| {
+        buckets
+            .into_iter()
+            .map(|bucket| MiniHourlyBucket {
+                hour_ts: bucket.hour_ts,
+                useful_ms: bucket.useful_ms,
+                neutral_ms: bucket.neutral_ms,
+                waste_ms: bucket.waste_ms,
             })
             .collect()
     })
@@ -1169,8 +1196,8 @@ fn set_mini_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn fix_mini_window(app: tauri::AppHandle) -> Result<(), String> {
-    tray::fix_mini_window(&app)
+fn save_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
+    tray::save_mini_geometry(&app)
 }
 
 #[tauri::command]
@@ -1287,14 +1314,14 @@ pub fn run() {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 if window.label() == "mini" {
-                    let _ = tray::save_mini_position(window.app_handle());
+                    let _ = tray::save_mini_geometry(window.app_handle());
                 } else if window.label() == "main" {
                     let _ = tray::remember_tray_only();
                 }
                 let _ = window.hide();
             }
             tauri::WindowEvent::Focused(false) if window.label() == "mini" => {
-                let _ = tray::save_mini_position(window.app_handle());
+                let _ = tray::save_mini_geometry(window.app_handle());
             }
             _ => {}
         })
@@ -1324,6 +1351,7 @@ pub fn run() {
             get_progress_overview,
             get_daily_series,
             get_afk_series,
+            mini_hourly,
             get_day_print,
             get_week_summary,
             import_challenge,
@@ -1349,7 +1377,7 @@ pub fn run() {
             show_dashboard,
             show_mini,
             set_mini_pinned,
-            fix_mini_window,
+            save_mini_geometry,
             start_mini_drag,
             get_autostart,
             set_autostart,
@@ -1365,7 +1393,7 @@ pub fn run() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
-            let _ = tray::save_mini_position(app);
+            let _ = tray::save_mini_geometry(app);
             if let Ok(handles) = exit_handles.lock() {
                 if let Some((stop, _, _, _)) = handles.as_ref() {
                     stop.store(true, Ordering::Relaxed);

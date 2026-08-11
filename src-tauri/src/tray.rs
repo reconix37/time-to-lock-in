@@ -7,10 +7,12 @@ use std::time::Duration;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
 
-const MINI_WIDTH: f64 = 300.0;
-const MINI_HEIGHT: f64 = 228.0;
+const MINI_MIN_WIDTH: f64 = 300.0;
+const MINI_MIN_HEIGHT: f64 = 228.0;
+const MINI_MAX_WIDTH: f64 = 480.0;
+const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
 
 struct TraySnapshot {
@@ -185,25 +187,26 @@ pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
     db::set_setting(&connection, "mini_pinned", if pinned { "1" } else { "0" })
 }
 
-pub fn fix_mini_window(app: &AppHandle) -> Result<(), String> {
-    let mini = app
-        .get_webview_window("mini")
-        .ok_or_else(|| "mini-window is unavailable".to_string())?;
-    mini.set_size(tauri::LogicalSize::new(MINI_WIDTH, MINI_HEIGHT))
-        .map_err(|error| error.to_string())?;
-    clamp_mini_window(&mini)
-}
-
-pub fn save_mini_position(app: &AppHandle) -> Result<(), String> {
+pub fn save_mini_geometry(app: &AppHandle) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     let position = mini.inner_position().map_err(|error| error.to_string())?;
+    let scale_factor = mini.scale_factor().map_err(|error| error.to_string())?;
+    let size = mini
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale_factor);
     let connection = db::open()?;
     db::set_setting(
         &connection,
         "mini_window_pos",
         &format!("{},{}", position.x, position.y),
+    )?;
+    db::set_setting(
+        &connection,
+        "mini_window_size",
+        &format!("{:.0},{:.0}", size.width, size.height),
     )
 }
 
@@ -216,33 +219,56 @@ fn clamp_mini_window(window: &WebviewWindow) -> Result<(), String> {
     }
 
     let connection = db::open()?;
-    let saved =
+    let saved_position =
         db::setting(&connection, "mini_window_pos")?.and_then(|value| parse_position(&value));
+    let saved_size =
+        db::setting(&connection, "mini_window_size")?.and_then(|value| parse_size(&value));
     drop(connection);
 
-    let size = window.inner_size().map_err(|error| error.to_string())?;
     let default_monitor = window
         .primary_monitor()
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| monitors[0].clone());
-    let proposed = saved.unwrap_or_else(|| {
-        let area = default_monitor.work_area();
+    let current_position = window.inner_position().map_err(|error| error.to_string())?;
+    let monitor_anchor = saved_position.unwrap_or(current_position);
+    let monitor = monitors
+        .iter()
+        .find(|monitor| point_in_work_area(monitor_anchor, monitor.work_area()))
+        .unwrap_or_else(|| {
+            monitors
+                .iter()
+                .min_by_key(|monitor| {
+                    distance_squared(monitor_anchor, monitor.work_area().position)
+                })
+                .unwrap_or(&default_monitor)
+        });
+    let area = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    let area_logical = area.size.to_logical::<f64>(scale_factor);
+    let current_size = window
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(window.scale_factor().map_err(|error| error.to_string())?);
+    let proposed_size = saved_size.unwrap_or(current_size);
+    let max_width = MINI_MAX_WIDTH.min(area_logical.width).max(MINI_MIN_WIDTH);
+    let max_height = MINI_MAX_HEIGHT
+        .min(area_logical.height)
+        .max(MINI_MIN_HEIGHT);
+    let clamped_size = LogicalSize::new(
+        proposed_size.width.clamp(MINI_MIN_WIDTH, max_width),
+        proposed_size.height.clamp(MINI_MIN_HEIGHT, max_height),
+    );
+    window
+        .set_size(clamped_size)
+        .map_err(|error| error.to_string())?;
+    let size = clamped_size.to_physical::<u32>(scale_factor);
+    let proposed = saved_position.unwrap_or_else(|| {
         PhysicalPosition::new(
             area.position.x + area.size.width as i32 - size.width as i32 - MINI_MARGIN,
             area.position.y + area.size.height as i32 - size.height as i32 - MINI_MARGIN,
         )
     });
 
-    let monitor = monitors
-        .iter()
-        .find(|monitor| point_in_work_area(proposed, monitor.work_area()))
-        .unwrap_or_else(|| {
-            monitors
-                .iter()
-                .min_by_key(|monitor| distance_squared(proposed, monitor.work_area().position))
-                .unwrap_or(&default_monitor)
-        });
-    let area = monitor.work_area();
     let max_x = area.position.x + area.size.width.saturating_sub(size.width) as i32;
     let max_y = area.position.y + area.size.height.saturating_sub(size.height) as i32;
     let clamped = PhysicalPosition::new(
@@ -256,6 +282,14 @@ fn clamp_mini_window(window: &WebviewWindow) -> Result<(), String> {
     window
         .set_position(clamped)
         .map_err(|error| error.to_string())
+}
+
+fn parse_size(value: &str) -> Option<LogicalSize<f64>> {
+    let (width, height) = value.split_once(',')?;
+    let width = width.parse::<f64>().ok()?;
+    let height = height.parse::<f64>().ok()?;
+    (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        .then_some(LogicalSize::new(width, height))
 }
 
 fn parse_position(value: &str) -> Option<PhysicalPosition<i32>> {

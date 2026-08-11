@@ -147,6 +147,14 @@ pub struct TodayCumulativeRecord {
     pub waste_limit_min: i64,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct MiniHourlyRecord {
+    pub hour_ts: i64,
+    pub useful_ms: i64,
+    pub neutral_ms: i64,
+    pub waste_ms: i64,
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1232,12 +1240,71 @@ pub fn today_cumulative(
     })
 }
 
+pub fn mini_hourly(
+    connection: &Connection,
+    current_ms: i64,
+    limit_hours: i64,
+) -> Result<Vec<MiniHourlyRecord>, String> {
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE bounds AS (
+                SELECT (?1 / 3600000) * 3600000 AS current_hour_ms,
+                       ?1 AS current_ms,
+                       ?2 AS limit_hours
+             ), hours(hour_ts, bucket_index) AS (
+                SELECT current_hour_ms - (limit_hours - 1) * 3600000, 0 FROM bounds
+                UNION ALL
+                SELECT hour_ts + 3600000, bucket_index + 1
+                FROM hours, bounds
+                WHERE bucket_index + 1 < bounds.limit_hours
+             )
+             SELECT hours.hour_ts,
+                    COALESCE(SUM(CASE WHEN categories.kind = 'useful' THEN
+                        MAX(0, MIN(segments.ts_end, hours.hour_ts + 3600000, bounds.current_ms)
+                            - MAX(segments.ts_start, hours.hour_ts))
+                    ELSE 0 END), 0) AS useful_ms,
+                    COALESCE(SUM(CASE WHEN categories.kind = 'neutral' THEN
+                        MAX(0, MIN(segments.ts_end, hours.hour_ts + 3600000, bounds.current_ms)
+                            - MAX(segments.ts_start, hours.hour_ts))
+                    ELSE 0 END), 0) AS neutral_ms,
+                    COALESCE(SUM(CASE WHEN categories.kind = 'waste' THEN
+                        MAX(0, MIN(segments.ts_end, hours.hour_ts + 3600000, bounds.current_ms)
+                            - MAX(segments.ts_start, hours.hour_ts))
+                    ELSE 0 END), 0) AS waste_ms
+             FROM hours
+             CROSS JOIN bounds
+             LEFT JOIN segments
+               ON segments.status IN ('active', 'crashed')
+              AND segments.ts_end > hours.hour_ts
+              AND segments.ts_start < MIN(hours.hour_ts + 3600000, bounds.current_ms)
+             LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
+             GROUP BY hours.hour_ts
+             ORDER BY hours.hour_ts",
+        )
+        .map_err(|error| error.to_string())?;
+    let records = statement
+        .query_map(params![current_ms, limit_hours], |row| {
+            Ok(MiniHourlyRecord {
+                hour_ts: row.get(0)?,
+                useful_ms: row.get(1)?,
+                neutral_ms: row.get(2)?,
+                waste_ms: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    Ok(records)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        afk_series, daily_series, import_challenge, progress_series, reclassify_history,
-        refresh_daily_stats, segment_local_dates, set_setting, today_cumulative, upsert_exe_rule,
-        MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
+        afk_series, daily_series, import_challenge, mini_hourly, progress_series,
+        reclassify_history, refresh_daily_stats, segment_local_dates, set_setting,
+        today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002, MIGRATION_003,
+        MIGRATION_004,
     };
     use rusqlite::{params, Connection};
 
@@ -1278,6 +1345,38 @@ mod tests {
                 .expect("rule count"),
             1
         );
+    }
+
+    #[test]
+    fn mini_hourly_zero_fills_and_splits_segments_across_rolling_hours() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at) VALUES
+                    (1, 'Work', '#000000', 'useful', 0),
+                    (2, 'Chill', '#000000', 'neutral', 0),
+                    (3, 'Waste', '#000000', 'waste', 0);
+                 INSERT INTO segments (ts_start, ts_end, app, category_id, status) VALUES
+                    (1704094200000, 1704097800000, 'work.exe', 1, 'active'),
+                    (1704096900000, 1704100500000, 'chill.exe', 2, 'crashed'),
+                    (1704099600000, 1704101400000, 'waste.exe', 3, 'active'),
+                    (1704099600000, 1704101400000, 'away.exe', 3, 'away');",
+            )
+            .expect("fixtures");
+
+        let hours = mini_hourly(&connection, 1704101400000, 3).expect("hourly buckets");
+
+        assert_eq!(hours.len(), 3);
+        assert_eq!(hours[0].hour_ts, 1704092400000);
+        assert_eq!(hours[0].useful_ms, 1_800_000);
+        assert_eq!(hours[0].neutral_ms, 0);
+        assert_eq!(hours[0].waste_ms, 0);
+        assert_eq!(hours[1].useful_ms, 1_800_000);
+        assert_eq!(hours[1].neutral_ms, 2_700_000);
+        assert_eq!(hours[1].waste_ms, 0);
+        assert_eq!(hours[2].useful_ms, 0);
+        assert_eq!(hours[2].neutral_ms, 900_000);
+        assert_eq!(hours[2].waste_ms, 1_800_000);
     }
 
     #[test]
