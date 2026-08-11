@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 struct TrackingControl {
     paused: Arc<AtomicBool>,
@@ -132,6 +133,79 @@ const RANKS: [(&str, i64); 8] = [
     ("Повелитель времени", 100_000),
 ];
 
+#[derive(Clone, Serialize)]
+struct DayPrintEntry {
+    app: String,
+    category_name: String,
+    category_kind: String,
+    duration_ms: i64,
+}
+
+#[derive(Clone, Serialize)]
+struct DayPrint {
+    local_date: String,
+    useful_ms: i64,
+    neutral_ms: i64,
+    waste_ms: i64,
+    observed_ms: i64,
+    useful_goal_min: i64,
+    waste_limit_min: i64,
+    observed_min: i64,
+    useful_passed: bool,
+    waste_passed: bool,
+    observed_passed: bool,
+    passed: bool,
+    public_xp: i64,
+    lifetime_xp: i64,
+    rank: &'static str,
+    burned_rubles: Option<f64>,
+    top_entries: Vec<DayPrintEntry>,
+    challenge_code: Option<String>,
+    challenge_passed: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct WeekSummary {
+    days: Vec<DayPrint>,
+    passed_count: usize,
+    useful_ms: i64,
+    neutral_ms: i64,
+    waste_ms: i64,
+    week_xp: i64,
+    lifetime_xp: i64,
+    rank: &'static str,
+    strongest_day: Option<String>,
+    waste_days: usize,
+    burned_rubles: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct ImportedChallenge {
+    code: String,
+    useful_goal_min: i64,
+    waste_limit_min: i64,
+    observed_min: i64,
+}
+
+fn rank_for_xp(xp: i64) -> (&'static str, i64, Option<(&'static str, i64)>) {
+    let index = RANKS
+        .iter()
+        .rposition(|(_, threshold)| xp >= *threshold)
+        .unwrap_or(0);
+    let (name, threshold) = RANKS[index];
+    (name, threshold, RANKS.get(index + 1).copied())
+}
+
+fn local_date_format_is_valid(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .chars()
+            .enumerate()
+            .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
+}
+
 fn heat_level(value_ms: i64, threshold_min: i64) -> u8 {
     if value_ms <= 0 {
         return 0;
@@ -203,12 +277,7 @@ fn get_progress_overview() -> Result<ProgressOverview, String> {
         )
         .map_err(|error| error.to_string())?;
     let lifetime_xp = historical_xp + today.useful_ms / 60_000;
-    let rank_index = RANKS
-        .iter()
-        .rposition(|(_, threshold)| lifetime_xp >= *threshold)
-        .unwrap_or(0);
-    let (current_rank, current_rank_threshold) = RANKS[rank_index];
-    let next = RANKS.get(rank_index + 1).copied();
+    let (current_rank, current_rank_threshold, next) = rank_for_xp(lifetime_xp);
 
     Ok(ProgressOverview {
         today,
@@ -242,6 +311,288 @@ fn get_daily_series(days: i64) -> Result<Vec<DailySeriesDay>, String> {
             })
             .collect()
     })
+}
+
+fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result<DayPrint, String> {
+    let valid_date = connection
+        .query_row("SELECT COALESCE(date(?1) = ?1, 0)", [local_date], |row| {
+            row.get::<_, bool>(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if !valid_date {
+        return Err("Дата должна быть в формате YYYY-MM-DD".to_string());
+    }
+    let today = connection
+        .query_row("SELECT date('now', 'localtime')", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if local_date > today.as_str() {
+        return Err("Печать будущего дня недоступна".to_string());
+    }
+
+    let (useful_ms, neutral_ms, waste_ms) = if local_date == today.as_str() {
+        connection
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN c.kind = 'useful' THEN o.duration_ms ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN c.kind = 'neutral' THEN o.duration_ms ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN c.kind = 'waste' THEN o.duration_ms ELSE 0 END), 0)
+                 FROM segment_day_overlaps o
+                 LEFT JOIN categories c ON c.id = o.category_id
+                 WHERE o.local_date = ?1",
+                [local_date],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| error.to_string())?
+    } else {
+        connection
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN c.kind = 'useful' THEN ds.duration_ms ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN c.kind = 'neutral' THEN ds.duration_ms ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN c.kind = 'waste' THEN ds.duration_ms ELSE 0 END), 0)
+                 FROM daily_stats ds
+                 LEFT JOIN categories c ON c.id = ds.category_id
+                 WHERE ds.local_date = ?1",
+                [local_date],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| error.to_string())?
+    };
+    let (useful_goal_min, waste_limit_min, observed_min) = connection
+        .query_row(
+            "SELECT useful_goal_min, waste_limit_min, observed_min
+             FROM goal_history
+             WHERE effective_local_date <= ?1
+             ORDER BY effective_local_date DESC LIMIT 1",
+            [local_date],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let observed_ms = useful_ms + neutral_ms + waste_ms;
+    let useful_passed = useful_ms >= useful_goal_min.saturating_mul(60_000);
+    let waste_passed = waste_ms <= waste_limit_min.saturating_mul(60_000);
+    let observed_passed = observed_ms >= observed_min.saturating_mul(60_000);
+    let passed = useful_passed && waste_passed && observed_passed;
+    let public_xp = useful_ms / 60_000;
+    let lifetime_xp = if local_date == today.as_str() {
+        connection
+            .query_row(
+                "SELECT COALESCE(SUM(xp), 0) FROM daily_stats WHERE local_date < ?1",
+                [local_date],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?
+            + public_xp
+    } else {
+        connection
+            .query_row(
+                "SELECT COALESCE(SUM(xp), 0) FROM daily_stats WHERE local_date <= ?1",
+                [local_date],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?
+    };
+    let (rank, _, _) = rank_for_xp(lifetime_xp);
+    let hourly_rate = db::setting(connection, "hourly_rate")?
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse::<f64>().map_err(|error| error.to_string()))
+        .transpose()?;
+    let burned_rubles = hourly_rate.map(|rate| {
+        let amount = waste_ms as f64 / 3_600_000.0 * rate;
+        (amount * 100.0).round() / 100.0
+    });
+
+    let mut statement = connection
+        .prepare(
+            "SELECT s.app, COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral'),
+                    SUM(o.duration_ms) AS duration_ms
+             FROM segment_day_overlaps o
+             JOIN segments s ON s.id = o.segment_id
+             LEFT JOIN categories c ON c.id = o.category_id
+             WHERE o.local_date = ?1
+             GROUP BY s.app, c.id
+             ORDER BY duration_ms DESC, s.app ASC
+             LIMIT 5",
+        )
+        .map_err(|error| error.to_string())?;
+    let top_entries = statement
+        .query_map([local_date], |row| {
+            Ok(DayPrintEntry {
+                app: row.get(0)?,
+                category_name: row.get(1)?,
+                category_kind: row.get(2)?,
+                duration_ms: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let challenge = connection
+        .query_row(
+            "SELECT code, useful_goal_min, waste_limit_min, observed_min
+             FROM challenge_history WHERE local_date = ?1",
+            [local_date],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let challenge_passed = challenge.as_ref().map(|(_, useful, waste, observed)| {
+        useful_ms >= useful.saturating_mul(60_000)
+            && waste_ms <= waste.saturating_mul(60_000)
+            && observed_ms >= observed.saturating_mul(60_000)
+    });
+
+    Ok(DayPrint {
+        local_date: local_date.to_string(),
+        useful_ms,
+        neutral_ms,
+        waste_ms,
+        observed_ms,
+        useful_goal_min,
+        waste_limit_min,
+        observed_min,
+        useful_passed,
+        waste_passed,
+        observed_passed,
+        passed,
+        public_xp,
+        lifetime_xp,
+        rank,
+        burned_rubles,
+        top_entries,
+        challenge_code: challenge.map(|(code, _, _, _)| code),
+        challenge_passed,
+    })
+}
+
+#[tauri::command]
+fn get_day_print(local_date: String) -> Result<DayPrint, String> {
+    let connection = db::open()?;
+    load_day_print(&connection, &local_date)
+}
+
+#[tauri::command]
+fn get_week_summary() -> Result<WeekSummary, String> {
+    let connection = db::open()?;
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE dates(local_date, position) AS (
+                SELECT date('now', 'localtime', '-6 days'), 0
+                UNION ALL
+                SELECT date(local_date, '+1 day'), position + 1 FROM dates WHERE position < 6
+             ) SELECT local_date FROM dates ORDER BY local_date",
+        )
+        .map_err(|error| error.to_string())?;
+    let dates = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    let days = dates
+        .iter()
+        .map(|date| load_day_print(&connection, date))
+        .collect::<Result<Vec<_>, _>>()?;
+    let useful_ms = days.iter().map(|day| day.useful_ms).sum();
+    let neutral_ms = days.iter().map(|day| day.neutral_ms).sum();
+    let waste_ms = days.iter().map(|day| day.waste_ms).sum();
+    let strongest_day = days
+        .iter()
+        .filter(|day| day.observed_ms > 0)
+        .max_by_key(|day| day.useful_ms)
+        .map(|day| day.local_date.clone());
+    let burned_rubles = if days.iter().any(|day| day.burned_rubles.is_some()) {
+        Some(days.iter().filter_map(|day| day.burned_rubles).sum())
+    } else {
+        None
+    };
+    let lifetime_xp = days.last().map_or(0, |day| day.lifetime_xp);
+    let (rank, _, _) = rank_for_xp(lifetime_xp);
+    Ok(WeekSummary {
+        passed_count: days.iter().filter(|day| day.passed).count(),
+        week_xp: days.iter().map(|day| day.public_xp).sum(),
+        waste_days: days
+            .iter()
+            .filter(|day| day.waste_ms > day.waste_limit_min.saturating_mul(60_000))
+            .count(),
+        days,
+        useful_ms,
+        neutral_ms,
+        waste_ms,
+        lifetime_xp,
+        rank,
+        strongest_day,
+        burned_rubles,
+    })
+}
+
+#[tauri::command]
+fn import_challenge(code: String) -> Result<ImportedChallenge, String> {
+    let connection = db::open()?;
+    let (useful_goal_min, waste_limit_min, observed_min) =
+        db::import_challenge(&connection, &code)?;
+    Ok(ImportedChallenge {
+        code,
+        useful_goal_min,
+        waste_limit_min,
+        observed_min,
+    })
+}
+
+#[tauri::command]
+async fn save_png(
+    app: tauri::AppHandle,
+    file_name: String,
+    png_bytes: Vec<u8>,
+) -> Result<bool, String> {
+    if !file_name.ends_with(".png")
+        || file_name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\'))
+        || png_bytes.len() > 20 * 1024 * 1024
+        || !png_bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10])
+    {
+        return Err("Некорректный PNG-файл".to_string());
+    }
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("PNG", &["png"])
+        .set_file_name(&file_name)
+        .blocking_save_file();
+    let Some(path) = selected else {
+        return Ok(false);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    std::fs::write(path, png_bytes).map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 #[derive(Serialize)]
@@ -547,6 +898,7 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         "hourly_rate" => value.is_empty() || value.parse::<f64>().is_ok_and(|number| number >= 0.0),
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
         "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
+        "last_day_print_seen" => local_date_format_is_valid(&value),
         "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" => {
             !value.trim().is_empty() && value.chars().count() <= 80
         }
@@ -792,6 +1144,10 @@ pub fn run() {
             get_today_cumulative,
             get_progress_overview,
             get_daily_series,
+            get_day_print,
+            get_week_summary,
+            import_challenge,
+            save_png,
             get_categories,
             create_category,
             delete_category,

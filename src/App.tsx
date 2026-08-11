@@ -3,11 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
+import { DayPrint } from "./components/DayPrint";
 import { DayScorecard } from "./components/DayScorecard";
 import { TrendsStacked } from "./components/TrendsStacked";
 import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
 import type { DailySeriesDay } from "./trends";
+import {
+  renderChallengePng,
+  renderDayPrintPng,
+  renderWeekPng,
+  savePng,
+  type DayPrintData,
+  type WeekSummaryData,
+} from "./share";
 import { MiniView } from "./MiniView";
 import "./styles/tokens.css";
 import "./App.css";
@@ -156,6 +165,10 @@ function DashboardView() {
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
   const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
+  const [dayPrint, setDayPrint] = useState<DayPrintData | null>(null);
+  const [dayPrintDate, setDayPrintDate] = useState("");
+  const [shareBusy, setShareBusy] = useState<"day" | "week" | "challenge" | null>(null);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [dashboardView, setDashboardView] = useState<"today" | "trends">("today");
   const [trendsRange, setTrendsRange] = useState<7 | 30>(7);
   const [apps, setApps] = useState<AppToday[]>([]);
@@ -183,6 +196,10 @@ function DashboardView() {
   const [usefulGoalMin, setUsefulGoalMin] = useState("120");
   const [wasteLimitMin, setWasteLimitMin] = useState("60");
   const [observedMin, setObservedMin] = useState("60");
+  const [hourlyRate, setHourlyRate] = useState("");
+  const [challengeInput, setChallengeInput] = useState("");
+  const [challengeError, setChallengeError] = useState<string | null>(null);
+  const [challengeImported, setChallengeImported] = useState(false);
   const [dbSizeMb, setDbSizeMb] = useState<number | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -221,7 +238,25 @@ function DashboardView() {
       setDailySeries(nextDailySeries);
       setStats(nextProgress.today);
       setApps(nextApps);
+      let targetDate = dayPrintDate;
+      if (!targetDate) {
+        const yesterday = nextDailySeries[nextDailySeries.length - 2];
+        const newestObserved = [...nextDailySeries].reverse().find((day) => day.observed_ms > 0);
+        const unseenYesterday = yesterday?.observed_ms > 0
+          && nextSettings.last_day_print_seen !== yesterday.local_date;
+        targetDate = unseenYesterday
+          ? yesterday.local_date
+          : nextProgress.today.observed_ms > 0
+            ? nextProgress.today.local_date
+            : newestObserved?.local_date ?? nextProgress.today.local_date;
+        if (unseenYesterday) {
+          await invoke<void>("set_setting", { key: "last_day_print_seen", value: yesterday.local_date });
+          nextSettings.last_day_print_seen = yesterday.local_date;
+        }
+      }
       setSettings(nextSettings);
+      setDayPrintDate(targetDate);
+      setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate: targetDate }));
       setDark(nextSettings.theme === "dark");
       setPaused(trackingPaused);
       setError(null);
@@ -230,7 +265,7 @@ function DashboardView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dayPrintDate]);
 
   useEffect(() => {
     void loadDashboard();
@@ -393,6 +428,10 @@ function DashboardView() {
     setUsefulGoalMin(settings.useful_goal_min ?? "120");
     setWasteLimitMin(settings.waste_limit_min ?? "60");
     setObservedMin(settings.observed_min ?? "60");
+    setHourlyRate(settings.hourly_rate ?? "");
+    setChallengeInput("");
+    setChallengeError(null);
+    setChallengeImported(false);
     setDbSizeMb(null);
     setTokenCopied(false);
     setSettingsError(null);
@@ -595,6 +634,10 @@ function DashboardView() {
       setSettingsError("Цели должны быть целыми числами от 0 до 1440 минут");
       return;
     }
+    if (hourlyRate !== "" && (!/^\d+(?:[.,]\d+)?$/.test(hourlyRate) || Number(hourlyRate.replace(",", ".")) < 0)) {
+      setSettingsError("Часовая ставка должна быть положительным числом");
+      return;
+    }
     setSettingsSaving(true);
     setSettingsError(null);
     try {
@@ -602,6 +645,7 @@ function DashboardView() {
       await invoke<void>("set_setting", { key: "useful_goal_min", value: usefulGoalMin });
       await invoke<void>("set_setting", { key: "waste_limit_min", value: wasteLimitMin });
       await invoke<void>("set_setting", { key: "observed_min", value: observedMin });
+      await invoke<void>("set_setting", { key: "hourly_rate", value: hourlyRate.replace(",", ".") });
       await Promise.all([
         invoke<void>("set_setting", { key: "extension_chrome_id", value: chromeId }),
         invoke<void>("set_setting", { key: "extension_edge_id", value: edgeId }),
@@ -619,6 +663,7 @@ function DashboardView() {
         useful_goal_min: usefulGoalMin,
         waste_limit_min: wasteLimitMin,
         observed_min: observedMin,
+        hourly_rate: hourlyRate.replace(",", "."),
       }));
       setSettingsOpen(false);
       setError(null);
@@ -627,6 +672,75 @@ function DashboardView() {
       setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки");
     } finally {
       setSettingsSaving(false);
+    }
+  }
+
+  async function selectDayPrint(localDate: string) {
+    setDayPrintDate(localDate);
+    setShareMessage(null);
+    try {
+      setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate }));
+    } catch (reason: unknown) {
+      setError(typeof reason === "string" ? reason : "Не удалось собрать Печать дня");
+    }
+  }
+
+  async function shareArtifact(kind: "day" | "week" | "challenge") {
+    if (!dayPrint) return;
+    setShareBusy(kind);
+    setShareMessage(null);
+    try {
+      let dataUrl: string;
+      let fileName: string;
+      if (kind === "week") {
+        const week = await invoke<WeekSummaryData>("get_week_summary");
+        dataUrl = await renderWeekPng(week);
+        fileName = `ttli-week-${week.days[0]?.local_date ?? dayPrint.local_date}.png`;
+      } else if (kind === "challenge") {
+        dataUrl = await renderChallengePng(dayPrint);
+        fileName = `ttli-challenge-${dayPrint.local_date}.png`;
+      } else {
+        dataUrl = await renderDayPrintPng(dayPrint);
+        fileName = `ttli-day-print-${dayPrint.local_date}.png`;
+      }
+      const saved = await savePng(dataUrl, fileName);
+      if (saved) setShareMessage("PNG сохранён");
+    } catch (reason: unknown) {
+      setShareMessage(typeof reason === "string" ? reason : "Не удалось сохранить PNG");
+    } finally {
+      setShareBusy(null);
+    }
+  }
+
+  async function importChallenge() {
+    const code = challengeInput;
+    if (!/^TF-(\d+)-(\d+)-(\d+)$/.test(code)) {
+      setChallengeError("Код должен быть в формате TF-184-43-60");
+      setChallengeImported(false);
+      return;
+    }
+    setChallengeError(null);
+    try {
+      const imported = await invoke<{
+        code: string;
+        useful_goal_min: number;
+        waste_limit_min: number;
+        observed_min: number;
+      }>("import_challenge", { code });
+      setUsefulGoalMin(String(imported.useful_goal_min));
+      setWasteLimitMin(String(imported.waste_limit_min));
+      setObservedMin(String(imported.observed_min));
+      setSettings((current) => ({
+        ...current,
+        useful_goal_min: String(imported.useful_goal_min),
+        waste_limit_min: String(imported.waste_limit_min),
+        observed_min: String(imported.observed_min),
+      }));
+      setChallengeImported(true);
+      await loadDashboard();
+    } catch (reason: unknown) {
+      setChallengeError(typeof reason === "string" ? reason : "Не удалось импортировать челлендж");
+      setChallengeImported(false);
     }
   }
 
@@ -766,6 +880,24 @@ function DashboardView() {
         <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
       ) : (
         <DayScorecard overview={progress} formatDuration={formatDuration} />
+      )}
+
+      {dayPrint && dayPrint.observed_ms > 0 && (
+        <DayPrint
+          data={dayPrint}
+          availableDates={dailySeries
+            .filter((day) => day.observed_ms > 0)
+            .map((day) => day.local_date)
+            .reverse()}
+          selectedDate={dayPrintDate}
+          busyAction={shareBusy}
+          message={shareMessage}
+          formatDuration={formatDuration}
+          onDateChange={(localDate) => void selectDayPrint(localDate)}
+          onShareDay={() => void shareArtifact("day")}
+          onShareWeek={() => void shareArtifact("week")}
+          onShareChallenge={() => void shareArtifact("challenge")}
+        />
       )}
 
       {loading || !cumulative ? (
@@ -1249,6 +1381,38 @@ function DashboardView() {
                   <label className="settings-field"><span>Потери · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
                   <label className="settings-field"><span>Наблюдение · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
                 </div>
+                <label className="settings-field">
+                  <span>Часовая ставка, ₽ · необязательно</span>
+                  <input type="text" inputMode="decimal" placeholder="Не показывать сожжённые ₽" value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} />
+                </label>
+              </section>
+
+              <section className="settings-section" aria-labelledby="challenge-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="challenge-settings-title">Челлендж «Побей мой день»</h3>
+                  <span>Код меняет локальные цели с сегодняшней даты</span>
+                </div>
+                <div className="challenge-import-row">
+                  <label className="settings-field">
+                    <span>Код челленджа</span>
+                    <input
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="TF-184-43-60"
+                      value={challengeInput}
+                      aria-invalid={challengeError !== null}
+                      aria-describedby={challengeError ? "challenge-import-error" : undefined}
+                      onChange={(event) => {
+                        setChallengeInput(event.target.value);
+                        setChallengeError(null);
+                        setChallengeImported(false);
+                      }}
+                    />
+                  </label>
+                  <button type="button" onClick={() => void importChallenge()}>Принять вызов</button>
+                </div>
+                {challengeError && <p className="settings-error" id="challenge-import-error">{challengeError}</p>}
+                {challengeImported && <p className="challenge-imported" role="status">Челлендж принят. Цели сохранены локально.</p>}
               </section>
 
               <section className="settings-section" aria-labelledby="kind-labels-title">

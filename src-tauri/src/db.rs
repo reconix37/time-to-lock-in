@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_score_day.sql");
+const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
 
 pub struct CategoryRecord {
     pub id: i64,
@@ -161,6 +162,11 @@ pub fn initialize() -> Result<(), String> {
             .execute_batch(MIGRATION_002)
             .map_err(|error| error.to_string())?;
     }
+    if previous_version < 3 {
+        transaction
+            .execute_batch(MIGRATION_003)
+            .map_err(|error| error.to_string())?;
+    }
 
     let crashed_segment_id = transaction
         .query_row(
@@ -193,7 +199,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=2;")
+        .execute_batch("PRAGMA user_version=3;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -237,6 +243,70 @@ pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()
             .map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|error| error.to_string())
+}
+
+pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64, i64), String> {
+    let parts = code.split('-').collect::<Vec<_>>();
+    if parts.len() != 4
+        || parts[0] != "TF"
+        || parts[1..].iter().any(|part| {
+            part.is_empty() || !part.chars().all(|character| character.is_ascii_digit())
+        })
+    {
+        return Err("Код должен быть в формате TF-184-43-60".to_string());
+    }
+    let values = parts[1..]
+        .iter()
+        .map(|part| part.parse::<i64>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Код должен быть в формате TF-184-43-60".to_string())?;
+    if values.iter().any(|value| !(0..=1440).contains(value)) {
+        return Err("Цели челленджа должны быть от 0 до 1440 минут".to_string());
+    }
+    let (useful_goal_min, waste_limit_min, observed_min) = (values[0], values[1], values[2]);
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for (key, value) in [
+        ("useful_goal_min", useful_goal_min),
+        ("waste_limit_min", waste_limit_min),
+        ("observed_min", observed_min),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value.to_string()],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO goal_history (
+                effective_local_date, useful_goal_min, waste_limit_min, observed_min
+             ) VALUES (date('now', 'localtime'), ?1, ?2, ?3)
+             ON CONFLICT(effective_local_date) DO UPDATE SET
+                useful_goal_min = excluded.useful_goal_min,
+                waste_limit_min = excluded.waste_limit_min,
+                observed_min = excluded.observed_min",
+            params![useful_goal_min, waste_limit_min, observed_min],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO challenge_history (
+                local_date, code, useful_goal_min, waste_limit_min, observed_min
+             ) VALUES (date('now', 'localtime'), ?1, ?2, ?3, ?4)
+             ON CONFLICT(local_date) DO UPDATE SET
+                code = excluded.code,
+                useful_goal_min = excluded.useful_goal_min,
+                waste_limit_min = excluded.waste_limit_min,
+                observed_min = excluded.observed_min",
+            params![code, useful_goal_min, waste_limit_min, observed_min],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok((useful_goal_min, waste_limit_min, observed_min))
 }
 
 pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRecord, String> {
@@ -485,7 +555,7 @@ pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecor
         )
         .map_err(|error| error.to_string())?;
     let records = statement
-        .query_map([], |row| {
+        .query_map([84], |row| {
             Ok(DailyProgressRecord {
                 local_date: row.get(0)?,
                 useful_ms: row.get(1)?,
@@ -701,8 +771,9 @@ pub fn today_cumulative(
 #[cfg(test)]
 mod tests {
     use super::{
-        daily_series, progress_series, refresh_daily_stats, segment_local_dates, set_setting,
-        today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002,
+        daily_series, import_challenge, progress_series, refresh_daily_stats, segment_local_dates,
+        set_setting, today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002,
+        MIGRATION_003,
     };
     use rusqlite::{params, Connection};
 
@@ -797,6 +868,47 @@ mod tests {
             .execute_batch(MIGRATION_002)
             .expect("score schema");
         connection
+            .execute_batch(MIGRATION_003)
+            .expect("day print schema");
+        connection
+    }
+
+    #[test]
+    fn imports_challenge_as_today_goals_and_rejects_invalid_codes() {
+        let connection = score_schema();
+
+        let imported = import_challenge(&connection, "TF-184-43-60").expect("challenge");
+
+        assert_eq!(imported, (184, 43, 60));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT useful_goal_min, waste_limit_min, observed_min
+                     FROM goal_history WHERE effective_local_date = date('now', 'localtime')",
+                    [],
+                    |row| Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?
+                    )),
+                )
+                .expect("effective goals"),
+            (184, 43, 60)
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT code FROM challenge_history WHERE local_date = date('now', 'localtime')",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("stored challenge"),
+            "TF-184-43-60"
+        );
+        assert!(import_challenge(&connection, "tf-184-43-60").is_err());
+        assert!(import_challenge(&connection, " TF-184-43-60 ").is_err());
+        assert!(import_challenge(&connection, "TF-184-43").is_err());
+        assert!(import_challenge(&connection, "TF-1441-43-60").is_err());
     }
 
     fn local_ms(connection: &Connection, local_datetime: &str) -> i64 {
