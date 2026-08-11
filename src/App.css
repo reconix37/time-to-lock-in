@@ -134,7 +134,14 @@ button:focus-visible {
 .settings-toggle { display: flex; align-items: center; gap: 10px; margin-top: 20px; color: var(--text); font-size: 13px; cursor: pointer; }
 .settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--iris); cursor: pointer; }
 .settings-toggle input:disabled { cursor: default; opacity: .6; }
-.update-check-button { margin-top: 20px; padding: 8px 12px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
+.update-available { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; padding: 12px; border: var(--border); border-radius: var(--radius-sm); background: var(--hl-low); color: var(--ok); font-size: 12px; font-weight: 500; }
+.update-install-button { flex: 0 0 auto; padding: 8px 12px; border: 0; border-radius: var(--radius-sm); background: var(--iris); color: var(--bg); cursor: pointer; }
+.update-install-button:hover { background: color-mix(in srgb, var(--iris) 86%, var(--text)); }
+.update-install-button:disabled { cursor: default; opacity: .6; }
+.update-download { display: grid; gap: 6px; margin-top: 12px; color: var(--muted); font: 12px var(--font-mono); }
+.update-progress { height: 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--hl-med); }
+.update-progress span { display: block; height: 100%; border-radius: inherit; background: var(--iris); transition: width 160ms ease-out; }
+.update-check-button { margin-top: 12px; padding: 8px 12px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
 .update-check-button:hover { background: var(--hl-low); }
 .update-check-button:disabled { cursor: default; opacity: .6; }
 .update-status { min-height: 16px; margin-top: 8px; color: var(--ok); font-size: 12px; }

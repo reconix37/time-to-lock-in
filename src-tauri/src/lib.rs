@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -1176,6 +1176,12 @@ struct UpdateInfo {
     version: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct UpdateProgress {
+    downloaded: u64,
+    total: u64,
+}
+
 #[tauri::command]
 async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
     let updater = app.updater().map_err(|error| error.to_string())?;
@@ -1183,6 +1189,42 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, 
     Ok(update.map(|update| UpdateInfo {
         version: update.version,
     }))
+}
+
+#[tauri::command]
+async fn download_and_install_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "update is no longer available".to_string())?;
+
+    if update.version != version {
+        return Err(format!(
+            "available update changed from {version} to {}",
+            update.version
+        ));
+    }
+
+    let progress_app = app.clone();
+    let mut downloaded = 0_u64;
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded = downloaded.saturating_add(chunk_length as u64);
+                let _ = progress_app.emit(
+                    "update://progress",
+                    UpdateProgress {
+                        downloaded,
+                        total: content_length.unwrap_or(0),
+                    },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1283,6 +1325,7 @@ pub fn run() {
             get_autostart,
             set_autostart,
             check_for_updates,
+            download_and_install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");

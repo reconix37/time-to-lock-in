@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { AfkStrip } from "./components/AfkStrip";
@@ -101,7 +102,12 @@ interface UpdateInfo {
   version: string;
 }
 
-type UpdateCheck = "idle" | "checking" | "available" | "latest" | "error";
+interface UpdateProgress {
+  downloaded: number;
+  total: number;
+}
+
+type UpdateCheck = "unknown" | "checking" | "available" | "latest" | "error";
 
 const EMPTY_STATS: TodayStats = {
   useful_ms: 0,
@@ -211,9 +217,13 @@ function DashboardView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>("idle");
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>("unknown");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateInstallError, setUpdateInstallError] = useState<string | null>(null);
+  const startupUpdateCheckStarted = useRef(false);
   const [extensionChromeId, setExtensionChromeId] = useState("");
   const [extensionEdgeId, setExtensionEdgeId] = useState("");
   const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
@@ -311,6 +321,27 @@ function DashboardView() {
   }, [loadDashboard]);
 
   useEffect(() => {
+    if (loading || startupUpdateCheckStarted.current) return;
+    startupUpdateCheckStarted.current = true;
+    void checkForUpdates(true);
+  }, [loading]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<UpdateProgress>("update://progress", (event) => {
+      if (!disposed) setUpdateProgress(event.payload);
+    }).then((stopListening) => {
+      if (disposed) stopListening();
+      else unlisten = stopListening;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "";
   }, [dark]);
 
@@ -338,11 +369,11 @@ function DashboardView() {
   useEffect(() => {
     if (!settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !settingsSaving) setSettingsOpen(false);
+      if (event.key === "Escape" && !settingsSaving && !updateDownloading) setSettingsOpen(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [settingsOpen, settingsSaving]);
+  }, [settingsOpen, settingsSaving, updateDownloading]);
 
   useEffect(() => {
     if (!categoryManagerOpen) return;
@@ -492,10 +523,11 @@ function DashboardView() {
     }
   }
 
-  async function checkForUpdates() {
+  async function checkForUpdates(silent = false) {
     setUpdateCheck("checking");
     setUpdateInfo(null);
     setUpdateError(null);
+    setUpdateInstallError(null);
     try {
       const info = await invoke<UpdateInfo | null>("check_for_updates");
       if (info) {
@@ -506,8 +538,27 @@ function DashboardView() {
       }
     } catch (reason: unknown) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setUpdateError(message);
-      setUpdateCheck("error");
+      if (silent) {
+        setUpdateCheck("unknown");
+      } else {
+        setUpdateError(message);
+        setUpdateCheck("error");
+      }
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateInfo) return;
+    setUpdateDownloading(true);
+    setUpdateProgress({ downloaded: 0, total: 0 });
+    setUpdateInstallError(null);
+    try {
+      await invoke<void>("download_and_install_update", { version: updateInfo.version });
+      setUpdateDownloading(false);
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setUpdateInstallError(message);
+      setUpdateDownloading(false);
     }
   }
 
@@ -1743,20 +1794,55 @@ function DashboardView() {
               <section className="settings-section" aria-labelledby="updates-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="updates-settings-title">{t("updates.title")}</h3>
+                  <span>{t("updates.autoCheckNote")}</span>
                 </div>
+                {updateCheck === "available" && updateInfo && (
+                  <div className="update-available">
+                    <span>{t("updates.available", { version: updateInfo.version })}</span>
+                    <button
+                      type="button"
+                      className="update-install-button"
+                      disabled={updateDownloading}
+                      onClick={() => void installUpdate()}
+                    >
+                      {t("updates.installNow")}
+                    </button>
+                  </div>
+                )}
+                {updateDownloading && updateProgress && (() => {
+                  const percent = updateProgress.total > 0
+                    ? Math.min(100, Math.floor((updateProgress.downloaded / updateProgress.total) * 100))
+                    : 0;
+                  return (
+                    <div className="update-download" aria-live="polite">
+                      <div
+                        className="update-progress"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={percent}
+                      >
+                        <span style={{ width: `${percent}%` }} />
+                      </div>
+                      <span>{t("updates.downloading", { percent })}</span>
+                    </div>
+                  );
+                })()}
                 <button
                   type="button"
                   className="update-check-button"
-                  disabled={updateCheck === "checking"}
+                  disabled={updateCheck === "checking" || updateDownloading}
                   onClick={() => void checkForUpdates()}
                 >
                   {updateCheck === "checking" ? t("updates.checking") : t("updates.check")}
                 </button>
                 <div className="update-status" aria-live="polite">
-                  {updateCheck === "available" && updateInfo && t("updates.available", { version: updateInfo.version })}
                   {updateCheck === "latest" && t("updates.latest")}
                   {updateCheck === "error" && updateError && (
                     <span className="is-error">{t("updates.error", { message: updateError })}</span>
+                  )}
+                  {updateInstallError && (
+                    <span className="is-error">{t("updates.installError", { message: updateInstallError })}</span>
                   )}
                 </div>
               </section>
@@ -1768,7 +1854,7 @@ function DashboardView() {
             </div>
             {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
             <div className="settings-actions">
-              <button className="settings-done" disabled={settingsSaving} onClick={() => void saveSettings()}>
+              <button className="settings-done" disabled={settingsSaving || updateDownloading} onClick={() => void saveSettings()}>
                 {settingsSaving ? t("common.saving") : t("common.done")}
               </button>
             </div>
