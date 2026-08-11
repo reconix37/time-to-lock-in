@@ -3,6 +3,8 @@ const API_URL = `${API_BASE}/event`;
 const REGISTER_URL = `${API_BASE}/register`;
 const TOKEN_KEY = "ttli_token";
 const PAIRED_KEY = "ttli_paired_id";
+const HEARTBEAT_ALARM = "ttli-heartbeat";
+const HEARTBEAT_PERIOD_MINUTES = 0.5;
 const DEBOUNCE_MS = 2_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 250;
@@ -72,6 +74,18 @@ async function isPaired() {
   return stored[PAIRED_KEY] === chrome.runtime.id;
 }
 
+async function syncHeartbeatAlarm() {
+  const token = await readToken();
+  if (token && (await isPaired())) {
+    await chrome.alarms.create(HEARTBEAT_ALARM, {
+      periodInMinutes: HEARTBEAT_PERIOD_MINUTES,
+    });
+    return;
+  }
+
+  await chrome.alarms.clear(HEARTBEAT_ALARM);
+}
+
 // Автоподключение: расширение само присылает свой ID; апка запоминает его.
 // Токен обязателен — без него апка отвечает 401. Origin браузер подделать не даёт.
 async function registerSelf() {
@@ -92,9 +106,14 @@ async function registerSelf() {
       body: "{}",
     });
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        await chrome.storage.local.remove(PAIRED_KEY);
+        await chrome.alarms.clear(HEARTBEAT_ALARM);
+      }
       return { ok: false, status: response.status };
     }
     await chrome.storage.local.set({ [PAIRED_KEY]: chrome.runtime.id });
+    await syncHeartbeatAlarm();
     return { ok: true, status: response.status };
   } catch {
     // Апка не запущена — ретраим при следующем событии.
@@ -117,6 +136,7 @@ async function postEvent(event, token) {
       if (response.status === 401 || response.status === 403) {
         // Отвязали/сменили токен — следующий контакт перепривяжет.
         await chrome.storage.local.remove(PAIRED_KEY);
+        await chrome.alarms.clear(HEARTBEAT_ALARM);
         return;
       }
       if (response.ok || response.status < 500) {
@@ -190,5 +210,16 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   }
 });
 
-chrome.runtime.onStartup.addListener(queueCapture);
-chrome.runtime.onInstalled.addListener(queueCapture);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === HEARTBEAT_ALARM) {
+    queueCapture();
+  }
+});
+
+function handleRuntimeStart() {
+  void syncHeartbeatAlarm();
+  queueCapture();
+}
+
+chrome.runtime.onStartup.addListener(handleRuntimeStart);
+chrome.runtime.onInstalled.addListener(handleRuntimeStart);

@@ -7,7 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
-const BROWSER_EVENT_MAX_AGE_MS: i64 = 10_000;
+// Будильник расширения обновляет событие каждые 30 с; тройной запас покрывает холодный старт worker-а.
+const BROWSER_EVENT_MAX_AGE_MS: i64 = 90_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BrowserEvent {
