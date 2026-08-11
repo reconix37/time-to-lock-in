@@ -1,4 +1,6 @@
+import { useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { KindLabels } from "../share";
+import { ChartTooltip } from "./ChartTooltip";
 
 export interface CumulativePoint {
   timestamp_ms: number;
@@ -36,6 +38,8 @@ function pointHour(point: CumulativePoint): number {
 }
 
 export function CumulativeChart({ data, formatDuration, kindLabels }: CumulativeChartProps) {
+  const [activePoint, setActivePoint] = useState<CumulativePoint>();
+  const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
   const currentPoint = data.points.find((point) => point.is_current);
   const visiblePoints = data.points.filter((point) =>
     point.is_current || currentPoint === undefined || point.timestamp_ms <= currentPoint.timestamp_ms,
@@ -55,6 +59,18 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
     .map((point, index) => `${index === 0 ? "M" : "L"} ${x(point).toFixed(2)} ${y(point[key]).toFixed(2)}`)
     .join(" ");
   const yTicks = [0, yMax / 2, yMax];
+  const handleMouseMove = (event: ReactMouseEvent<SVGRectElement>) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (svg === null || visiblePoints.length === 0) return;
+
+    const bounds = svg.getBoundingClientRect();
+    const svgX = (event.clientX - bounds.left) / bounds.width * WIDTH;
+    const nearestPoint = visiblePoints.reduce((nearest, point) =>
+      Math.abs(x(point) - svgX) < Math.abs(x(nearest) - svgX) ? point : nearest,
+    );
+    setActivePoint(nearestPoint);
+    setTooltip({ x: event.clientX, y: event.clientY, visible: true });
+  };
 
   return (
     <section className="card cumulative-card" aria-labelledby="cumulative-title">
@@ -66,7 +82,11 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
           <span className="is-reference"><i />Цель / лимит</span>
         </div>
       </div>
-      <div className="cumulative-plot">
+      <div
+        className="cumulative-plot"
+        onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
+        onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
+      >
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Накопительно: ${kindLabels.useful} ${formatDuration(currentPoint?.useful_ms ?? 0)}, ${kindLabels.waste} ${formatDuration(currentPoint?.waste_ms ?? 0)}`}>
           {yTicks.map((tick) => (
             <g className="cumulative-y-tick" key={tick}>
@@ -90,8 +110,26 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
               <circle className="cumulative-current kind-waste" cx={x(currentPoint)} cy={y(currentPoint.waste_ms)} r="4" />
             </>
           )}
+          <rect
+            className="chart-hit-area"
+            x={LEFT}
+            y={TOP}
+            width={PLOT_WIDTH}
+            height={PLOT_HEIGHT}
+            onMouseMove={handleMouseMove}
+          />
         </svg>
       </div>
+      <ChartTooltip {...tooltip}>
+        {activePoint && (
+          <>
+            <strong>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(activePoint.timestamp_ms)}</strong>
+            <span className="kind-useful">{kindLabels.useful}: {formatDuration(activePoint.useful_ms)}</span>
+            <span className="kind-waste">{kindLabels.waste}: {formatDuration(activePoint.waste_ms)}</span>
+            <span>Цель {data.useful_goal_min}м · Лимит {data.waste_limit_min}м</span>
+          </>
+        )}
+      </ChartTooltip>
       <div className="cumulative-summary">
         <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · цель {data.useful_goal_min}м</span>
         <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · лимит {data.waste_limit_min}м</span>

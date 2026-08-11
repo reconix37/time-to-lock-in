@@ -418,6 +418,7 @@ button:focus-visible {
 .cumulative-current { stroke: var(--surface); stroke-width: 2; }
 .cumulative-current.kind-useful { fill: var(--cat-useful); }
 .cumulative-current.kind-waste { fill: var(--cat-waste); }
+.chart-hit-area { fill: var(--surface); opacity: 0; }
 .cumulative-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; margin-top: 4px; font: 10px var(--font-mono); }
 .cumulative-summary span { color: var(--muted); }
 .cumulative-summary strong { color: var(--text); font-weight: 500; }
@@ -576,6 +577,8 @@ button:focus-visible {
 .chart-tooltip .is-average { color: var(--iris); }
 .chart-tooltip b { margin-left: auto; color: var(--muted); font-weight: 500; }
 .chart-tooltip b.is-passed { color: var(--ok); }
+.chart-tooltip-floating { position: fixed; z-index: 1000; min-height: 0; max-width: calc(100vw - 16px); align-items: flex-start; flex-direction: column; gap: 4px; margin: 0; padding: 6px 8px; border-color: var(--hl-med); background: var(--surface); box-shadow: var(--shadow); color: var(--text); line-height: 1.45; pointer-events: none; }
+.chart-tooltip-floating b { margin-left: 0; }
 .empty-state { display: flex; min-height: 280px; align-items: center; justify-content: center; flex-direction: column; color: var(--muted); text-align: center; }
 .empty-state strong { margin-bottom: 6px; color: var(--text); font-size: 16px; }
 .skeleton { background: var(--hl-low); animation: skeleton 1.2s steps(2, end) infinite; }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatLocalDate, type DailySeriesDay } from "../trends";
 import type { KindLabels } from "../share";
+import { ChartTooltip } from "./ChartTooltip";
 
 interface TrendsStackedProps {
   days: DailySeriesDay[];
@@ -23,6 +24,7 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
   const visibleDays = days.slice(-range);
   const latestDay = visibleDays[visibleDays.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
+  const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
   const activeDay = visibleDays.find((day) => day.local_date === activeDate) ?? latestDay;
   const largestValue = Math.max(
     60 * 60_000,
@@ -69,7 +71,11 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
         <span className="is-goal"><i />{usefulGoalLabel}</span>
       </div>
 
-      <div className={`trends-plot ${range === 30 ? "is-dense" : ""}`}>
+      <div
+        className={`trends-plot ${range === 30 ? "is-dense" : ""}`}
+        onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
+        onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
+      >
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Состав времени за ${range} дней`}>
           {yTicks.map((tick) => (
             <g className="trends-grid-tick" key={tick}>
@@ -102,6 +108,7 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
                 aria-label={tooltip.split("\n").join(". ")}
                 onFocus={() => setActiveDate(day.local_date)}
                 onMouseEnter={() => setActiveDate(day.local_date)}
+                onMouseMove={(event) => setTooltip({ x: event.clientX, y: event.clientY, visible: true })}
                 onClick={() => setActiveDate(day.local_date)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") setActiveDate(day.local_date);
@@ -125,14 +132,14 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
       </div>
 
       {activeDay && (
-        <div className="chart-tooltip" role="status">
+        <ChartTooltip {...tooltip}>
           <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
           <span className="kind-useful">{kindLabels.useful} {formatDuration(activeDay.useful_ms)}</span>
           <span className="kind-neutral">{kindLabels.neutral} {formatDuration(activeDay.neutral_ms)}</span>
           <span className="kind-waste">{kindLabels.waste} {formatDuration(activeDay.waste_ms)} / {activeDay.waste_limit_min}м</span>
           <span>Цель {activeDay.useful_goal_min}м · XP +{activeDay.useful_xp}</span>
           <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? "Зачтён" : "Не зачтён"}</b>
-        </div>
+        </ChartTooltip>
       )}
     </section>
   );

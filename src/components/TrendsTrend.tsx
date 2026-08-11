@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatLocalDate, type DailySeriesDay } from "../trends";
 import type { KindLabels } from "../share";
+import { ChartTooltip } from "./ChartTooltip";
 
 interface TrendsTrendProps {
   sourceDays: DailySeriesDay[];
@@ -31,6 +32,7 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
   const days = sourceDays.slice(-30);
   const latestDay = days[days.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
+  const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
   const activeDay = days.find((day) => day.local_date === activeDate) ?? latestDay;
   const largestValue = Math.max(
     60 * 60_000,
@@ -57,7 +59,11 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
         <span className="is-average"><i />Среднее за 7 дней</span>
       </div>
 
-      <div className="trends-plot is-dense">
+      <div
+        className="trends-plot is-dense"
+        onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
+        onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
+      >
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`${kindLabels.useful} и среднее за семь дней`}>
           {yTicks.map((tick) => (
             <g className="trends-grid-tick" key={tick}>
@@ -83,6 +89,7 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
                 aria-label={tooltip.split("\n").join(". ")}
                 onFocus={() => setActiveDate(day.local_date)}
                 onMouseEnter={() => setActiveDate(day.local_date)}
+                onMouseMove={(event) => setTooltip({ x: event.clientX, y: event.clientY, visible: true })}
                 onClick={() => setActiveDate(day.local_date)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") setActiveDate(day.local_date);
@@ -109,12 +116,12 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
       </div>
 
       {activeDay && (
-        <div className="chart-tooltip" role="status">
+        <ChartTooltip {...tooltip}>
           <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
           <span className="kind-useful">{kindLabels.useful} {formatDuration(activeDay.useful_ms)}</span>
           <span className="is-average">MA7 {formatDuration(activeDay.useful_ma_7d_ms)}</span>
           <span>Цель {activeDay.useful_goal_min}м · XP +{activeDay.useful_xp}</span>
-        </div>
+        </ChartTooltip>
       )}
     </section>
   );
