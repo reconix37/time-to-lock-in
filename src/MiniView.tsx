@@ -23,7 +23,7 @@ interface LiveSegment {
 }
 
 interface BulletBarProps {
-  kind: "useful" | "waste";
+  kind: "useful" | "neutral" | "waste";
   label: string;
   valueMs: number;
   thresholdMin: number;
@@ -44,18 +44,21 @@ function cleanAppName(app: string): string {
 function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
   const thresholdMs = thresholdMin * 60_000;
   const scaleMs = Math.max(thresholdMs * 1.25, valueMs, 1);
-  const fill = Math.min(100, valueMs / scaleMs * 100);
+  const fill = thresholdMs === 0 ? (valueMs > 0 ? 100 : 0) : Math.min(100, valueMs / scaleMs * 100);
   const tick = Math.min(100, thresholdMs / scaleMs * 100);
 
   return (
     <div className={`mini-bullet kind-${kind}`}>
       <div className="mini-bullet-copy">
         <span>{label}</span>
-        <strong>{Math.floor(valueMs / 60_000)}м <small>/ {thresholdMin}м</small></strong>
+        <strong>
+          {Math.floor(valueMs / 60_000)}м
+          {thresholdMs > 0 && <small> / {thresholdMin}м</small>}
+        </strong>
       </div>
       <div className="mini-bullet-rail" aria-hidden="true">
         <i style={{ width: `${fill}%` }} />
-        <span style={{ left: `${tick}%` }} />
+        {thresholdMs > 0 && <span style={{ left: `${tick}%` }} />}
       </div>
     </div>
   );
@@ -162,6 +165,7 @@ export function MiniView() {
         <section className="mini-metrics" aria-label="Прогресс дня">
           <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} thresholdMin={progress.today.useful_goal_min} />
           <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} thresholdMin={progress.today.waste_limit_min} />
+          <BulletBar kind="neutral" label={kindLabels.neutral} valueMs={progress.today.neutral_ms} thresholdMin={0} />
           <div className="mini-rank">
             <span>{progress.current_rank}</span>
             <div aria-hidden="true"><i style={{ width: `${rankProgress}%` }} /></div>

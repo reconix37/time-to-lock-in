@@ -127,6 +127,9 @@ button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--iris) 20%, transparent);
 }
 .settings-field input[aria-invalid="true"] { border-color: var(--bad); }
+.settings-toggle { display: flex; align-items: center; gap: 10px; margin-top: 16px; color: var(--text); font-size: 13px; cursor: pointer; }
+.settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--iris); cursor: pointer; }
+.settings-toggle input:disabled { cursor: default; opacity: .6; }
 .settings-hint { margin: 16px 0 0; color: var(--subtle); font-size: 12px; }
 .settings-token { display: grid; gap: 6px; margin-top: 20px; color: var(--muted); font-size: 12px; font-weight: 500; }
 .settings-token > div { display: flex; gap: 8px; align-items: center; }
@@ -603,7 +606,7 @@ button:focus-visible {
   position: relative;
   display: grid;
   width: 300px;
-  height: 210px;
+  height: 228px;
   grid-template-rows: 26px 54px 1fr 36px;
   overflow: hidden;
   border: var(--border);
@@ -662,6 +665,7 @@ button:focus-visible {
 .mini-bullet-copy small { color: var(--subtle); font: inherit; }
 .mini-bullet-rail { position: relative; height: 4px; margin-top: 2px; border-radius: 3px; background: var(--hl-low); }
 .mini-bullet-rail i { display: block; height: 100%; border-radius: 3px; background: var(--cat-useful); }
+.mini-bullet.kind-neutral .mini-bullet-rail i { background: var(--cat-neutral); }
 .mini-bullet.kind-waste .mini-bullet-rail i { background: var(--cat-waste); }
 .mini-bullet-rail span { position: absolute; top: -2px; width: 1px; height: 8px; background: var(--text); }
 

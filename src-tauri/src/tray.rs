@@ -10,7 +10,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow};
 
 const MINI_WIDTH: f64 = 300.0;
-const MINI_HEIGHT: f64 = 210.0;
+const MINI_HEIGHT: f64 = 228.0;
 const MINI_MARGIN: i32 = 16;
 
 struct TraySnapshot {

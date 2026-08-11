@@ -186,6 +186,7 @@ function DashboardView() {
   const [now, setNow] = useState(Date.now());
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [autostart, setAutostart] = useState(false);
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
@@ -232,7 +233,7 @@ function DashboardView() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextSettings, trackingPaused] =
+      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextSettings, trackingPaused, nextAutostart] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
@@ -243,6 +244,7 @@ function DashboardView() {
           invoke<AppToday[]>("get_apps_today"),
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
+          invoke<boolean>("get_autostart"),
         ]);
       setSegments(nextSegments);
       setCategories(nextCategories);
@@ -273,6 +275,7 @@ function DashboardView() {
       setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate: targetDate }));
       setDark(nextSettings.theme === "dark");
       setPaused(trackingPaused);
+      setAutostart(nextAutostart);
       setError(null);
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : "Не удалось прочитать локальные данные");
@@ -444,6 +447,16 @@ function DashboardView() {
     } catch (reason: unknown) {
       setPaused(!nextPaused);
       setError(typeof reason === "string" ? reason : "Не удалось изменить состояние трекинга");
+    }
+  }
+
+  async function toggleAutostart(enabled: boolean) {
+    setAutostart(enabled);
+    try {
+      await invoke<void>("set_autostart", { enabled });
+    } catch (reason: unknown) {
+      setAutostart(!enabled);
+      setSettingsError(typeof reason === "string" ? reason : "Не удалось изменить автозапуск");
     }
   }
 
@@ -1589,6 +1602,22 @@ function DashboardView() {
                   </div>
                   <p>Вставляется в расширение TTLI Tracker (поп-ап расширения).</p>
                 </div>
+              </section>
+
+              <section className="settings-section" aria-labelledby="startup-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="startup-settings-title">Запуск</h3>
+                  <span>Настройка применяется сразу</span>
+                </div>
+                <label className="settings-toggle">
+                  <input
+                    type="checkbox"
+                    checked={autostart}
+                    disabled={settingsSaving}
+                    onChange={(event) => void toggleAutostart(event.target.checked)}
+                  />
+                  <span>Автозапуск при входе в Windows</span>
+                </label>
               </section>
 
               <div className="database-size">

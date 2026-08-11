@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 struct TrackingControl {
@@ -1142,6 +1143,24 @@ fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    }
+    .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let paused = Arc::new(AtomicBool::new(false));
@@ -1236,6 +1255,8 @@ pub fn run() {
             set_mini_pinned,
             fix_mini_window,
             start_mini_drag,
+            get_autostart,
+            set_autostart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
