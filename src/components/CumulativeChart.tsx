@@ -1,6 +1,8 @@
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { KindLabels } from "../share";
 import { ChartTooltip } from "./ChartTooltip";
+import { localeForLang } from "../i18n";
+import { useI18n } from "../i18nContext";
 
 export interface CumulativePoint {
   timestamp_ms: number;
@@ -38,6 +40,7 @@ function pointHour(point: CumulativePoint): number {
 }
 
 export function CumulativeChart({ data, formatDuration, kindLabels }: CumulativeChartProps) {
+  const { lang, t } = useI18n();
   const [activePoint, setActivePoint] = useState<CumulativePoint>();
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
   const currentPoint = data.points.find((point) => point.is_current);
@@ -75,11 +78,11 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
   return (
     <section className="card cumulative-card" aria-labelledby="cumulative-title">
       <div className="card-heading cumulative-heading">
-        <div><span className="eyebrow">Сегодня · по часам</span><h2 id="cumulative-title">Как росло время</h2></div>
-        <div className="cumulative-legend" aria-label="Легенда графика">
+        <div><span className="eyebrow">{t("chart.cumulativeEyebrow")}</span><h2 id="cumulative-title">{t("chart.cumulativeTitle")}</h2></div>
+        <div className="cumulative-legend" aria-label={t("chart.legend")}>
           <span className="kind-useful"><i />{kindLabels.useful}</span>
           <span className="kind-waste"><i />{kindLabels.waste}</span>
-          <span className="is-reference"><i />Цель / лимит</span>
+          <span className="is-reference"><i />{t("chart.goalLimit")}</span>
         </div>
       </div>
       <div
@@ -87,7 +90,7 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
         onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
         onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
       >
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Накопительно: ${kindLabels.useful} ${formatDuration(currentPoint?.useful_ms ?? 0)}, ${kindLabels.waste} ${formatDuration(currentPoint?.waste_ms ?? 0)}`}>
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={t("chart.cumulativeLabel", { usefulLabel: kindLabels.useful, useful: formatDuration(currentPoint?.useful_ms ?? 0), wasteLabel: kindLabels.waste, waste: formatDuration(currentPoint?.waste_ms ?? 0) })}>
           {yTicks.map((tick) => (
             <g className="cumulative-y-tick" key={tick}>
               <line x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} />
@@ -123,16 +126,16 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
       <ChartTooltip {...tooltip}>
         {activePoint && (
           <>
-            <strong>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(activePoint.timestamp_ms)}</strong>
+            <strong>{new Intl.DateTimeFormat(localeForLang(lang), { hour: "2-digit", minute: "2-digit" }).format(activePoint.timestamp_ms)}</strong>
             <span className="kind-useful">{kindLabels.useful}: {formatDuration(activePoint.useful_ms)}</span>
             <span className="kind-waste">{kindLabels.waste}: {formatDuration(activePoint.waste_ms)}</span>
-            <span>Цель {data.useful_goal_min}м · Лимит {data.waste_limit_min}м</span>
+            <span>{t("chart.goalLimitValues", { goal: data.useful_goal_min, limit: data.waste_limit_min })}</span>
           </>
         )}
       </ChartTooltip>
       <div className="cumulative-summary">
-        <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · цель {data.useful_goal_min}м</span>
-        <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · лимит {data.waste_limit_min}м</span>
+        <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · {t("chart.goalValue", { goal: data.useful_goal_min })}</span>
+        <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · {t("chart.limitValue", { limit: data.waste_limit_min })}</span>
       </div>
     </section>
   );

@@ -42,6 +42,7 @@ button:focus-visible {
 .topbar-status.is-paused .status-dot { background: var(--warn); }
 .topbar-spacer { flex: 1; }
 .date-label { color: var(--muted); text-transform: capitalize; }
+.language-control { flex: 0 0 auto; }
 
 .icon-button {
   width: 36px;

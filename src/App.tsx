@@ -20,6 +20,8 @@ import {
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
+import { langNames, localeForLang, type Lang, type Translate } from "./i18n";
+import { I18nProvider, useI18n } from "./i18nContext";
 import "./styles/tokens.css";
 import "./App.css";
 
@@ -120,17 +122,17 @@ const RULE_TYPE_PRIORITY: Record<RuleMatchType, number> = {
   domain: 3,
 };
 
-function formatDuration(milliseconds: number): string {
+function localizedDuration(milliseconds: number, t: Translate): string {
   const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
-  if (milliseconds > 0 && totalMinutes === 0) return "<1м";
+  if (milliseconds > 0 && totalMinutes === 0) return t("duration.lessMinute");
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes}м`;
-  return minutes === 0 ? `${hours}ч` : `${hours}ч ${minutes}м`;
+  if (hours === 0) return t("duration.minutes", { minutes });
+  return minutes === 0 ? t("duration.hours", { hours }) : t("duration.hoursMinutes", { hours, minutes });
 }
 
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat("ru-RU", {
+function formatTime(timestamp: number, lang: Lang): string {
+  return new Intl.DateTimeFormat(localeForLang(lang), {
     hour: "2-digit",
     minute: "2-digit",
   }).format(timestamp);
@@ -167,6 +169,8 @@ function groupSegments(segments: Segment[], liveSegmentId: number | undefined, n
 }
 
 function DashboardView() {
+  const { lang, setLang, t } = useI18n();
+  const formatDuration = useCallback((milliseconds: number) => localizedDuration(milliseconds, t), [t]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
@@ -278,11 +282,11 @@ function DashboardView() {
       setAutostart(nextAutostart);
       setError(null);
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : "Не удалось прочитать локальные данные");
+      setError(typeof reason === "string" ? reason : t("error.loadData"));
     } finally {
       setLoading(false);
     }
-  }, [dayPrintDate]);
+  }, [dayPrintDate, t]);
 
   useEffect(() => {
     void loadDashboard();
@@ -401,8 +405,7 @@ function DashboardView() {
   const maxAppDuration = Math.max(...apps.map((app) => app.duration_ms), 1);
   const maxTimelineAppDuration = Math.max(...appTimeline.map((app) => app.duration_ms), 1);
 
-  async function toggleTheme() {
-    const nextDark = !dark;
+  async function setTheme(nextDark: boolean) {
     setDark(nextDark);
     try {
       await invoke("set_setting", {
@@ -410,14 +413,23 @@ function DashboardView() {
         value: nextDark ? "dark" : "dawn",
       });
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : "Не удалось сохранить тему");
+      setError(typeof reason === "string" ? reason : t("error.saveTheme"));
+    }
+  }
+
+  async function changeLanguage(nextLang: Lang) {
+    try {
+      await setLang(nextLang);
+      setSettings((current) => ({ ...current, language: nextLang }));
+    } catch (reason: unknown) {
+      setError(typeof reason === "string" ? reason : t("error.saveSettings"));
     }
   }
 
   async function reclassifyHistory(): Promise<void> {
     const summary = await invoke<ReclassificationSummary>("reclassify_history");
     const totalMinutes = Math.floor(summary.changed_duration_ms / 60_000);
-    setManagerNotice(`Переклассифицировано ${Math.floor(totalMinutes / 60)} ч ${totalMinutes % 60} мин истории`);
+    setManagerNotice(t("toast.history", { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }));
   }
 
   async function reclassify(segmentId: number, categoryId: number, remember: boolean) {
@@ -432,7 +444,7 @@ function DashboardView() {
       setClassificationTarget(null);
       await loadDashboard();
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : "Не удалось изменить категорию");
+      setError(typeof reason === "string" ? reason : t("error.changeCategory"));
     } finally {
       setClassificationSaving(false);
     }
@@ -446,7 +458,7 @@ function DashboardView() {
       await loadDashboard();
     } catch (reason: unknown) {
       setPaused(!nextPaused);
-      setError(typeof reason === "string" ? reason : "Не удалось изменить состояние трекинга");
+      setError(typeof reason === "string" ? reason : t("error.changeTracking"));
     }
   }
 
@@ -456,7 +468,7 @@ function DashboardView() {
       await invoke<void>("set_autostart", { enabled });
     } catch (reason: unknown) {
       setAutostart(!enabled);
-      setSettingsError(typeof reason === "string" ? reason : "Не удалось изменить автозапуск");
+      setSettingsError(typeof reason === "string" ? reason : t("error.changeAutostart"));
     }
   }
 
@@ -482,7 +494,7 @@ function DashboardView() {
     try {
       setDbSizeMb(await invoke<number>("get_db_size_mb"));
     } catch (reason: unknown) {
-      setSettingsError(typeof reason === "string" ? reason : "Не удалось узнать размер базы данных");
+      setSettingsError(typeof reason === "string" ? reason : t("error.dbSize"));
     }
   }
 
@@ -503,7 +515,7 @@ function DashboardView() {
       setRules(nextRules);
       setNewRuleCategoryId(nextCategories.find((category) => category.id !== 0)?.id ?? null);
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось загрузить категории и правила");
+      setManagerError(typeof reason === "string" ? reason : t("error.loadManager"));
     } finally {
       setManagerLoading(false);
     }
@@ -528,14 +540,14 @@ function DashboardView() {
       setCategoryFormOpen(false);
       setError(null);
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось создать категорию");
+      setManagerError(typeof reason === "string" ? reason : t("error.createCategory"));
     } finally {
       setManagerSaving(false);
     }
   }
 
   async function deleteCategory(category: Category) {
-    if (!window.confirm(`Удалить категорию «${category.name}»? Связанные правила тоже будут удалены.`)) return;
+    if (!window.confirm(t("manager.confirmDelete", { name: category.name }))) return;
     setManagerSaving(true);
     setManagerError(null);
     try {
@@ -548,7 +560,7 @@ function DashboardView() {
       }
       await loadDashboard();
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось удалить категорию");
+      setManagerError(typeof reason === "string" ? reason : t("error.deleteCategory"));
     } finally {
       setManagerSaving(false);
     }
@@ -567,7 +579,7 @@ function DashboardView() {
       setCategories((current) => current.map((item) => item.id === updated.id ? updated : item));
       await loadDashboard();
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось изменить категорию");
+      setManagerError(typeof reason === "string" ? reason : t("error.changeCategory"));
       setCategories(await invoke<Category[]>("get_categories").catch(() => categories));
     } finally {
       setManagerSaving(false);
@@ -577,12 +589,12 @@ function DashboardView() {
   async function createRule(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (newRuleCategoryId === null) {
-      setManagerError("Сначала создайте категорию");
+      setManagerError(t("validation.categoryFirst"));
       return;
     }
     const priority = Number(newRulePriority);
     if (!Number.isSafeInteger(priority)) {
-      setManagerError("Приоритет должен быть целым числом");
+      setManagerError(t("validation.priorityInteger"));
       return;
     }
     setManagerSaving(true);
@@ -604,7 +616,7 @@ function DashboardView() {
       setNewRulePriority("0");
       setRuleFormOpen(false);
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось создать правило");
+      setManagerError(typeof reason === "string" ? reason : t("error.createRule"));
     } finally {
       setManagerSaving(false);
     }
@@ -618,7 +630,7 @@ function DashboardView() {
       await reclassifyHistory();
       setRules((current) => current.filter((rule) => rule.id !== ruleId));
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось удалить правило");
+      setManagerError(typeof reason === "string" ? reason : t("error.deleteRule"));
     } finally {
       setManagerSaving(false);
     }
@@ -634,7 +646,7 @@ function DashboardView() {
         rule.id === ruleId ? { ...rule, category_id: categoryId } : rule,
       ));
     } catch (reason: unknown) {
-      setManagerError(typeof reason === "string" ? reason : "Не удалось изменить правило");
+      setManagerError(typeof reason === "string" ? reason : t("error.changeRule"));
     } finally {
       setManagerSaving(false);
     }
@@ -648,7 +660,7 @@ function DashboardView() {
       setTokenCopied(true);
       setSettingsError(null);
     } catch {
-      setSettingsError("Не удалось скопировать токен");
+      setSettingsError(t("error.copyToken"));
     }
   }
 
@@ -692,20 +704,20 @@ function DashboardView() {
     };
     const isValidId = (value: string) => value === "" || /^[a-p]{32}$/.test(value);
     if (!isValidId(chromeId) || !isValidId(edgeId)) {
-      setSettingsError("ID должен состоять из 32 символов от a до p");
+      setSettingsError(t("validation.extensionId"));
       return;
     }
     if (Object.values(nextKindLabels).some((label) => label.length === 0 || [...label].length > 80)) {
-      setSettingsError("Названия типов должны содержать от 1 до 80 символов");
+      setSettingsError(t("validation.kindLabels"));
       return;
     }
     const goals = [usefulGoalMin, wasteLimitMin, observedMin];
     if (goals.some((value) => !/^\d+$/.test(value) || Number(value) > 1440)) {
-      setSettingsError("Цели должны быть целыми числами от 0 до 1440 минут");
+      setSettingsError(t("validation.goals"));
       return;
     }
     if (hourlyRate !== "" && (!/^\d+(?:[.,]\d+)?$/.test(hourlyRate) || Number(hourlyRate.replace(",", ".")) < 0)) {
-      setSettingsError("Часовая ставка должна быть положительным числом");
+      setSettingsError(t("validation.hourlyRate"));
       return;
     }
     setSettingsSaving(true);
@@ -743,7 +755,7 @@ function DashboardView() {
       setError(null);
       await loadDashboard();
     } catch (reason: unknown) {
-      setSettingsError(typeof reason === "string" ? reason : "Не удалось сохранить настройки");
+      setSettingsError(typeof reason === "string" ? reason : t("error.saveSettings"));
     } finally {
       setSettingsSaving(false);
     }
@@ -755,7 +767,7 @@ function DashboardView() {
     try {
       setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate }));
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : "Не удалось собрать Печать дня");
+      setError(typeof reason === "string" ? reason : t("error.dayPrint"));
     }
   }
 
@@ -768,19 +780,19 @@ function DashboardView() {
       let fileName: string;
       if (kind === "week") {
         const week = await invoke<WeekSummaryData>("get_week_summary");
-        dataUrl = await renderWeekPng(week, kindLabels);
+        dataUrl = await renderWeekPng(week, kindLabels, lang);
         fileName = `ttli-week-${week.days[0]?.local_date ?? dayPrint.local_date}.png`;
       } else if (kind === "challenge") {
-        dataUrl = await renderChallengePng(dayPrint, kindLabels);
+        dataUrl = await renderChallengePng(dayPrint, kindLabels, lang);
         fileName = `ttli-challenge-${dayPrint.local_date}.png`;
       } else {
-        dataUrl = await renderDayPrintPng(dayPrint, kindLabels);
+        dataUrl = await renderDayPrintPng(dayPrint, kindLabels, lang);
         fileName = `ttli-day-print-${dayPrint.local_date}.png`;
       }
       const saved = await savePng(dataUrl, fileName);
-      if (saved) setShareMessage("PNG сохранён");
+      if (saved) setShareMessage(t("toast.pngSaved"));
     } catch (reason: unknown) {
-      setShareMessage(typeof reason === "string" ? reason : "Не удалось сохранить PNG");
+      setShareMessage(typeof reason === "string" ? reason : t("error.savePng"));
     } finally {
       setShareBusy(null);
     }
@@ -789,7 +801,7 @@ function DashboardView() {
   async function importChallenge() {
     const code = challengeInput;
     if (!/^TF-(\d+)-(\d+)-(\d+)$/.test(code)) {
-      setChallengeError("Код должен быть в формате TF-184-43-60");
+      setChallengeError(t("validation.challengeCode"));
       setChallengeImported(false);
       return;
     }
@@ -813,7 +825,7 @@ function DashboardView() {
       setChallengeImported(true);
       await loadDashboard();
     } catch (reason: unknown) {
-      setChallengeError(typeof reason === "string" ? reason : "Не удалось импортировать челлендж");
+      setChallengeError(typeof reason === "string" ? reason : t("error.importChallenge"));
       setChallengeImported(false);
     }
   }
@@ -830,13 +842,13 @@ function DashboardView() {
           aria-expanded={isOpen}
           onClick={() => isOpen ? setClassificationTarget(null) : openClassification(segment, anchor)}
         >
-          {label ?? category?.name ?? "Без категории"}
+          {label ?? (segment.category_id === 0 ? t("common.uncategorized") : category?.name) ?? t("common.uncategorized")}
         </button>
         {isOpen && (
-          <div className="classification-popover" role="dialog" aria-label="Выбор категории и области действия">
-            <span className="classification-title">Переклассифицировать</span>
+          <div className="classification-popover" role="dialog" aria-label={t("classification.dialog")}>
+            <span className="classification-title">{t("classification.reclassify")}</span>
             <label className="classification-category">
-              <span>Категория</span>
+              <span>{t("classification.category")}</span>
               <select
                 autoFocus
                 value={classificationCategoryId}
@@ -846,13 +858,13 @@ function DashboardView() {
                   setClassificationRemember(categoryId !== 0);
                 }}
               >
-                <option value={0}>Без категории</option>
+                <option value={0}>{t("common.uncategorized")}</option>
                 {manageableCategories.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </select>
             </label>
-            <span className="classification-scope-label">Применить</span>
+            <span className="classification-scope-label">{t("classification.applyTo")}</span>
             {classificationCategoryId !== 0 && (
               <label className="classification-option is-default">
                 <input
@@ -861,7 +873,7 @@ function DashboardView() {
                   checked={classificationRemember}
                   onChange={() => setClassificationRemember(true)}
                 />
-                <span><strong>Всегда относить {cleanAppName(segment.app)} к {selectedCategory?.name ?? "категории"}</strong><small>Запомнить правилом приложения</small></span>
+                <span><strong>{t("classification.always", { app: cleanAppName(segment.app), category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong><small>{t("classification.remember")}</small></span>
               </label>
             )}
             <label className="classification-option">
@@ -871,7 +883,7 @@ function DashboardView() {
                 checked={!classificationRemember}
                 onChange={() => setClassificationRemember(false)}
               />
-              <span><strong>Только этот отрезок</strong><small>Остальные сегменты не изменятся</small></span>
+              <span><strong>{t("classification.onlySegment")}</strong><small>{t("classification.onlySegmentHint")}</small></span>
             </label>
             <button
               type="button"
@@ -879,7 +891,7 @@ function DashboardView() {
               disabled={classificationSaving}
               onClick={() => void reclassify(segment.id, classificationCategoryId, classificationRemember)}
             >
-              {classificationSaving ? "Сохраняем…" : "Применить"}
+              {classificationSaving ? t("common.saving") : t("common.apply")}
             </button>
           </div>
         )}
@@ -891,24 +903,31 @@ function DashboardView() {
     <main className="dashboard-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark" />TTLI</div>
-        <div className={`topbar-status ${paused ? "is-paused" : ""}`}><span className="status-dot" /> {paused ? "трекинг на паузе" : "трекинг включён"}</div>
+        <div className={`topbar-status ${paused ? "is-paused" : ""}`}><span className="status-dot" /> {paused ? t("dashboard.trackingPaused") : t("dashboard.trackingOn")}</div>
         <div className="topbar-spacer" />
         <span className="date-label">
-          {new Intl.DateTimeFormat("ru-RU", {
+          {new Intl.DateTimeFormat(localeForLang(lang), {
             weekday: "long",
             day: "numeric",
             month: "long",
           }).format(now)}
         </span>
-        <button className="pause-button" onClick={() => void toggleTracking()}>{paused ? "Продолжить" : "Пауза"}</button>
-        <button className="mini-open-button" onClick={() => void invoke("show_mini")}>Мини-окно</button>
-        <button className="manager-open-button" onClick={() => void openCategoryManager()} aria-label="Открыть категории и правила">
-          <span aria-hidden="true">🗂</span><span className="manager-open-label">Категории</span>
+        <button className="pause-button" onClick={() => void toggleTracking()}>{paused ? t("dashboard.continue") : t("dashboard.pause")}</button>
+        <button className="mini-open-button" onClick={() => void invoke("show_mini")}>{t("dashboard.mini")}</button>
+        <button className="manager-open-button" onClick={() => void openCategoryManager()} aria-label={t("dashboard.openManager")}>
+          <span aria-hidden="true">🗂</span><span className="manager-open-label">{t("dashboard.categories")}</span>
         </button>
-        <button className="icon-button" onClick={() => void openSettings()} aria-label="Открыть настройки">
+        <button className="icon-button" onClick={() => void openSettings()} aria-label={t("dashboard.openSettings")}>
           ⚙
         </button>
-        <button className="icon-button" onClick={() => void toggleTheme()} aria-label="Переключить тему">
+        <div className="segmented-control language-control" role="group" aria-label={t("language.control")}>
+          {(["ru", "ua", "en"] as const).map((option) => (
+            <button type="button" key={option} aria-pressed={lang === option} onClick={() => void changeLanguage(option)}>
+              {t(`language.${option}`)}
+            </button>
+          ))}
+        </div>
+        <button className="icon-button" onClick={() => void setTheme(!dark)} aria-label={t("dashboard.toggleTheme")}>
           {dark ? "☀" : "☾"}
         </button>
       </header>
@@ -916,44 +935,44 @@ function DashboardView() {
       <section className={`live-panel ${live ? "is-live" : ""}`}>
         <div className="live-pulse" />
         <div className="live-copy">
-          <span className="eyebrow">Сейчас</span>
-          <strong>{live ? cleanAppName(live.app) : "Ждём первое активное окно"}</strong>
-          <span>{live ? live.domain || live.window_title || "Без заголовка" : "Вотчер запишет его на следующем тике"}</span>
+          <span className="eyebrow">{t("dashboard.current")}</span>
+          <strong>{live ? cleanAppName(live.app) : t("dashboard.waitingWindow")}</strong>
+          <span>{live ? live.domain || live.window_title || t("common.noTitle") : t("dashboard.nextTick")}</span>
         </div>
         {live && (
           <>
             {renderCategoryControl(live, "live")}
             <div className="live-clock">
               <strong>{formatDuration(now - live.ts_start)}</strong>
-              <span>с {formatTime(live.ts_start)}</span>
+              <span>{t("dashboard.since", { time: formatTime(live.ts_start, lang) })}</span>
             </div>
           </>
         )}
       </section>
 
-      {error && <div className="error-banner">{error}. Данные обновятся автоматически.</div>}
+      {error && <div className="error-banner">{error}. {t("dashboard.autoRefresh")}</div>}
       {managerNotice && <div className="history-toast" role="status">{managerNotice}</div>}
 
-      <nav className="dashboard-view-tabs" aria-label="Раздел дашборда">
+      <nav className="dashboard-view-tabs" aria-label={t("dashboard.sections")}>
         <button
           type="button"
           aria-current={dashboardView === "today" ? "page" : undefined}
           onClick={() => setDashboardView("today")}
         >
-          Сегодня
+          {t("common.today")}
         </button>
         <button
           type="button"
           aria-current={dashboardView === "trends" ? "page" : undefined}
           onClick={() => setDashboardView("trends")}
         >
-          Тренды
+          {t("dashboard.trends")}
         </button>
       </nav>
 
       {dashboardView === "today" ? <>
       {loading || !progress ? (
-        <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
+        <div className="card progress-skeleton skeleton" aria-label={t("dashboard.progressLoading")} />
       ) : (
         <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} observedLabel={kindLabels.observed} />
       )}
@@ -981,7 +1000,7 @@ function DashboardView() {
       )}
 
       {loading || !cumulative ? (
-        <div className="card cumulative-skeleton skeleton" aria-label="Загрузка графика дня" />
+        <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
       ) : (
         <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
       )}
@@ -989,19 +1008,19 @@ function DashboardView() {
       <div className="dashboard-grid">
         <section className="card timeline-card">
           <div className="card-heading">
-            <div><span className="eyebrow">Хронология</span><h1>Приложения за день</h1></div>
+            <div><span className="eyebrow">{t("dashboard.timelineEyebrow")}</span><h1>{t("dashboard.timelineTitle")}</h1></div>
             <span className={`mono-meta ${selectedApp ? "is-selection" : ""}`}>
-              {selectedApp ? `Фокус: ${cleanAppName(selectedApp)} · Esc — сбросить` : `${appTimeline.length} приложений · ${segments.length} сегментов`}
+              {selectedApp ? t("dashboard.focus", { app: cleanAppName(selectedApp) }) : t("dashboard.appSegmentCount", { apps: appTimeline.length, segments: segments.length })}
             </span>
           </div>
 
           {loading ? (
             <div className="skeleton timeline-skeleton" />
           ) : segments.length === 0 ? (
-            <div className="empty-state"><strong>День ещё чистый</strong><span>Переключись в рабочее окно — первый сегмент появится здесь.</span></div>
+            <div className="empty-state"><strong>{t("dashboard.emptyTitle")}</strong><span>{t("dashboard.emptyBody")}</span></div>
           ) : (
             <>
-              <div className="day-track" aria-label="24-часовая шкала активности">
+              <div className="day-track" aria-label={t("dashboard.dayScale")}>
                 {[0, 6, 12, 18, 24].map((hour) => <span key={hour} style={{ left: `${(hour / 24) * 100}%` }}>{String(hour).padStart(2, "0")}</span>)}
                 <div className="track-rail">
                   {segments.map((segment) => {
@@ -1043,7 +1062,7 @@ function DashboardView() {
                           <span className="app-chevron" aria-hidden="true">›</span>
                           <span className="app-day-name">
                             <strong>{cleanAppName(app.app)}</strong>
-                            <small>{app.isLive ? <span className="now-marker">сейчас</span> : `${app.segments.length} сегментов`}</small>
+                            <small>{app.isLive ? <span className="now-marker">{t("common.now")}</span> : t("dashboard.segmentCount", { count: app.segments.length })}</small>
                           </span>
                           <span className="app-day-bar"><i style={{ width: `${(app.duration_ms / maxTimelineAppDuration) * 100}%`, backgroundColor: appCategory?.color ?? "var(--cat-muted)" }} /></span>
                         </button>
@@ -1073,17 +1092,17 @@ function DashboardView() {
                                       return next;
                                     })}
                                   >
-                                    <span className="segment-time">за день</span>
-                                    <span className="segment-app"><strong>Микросегменты · {group.segments.length}</strong><small>короче минуты · нажми, чтобы разобрать</small></span>
-                                    <span className="micro-cluster-mark" aria-label="Сгруппировано">···</span>
+                                    <span className="segment-time">{t("dashboard.forDay")}</span>
+                                    <span className="segment-app"><strong>{t("dashboard.microTitle", { count: group.segments.length })}</strong><small>{t("dashboard.microHint")}</small></span>
+                                    <span className="micro-cluster-mark" aria-label={t("dashboard.grouped")}>···</span>
                                     <span className="segment-duration">{formatDuration(groupDuration)}</span>
                                   </button>
                                   {isMicroExpanded && (
                                     <div className="micro-segment-list">
                                       {group.segments.map((segment) => (
                                         <div className="app-segment-row is-micro" key={segment.id}>
-                                          <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segment.ts_end)}</span>
-                                          <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
+                                          <span className="segment-time">{formatTime(segment.ts_start, lang)}–{formatTime(segment.ts_end, lang)}</span>
+                                          <span className="segment-app"><small>{segment.domain || segment.window_title || t("common.noTitle")}</small></span>
                                           {renderCategoryControl(segment, `segment-${segment.id}`)}
                                           <span className="segment-duration">{formatDuration(segmentDuration(segment, live?.id, now))}</span>
                                         </div>
@@ -1097,8 +1116,8 @@ function DashboardView() {
                             const segmentEnd = segment.id === live?.id ? now : segment.ts_end;
                             return (
                               <div className="app-segment-row" key={group.id}>
-                                <span className="segment-time">{formatTime(segment.ts_start)}–{formatTime(segmentEnd)}</span>
-                                <span className="segment-app"><small>{segment.domain || segment.window_title || "Без заголовка"}</small></span>
+                                <span className="segment-time">{formatTime(segment.ts_start, lang)}–{formatTime(segmentEnd, lang)}</span>
+                                <span className="segment-app"><small>{segment.domain || segment.window_title || t("common.noTitle")}</small></span>
                                 {renderCategoryControl(segment, `segment-${segment.id}`)}
                                 <span className="segment-duration">{formatDuration(segmentDuration(segment, live?.id, now))}</span>
                               </div>
@@ -1116,10 +1135,10 @@ function DashboardView() {
 
         <aside className="side-column">
           <section className="card stats-card">
-            <div className="card-heading"><div><span className="eyebrow">Баланс</span><h2>Куда ушло время</h2></div></div>
+            <div className="card-heading"><div><span className="eyebrow">{t("dashboard.balance")}</span><h2>{t("dashboard.whereTimeWent")}</h2></div></div>
             <div className="ring-layout">
               <div className="time-ring">
-                <svg viewBox="0 0 120 120" aria-label={`Учтено ${formatDuration(stats.observed_ms)}`}>
+                <svg viewBox="0 0 120 120" aria-label={t("dashboard.accountedDuration", { duration: formatDuration(stats.observed_ms) })}>
                   <circle className="ring-base" cx="60" cy="60" r="48" pathLength="100" />
                   {ringParts.map((part) => {
                     const length = (part.value / totalRing) * 100;
@@ -1128,7 +1147,7 @@ function DashboardView() {
                     return <circle key={part.kind} className={`ring-part kind-${part.kind}`} cx="60" cy="60" r="48" pathLength="100" strokeDasharray={`${length} ${100 - length}`} strokeDashoffset={-offset} />;
                   })}
                 </svg>
-                <div className="ring-center"><strong>{formatDuration(stats.observed_ms)}</strong><span>учтено</span></div>
+                <div className="ring-center"><strong>{formatDuration(stats.observed_ms)}</strong><span>{t("dashboard.accounted")}</span></div>
               </div>
               <div className="stats-list">
                 {ringParts.map((part) => (
@@ -1151,8 +1170,8 @@ function DashboardView() {
           </section>
 
           <section className={`card apps-card ${selectedApp ? "has-selection" : ""}`}>
-            <div className="card-heading"><div><span className="eyebrow">Рейтинг</span><h2>Приложения</h2></div></div>
-            {apps.length === 0 ? <p className="quiet-empty">Пока нет данных</p> : apps.slice(0, 6).map((app) => {
+            <div className="card-heading"><div><span className="eyebrow">{t("dashboard.rating")}</span><h2>{t("dashboard.apps")}</h2></div></div>
+            {apps.length === 0 ? <p className="quiet-empty">{t("dashboard.noData")}</p> : apps.slice(0, 6).map((app) => {
               const dominant: CategoryKind = app.useful_ms >= app.neutral_ms && app.useful_ms >= app.waste_ms ? "useful" : app.waste_ms >= app.neutral_ms ? "waste" : "neutral";
               return (
                 <button
@@ -1182,13 +1201,13 @@ function DashboardView() {
         />
       )}
       </> : (
-        <section className="trends-section" aria-label="Тренды активности">
+        <section className="trends-section" aria-label={t("dashboard.trendsActivity")}>
           <div className="trends-section-heading">
-            <div><span className="eyebrow">История</span><h1>Объяснить последние дни</h1></div>
-            <p>Состав показывает, куда ушло время. Среднее отделяет направление от шума отдельных дней.</p>
+            <div><span className="eyebrow">{t("dashboard.history")}</span><h1>{t("dashboard.explainDays")}</h1></div>
+            <p>{t("dashboard.trendsIntro")}</p>
           </div>
           {loading || dailySeries.length === 0 ? (
-            <div className="card trends-skeleton skeleton" aria-label="Загрузка трендов" />
+            <div className="card trends-skeleton skeleton" aria-label={t("dashboard.trendsLoading")} />
           ) : (
             <>
               <TrendsStacked
@@ -1210,12 +1229,12 @@ function DashboardView() {
           <section className="settings-modal category-manager-modal" role="dialog" aria-modal="true" aria-labelledby="category-manager-title">
             <div className="settings-heading category-manager-heading">
               <div>
-                <span className="eyebrow">Классификация</span>
-                <h2 id="category-manager-title">Категории и правила</h2>
+                <span className="eyebrow">{t("manager.eyebrow")}</span>
+                <h2 id="category-manager-title">{t("manager.title")}</h2>
               </div>
             </div>
 
-            <div className="manager-tabs" role="tablist" aria-label="Раздел менеджера">
+            <div className="manager-tabs" role="tablist" aria-label={t("manager.section")}>
               <button
                 type="button"
                 role="tab"
@@ -1223,7 +1242,7 @@ function DashboardView() {
                 className={categoryManagerTab === "categories" ? "is-active" : ""}
                 onClick={() => setCategoryManagerTab("categories")}
               >
-                Категории
+                {t("dashboard.categories")}
               </button>
               <button
                 type="button"
@@ -1232,37 +1251,37 @@ function DashboardView() {
                 className={categoryManagerTab === "rules" ? "is-active" : ""}
                 onClick={() => setCategoryManagerTab("rules")}
               >
-                Правила
+                {t("manager.rules")}
               </button>
             </div>
 
             <div className="manager-content">
               {managerLoading ? (
-                <div className="manager-loading skeleton" aria-label="Загрузка" />
+                <div className="manager-loading skeleton" aria-label={t("common.loading")} />
               ) : categoryManagerTab === "categories" ? (
                 <div role="tabpanel">
                   <div className="manager-toolbar">
-                    <p>{manageableCategories.length} категорий</p>
+                    <p>{t("manager.categoryCount", { count: manageableCategories.length })}</p>
                     <button type="button" className="manager-add-button" onClick={() => setCategoryFormOpen((open) => !open)}>
-                      + Категория
+                      {t("manager.addCategory")}
                     </button>
                   </div>
 
                   {categoryFormOpen && (
                     <form className="manager-form category-form" onSubmit={(event) => void createCategory(event)}>
                       <label className="manager-field manager-field-wide">
-                        <span>Название</span>
+                        <span>{t("manager.name")}</span>
                         <input
                           autoFocus
                           required
                           maxLength={80}
                           value={newCategoryName}
                           onChange={(event) => setNewCategoryName(event.target.value)}
-                          placeholder="Например, Учёба"
+                          placeholder={t("manager.exampleStudy")}
                         />
                       </label>
                       <label className="manager-field">
-                        <span>Тип</span>
+                        <span>{t("manager.type")}</span>
                         <select value={newCategoryKind} onChange={(event) => setNewCategoryKind(event.target.value as CategoryKind)}>
                           <option value="useful">{kindLabels.useful}</option>
                           <option value="neutral">{kindLabels.neutral}</option>
@@ -1270,22 +1289,22 @@ function DashboardView() {
                         </select>
                       </label>
                       <div className="manager-field manager-color-field">
-                        <span>Цвет</span>
+                        <span>{t("manager.color")}</span>
                         <div>
                           <input
                             type="color"
                             value={newCategoryColor}
                             onChange={(event) => setNewCategoryColor(event.target.value)}
-                            aria-label="Свой цвет категории"
+                            aria-label={t("manager.customColor")}
                           />
-                          <div className="color-presets" aria-label="Цвета Rosé Pine">
+                          <div className="color-presets" aria-label={t("manager.palette")}>
                             {CATEGORY_COLORS.map((color) => (
                               <button
                                 key={color}
                                 type="button"
                                 className={newCategoryColor === color ? "is-selected" : ""}
                                 style={{ backgroundColor: color }}
-                                aria-label={`Выбрать цвет ${color}`}
+                                aria-label={t("manager.chooseColor", { color })}
                                 aria-pressed={newCategoryColor === color}
                                 onClick={() => setNewCategoryColor(color)}
                               />
@@ -1294,9 +1313,9 @@ function DashboardView() {
                         </div>
                       </div>
                       <div className="manager-form-actions">
-                        <button type="button" className="manager-cancel-button" onClick={() => setCategoryFormOpen(false)}>Отмена</button>
+                        <button type="button" className="manager-cancel-button" onClick={() => setCategoryFormOpen(false)}>{t("common.cancel")}</button>
                         <button type="submit" className="manager-submit-button" disabled={managerSaving}>
-                          {managerSaving ? "Создаём…" : "Создать"}
+                          {managerSaving ? t("common.creating") : t("common.create")}
                         </button>
                       </div>
                     </form>
@@ -1304,13 +1323,13 @@ function DashboardView() {
 
                   <div className="manager-list">
                     {manageableCategories.length === 0 ? (
-                      <p className="manager-empty">Категорий пока нет. Создайте первую.</p>
+                      <p className="manager-empty">{t("manager.noCategories")}</p>
                     ) : manageableCategories.map((category) => (
                       <div className="category-manager-row" key={category.id}>
                         <span className="manager-color-dot" style={{ backgroundColor: category.color }} />
                         <input
                           className="category-name-input"
-                          aria-label={`Название категории ${category.name}`}
+                          aria-label={t("manager.categoryName", { name: category.name })}
                           disabled={managerSaving}
                           maxLength={80}
                           value={category.name}
@@ -1324,7 +1343,7 @@ function DashboardView() {
                         />
                         <select
                           className={`manager-kind kind-${category.kind}`}
-                          aria-label={`Тип категории ${category.name}`}
+                          aria-label={t("manager.categoryType", { name: category.name })}
                           disabled={managerSaving}
                           value={category.kind}
                           onChange={(event) => {
@@ -1342,8 +1361,8 @@ function DashboardView() {
                           className="manager-delete-button"
                           disabled={managerSaving}
                           onClick={() => void deleteCategory(category)}
-                          aria-label={`Удалить категорию ${category.name}`}
-                          title="Удалить категорию"
+                          aria-label={t("manager.deleteCategory", { name: category.name })}
+                          title={t("manager.deleteCategoryTitle")}
                         >
                           🗑
                         </button>
@@ -1354,7 +1373,7 @@ function DashboardView() {
               ) : (
                 <div role="tabpanel">
                   <div className="manager-toolbar">
-                    <p>{rules.length} правил</p>
+                    <p>{t("manager.ruleCount", { count: rules.length })}</p>
                     <button
                       type="button"
                       className="manager-add-button"
@@ -1364,14 +1383,14 @@ function DashboardView() {
                         if (newRuleCategoryId === null) setNewRuleCategoryId(manageableCategories[0]?.id ?? null);
                       }}
                     >
-                      + Правило
+                      {t("manager.addRule")}
                     </button>
                   </div>
 
                   {ruleFormOpen && (
                     <form className="manager-form rule-form" onSubmit={(event) => void createRule(event)}>
                       <label className="manager-field">
-                        <span>Тип</span>
+                        <span>{t("manager.type")}</span>
                         <select value={newRuleType} onChange={(event) => setNewRuleType(event.target.value as RuleMatchType)}>
                           <option value="exe">exe</option>
                           <option value="title">title</option>
@@ -1379,7 +1398,7 @@ function DashboardView() {
                         </select>
                       </label>
                       <label className="manager-field manager-field-wide">
-                        <span>Паттерн</span>
+                        <span>{t("manager.pattern")}</span>
                         <input
                           autoFocus
                           required
@@ -1390,7 +1409,7 @@ function DashboardView() {
                         />
                       </label>
                       <label className="manager-field">
-                        <span>Категория</span>
+                        <span>{t("classification.category")}</span>
                         <select
                           required
                           value={newRuleCategoryId ?? ""}
@@ -1402,7 +1421,7 @@ function DashboardView() {
                         </select>
                       </label>
                       <label className="manager-field manager-priority-field">
-                        <span>Приоритет</span>
+                        <span>{t("manager.priority")}</span>
                         <input
                           type="number"
                           step="1"
@@ -1410,11 +1429,11 @@ function DashboardView() {
                           onChange={(event) => setNewRulePriority(event.target.value)}
                         />
                       </label>
-                      <p className="manager-form-hint">exe: название процесса (Code.exe), title/domain: подстрока (youtube)</p>
+                      <p className="manager-form-hint">{t("manager.ruleHint")}</p>
                       <div className="manager-form-actions">
-                        <button type="button" className="manager-cancel-button" onClick={() => setRuleFormOpen(false)}>Отмена</button>
+                        <button type="button" className="manager-cancel-button" onClick={() => setRuleFormOpen(false)}>{t("common.cancel")}</button>
                         <button type="submit" className="manager-submit-button" disabled={managerSaving}>
-                          {managerSaving ? "Создаём…" : "Создать"}
+                          {managerSaving ? t("common.creating") : t("common.create")}
                         </button>
                       </div>
                     </form>
@@ -1422,12 +1441,12 @@ function DashboardView() {
 
                   <div className="manager-list rule-list">
                     {rules.length === 0 ? (
-                      <p className="manager-empty">Правил пока нет. Добавьте первое правило классификации.</p>
+                      <p className="manager-empty">{t("manager.noRules")}</p>
                     ) : rules.map((rule) => {
                       const category = categoryById.get(rule.category_id);
                       return (
                         <div className="rule-manager-row" key={rule.id}>
-                          <span className="rule-type-icon" title={`${rule.match_type}, приоритет ${rule.priority}`}>
+                          <span className="rule-type-icon" title={t("manager.ruleTitle", { type: rule.match_type, priority: rule.priority })}>
                             {RULE_TYPE_LABELS[rule.match_type]}
                           </span>
                           <span className="rule-pattern"><small>{rule.match_type}</small><strong>{rule.pattern}</strong></span>
@@ -1437,7 +1456,7 @@ function DashboardView() {
                             <select
                               value={rule.category_id}
                               disabled={managerSaving}
-                              aria-label={`Категория правила ${rule.pattern}`}
+                              aria-label={t("manager.ruleCategory", { pattern: rule.pattern })}
                               onChange={(event) => void updateRuleCategory(rule.id, Number(event.target.value))}
                             >
                               {manageableCategories.map((item) => (
@@ -1450,8 +1469,8 @@ function DashboardView() {
                             className="manager-delete-button"
                             disabled={managerSaving}
                             onClick={() => void deleteRule(rule.id)}
-                            aria-label={`Удалить правило ${rule.pattern}`}
-                            title="Удалить правило"
+                            aria-label={t("manager.deleteRule", { pattern: rule.pattern })}
+                            title={t("manager.deleteRuleTitle")}
                           >
                             🗑
                           </button>
@@ -1466,7 +1485,7 @@ function DashboardView() {
             {managerError && <p className="settings-error manager-error">{managerError}</p>}
             <div className="settings-actions manager-done-actions">
               <button className="settings-done" disabled={managerSaving} onClick={() => setCategoryManagerOpen(false)}>
-                Готово
+                {t("common.done")}
               </button>
             </div>
           </section>
@@ -1477,27 +1496,27 @@ function DashboardView() {
         <div className="settings-overlay">
           <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="settings-heading">
-              <span className="eyebrow">Система</span>
-              <h2 id="settings-title">Настройки</h2>
+              <span className="eyebrow">{t("settings.eyebrow")}</span>
+              <h2 id="settings-title">{t("settings.title")}</h2>
             </div>
             <div className="settings-scroll">
               <section className="settings-section" aria-labelledby="goal-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="goal-settings-title">Зачёт дня</h3>
-                  <span>Новые значения действуют с сегодняшней даты</span>
+                  <h3 id="goal-settings-title">{t("settings.dayScore")}</h3>
+                  <span>{t("settings.effectiveToday")}</span>
                 </div>
                 <div className="goal-settings-grid">
-                  <label className="settings-field"><span>{kindLabelUseful} · цель, мин</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
-                  <label className="settings-field"><span>{kindLabelWaste} · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
-                  <label className="settings-field"><span>{kindLabelObserved} · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{t("settings.goalMinutes", { label: kindLabelUseful })}</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{t("settings.limitMinutes", { label: kindLabelWaste })}</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{t("settings.minimumMinutes", { label: kindLabelObserved })}</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
                 </div>
                 <div className="money-settings-grid">
                   <label className="settings-field">
-                    <span>Часовая ставка · необязательно</span>
-                    <input type="text" inputMode="decimal" placeholder="Не показывать сожжённые деньги" value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} />
+                    <span>{t("settings.hourlyRate")}</span>
+                    <input type="text" inputMode="decimal" placeholder={t("settings.hideBurned")} value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>Валюта</span>
+                    <span>{t("settings.currency")}</span>
                     <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
                       {["₴", "$", "€", "₽"].map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
                     </select>
@@ -1505,14 +1524,36 @@ function DashboardView() {
                 </div>
               </section>
 
+              <section className="settings-section" aria-labelledby="appearance-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="appearance-settings-title">{t("settings.language")}</h3>
+                  <span>{t("settings.languageHint")}</span>
+                </div>
+                <div className="money-settings-grid">
+                  <label className="settings-field">
+                    <span>{t("settings.language")}</span>
+                    <select value={lang} onChange={(event) => void changeLanguage(event.target.value as Lang)}>
+                      {(["ru", "ua", "en"] as const).map((option) => <option key={option} value={option}>{langNames[option]}</option>)}
+                    </select>
+                  </label>
+                  <label className="settings-field">
+                    <span>{t("settings.theme")}</span>
+                    <select value={dark ? "dark" : "dawn"} onChange={(event) => void setTheme(event.target.value === "dark")}>
+                      <option value="dawn">{t("settings.themeLight")}</option>
+                      <option value="dark">{t("settings.themeDark")}</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+
               <section className="settings-section" aria-labelledby="challenge-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="challenge-settings-title">Челлендж «Побей мой день»</h3>
-                  <span>Код меняет локальные цели с сегодняшней даты</span>
+                  <h3 id="challenge-settings-title">{t("settings.challenge")}</h3>
+                  <span>{t("settings.challengeEffect")}</span>
                 </div>
                 <div className="challenge-import-row">
                   <label className="settings-field">
-                    <span>Код челленджа</span>
+                    <span>{t("settings.challengeCode")}</span>
                     <input
                       autoComplete="off"
                       spellCheck={false}
@@ -1527,32 +1568,32 @@ function DashboardView() {
                       }}
                     />
                   </label>
-                  <button type="button" onClick={() => void importChallenge()}>Принять вызов</button>
+                  <button type="button" onClick={() => void importChallenge()}>{t("settings.acceptChallenge")}</button>
                 </div>
                 {challengeError && <p className="settings-error" id="challenge-import-error">{challengeError}</p>}
-                {challengeImported && <p className="challenge-imported" role="status">Челлендж принят. Цели сохранены локально.</p>}
+                {challengeImported && <p className="challenge-imported" role="status">{t("settings.challengeAccepted")}</p>}
               </section>
 
               <section className="settings-section" aria-labelledby="kind-labels-title">
                 <div className="settings-section-heading">
-                  <h3 id="kind-labels-title">Названия типов времени</h3>
-                  <span>Отображаются в балансе и категориях</span>
+                  <h3 id="kind-labels-title">{t("settings.kindLabels")}</h3>
+                  <span>{t("settings.kindLabelsHint")}</span>
                 </div>
                 <div className="kind-label-grid">
                   <label className="settings-field">
-                    <span>Название {DEFAULT_KIND_LABELS.useful}</span>
+                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.useful })}</span>
                     <input autoFocus required maxLength={80} value={kindLabelUseful} onChange={(event) => setKindLabelUseful(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>Название {DEFAULT_KIND_LABELS.neutral}</span>
+                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.neutral })}</span>
                     <input required maxLength={80} value={kindLabelNeutral} onChange={(event) => setKindLabelNeutral(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>Название {DEFAULT_KIND_LABELS.waste}</span>
+                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.waste })}</span>
                     <input required maxLength={80} value={kindLabelWaste} onChange={(event) => setKindLabelWaste(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>Название {DEFAULT_KIND_LABELS.observed}</span>
+                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.observed })}</span>
                     <input required maxLength={80} value={kindLabelObserved} onChange={(event) => setKindLabelObserved(event.target.value)} />
                   </label>
                 </div>
@@ -1560,11 +1601,11 @@ function DashboardView() {
 
               <section className="settings-section" aria-labelledby="browser-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="browser-settings-title">Браузер</h3>
-                  <span>Локальное расширение Chrome / Edge</span>
+                  <h3 id="browser-settings-title">{t("settings.browser")}</h3>
+                  <span>{t("settings.browserHint")}</span>
                 </div>
                 <label className="settings-field">
-                  <span>ID расширения Chrome</span>
+                  <span>{t("settings.chromeId")}</span>
                   <input
                     autoComplete="off"
                     spellCheck={false}
@@ -1575,7 +1616,7 @@ function DashboardView() {
                   />
                 </label>
                 <label className="settings-field">
-                  <span>ID расширения Edge</span>
+                  <span>{t("settings.edgeId")}</span>
                   <input
                     autoComplete="off"
                     spellCheck={false}
@@ -1586,28 +1627,28 @@ function DashboardView() {
                   />
                 </label>
                 <p className="settings-hint" id="settings-hint">
-                  ID подхватывается автоматически при первом контакте расширения — достаточно вставить токен. Поля ниже заполняются сами; вручную править нужно только если что-то пошло не так (ID виден в chrome://extensions → TTLI Tracker → ID).
+                  {t("settings.browserHelp")}
                 </p>
-                <p className="settings-hint">Мини-окно: клик по иконке TTLI в трее или кнопка &quot;Мини-окно&quot; на дашборде</p>
+                <p className="settings-hint">{t("settings.miniHelp")}</p>
                 <div className="settings-token">
-                  <span>Токен расширения</span>
+                  <span>{t("settings.extensionToken")}</span>
                   <div>
                     <code>{settings.extension_token || "—"}</code>
                     <button
                       disabled={!settings.extension_token}
                       onClick={() => void copyExtensionToken()}
                     >
-                      {tokenCopied ? "Скопировано" : "Скопировать"}
+                      {tokenCopied ? t("common.copied") : t("common.copy")}
                     </button>
                   </div>
-                  <p>Вставляется в расширение TTLI Tracker (поп-ап расширения).</p>
+                  <p>{t("settings.tokenHelp")}</p>
                 </div>
               </section>
 
               <section className="settings-section" aria-labelledby="startup-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="startup-settings-title">Запуск</h3>
-                  <span>Настройка применяется сразу</span>
+                  <h3 id="startup-settings-title">{t("settings.startup")}</h3>
+                  <span>{t("settings.appliesNow")}</span>
                 </div>
                 <label className="settings-toggle">
                   <input
@@ -1616,19 +1657,19 @@ function DashboardView() {
                     disabled={settingsSaving}
                     onChange={(event) => void toggleAutostart(event.target.checked)}
                   />
-                  <span>Автозапуск при входе в Windows</span>
+                  <span>{t("settings.autostart")}</span>
                 </label>
               </section>
 
               <div className="database-size">
-                <span>Размер базы данных</span>
-                <strong>{dbSizeMb === null ? "…" : `${dbSizeMb.toFixed(1)} МБ`}</strong>
+                <span>{t("settings.databaseSize")}</span>
+                <strong>{dbSizeMb === null ? "…" : t("settings.megabytes", { size: dbSizeMb.toFixed(1) })}</strong>
               </div>
             </div>
             {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
             <div className="settings-actions">
               <button className="settings-done" disabled={settingsSaving} onClick={() => void saveSettings()}>
-                {settingsSaving ? "Сохраняем…" : "Готово"}
+                {settingsSaving ? t("common.saving") : t("common.done")}
               </button>
             </div>
           </section>
@@ -1639,7 +1680,7 @@ function DashboardView() {
 }
 
 function App() {
-  return getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />;
+  return <I18nProvider>{getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />}</I18nProvider>;
 }
 
 export default App;

@@ -128,6 +128,7 @@ struct LiveSegment {
     status: String,
     category_name: String,
     category_kind: String,
+    is_uncategorized: bool,
 }
 
 const RANKS: [(&str, i64); 8] = [
@@ -146,6 +147,7 @@ struct DayPrintEntry {
     app: String,
     category_name: String,
     category_kind: String,
+    is_uncategorized: bool,
     duration_ms: i64,
 }
 
@@ -461,6 +463,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
     let mut statement = connection
         .prepare(
             "SELECT s.app, COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral'),
+                    COALESCE(c.id, 0) = 0,
                     SUM(o.duration_ms) AS duration_ms
              FROM segment_day_overlaps o
              JOIN segments s ON s.id = o.segment_id
@@ -477,7 +480,8 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
                 app: row.get(0)?,
                 category_name: row.get(1)?,
                 category_kind: row.get(2)?,
-                duration_ms: row.get(3)?,
+                is_uncategorized: row.get(3)?,
+                duration_ms: row.get(4)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -947,6 +951,7 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         }
         "hourly_rate" => value.is_empty() || value.parse::<f64>().is_ok_and(|number| number >= 0.0),
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
+        "language" => matches!(value.as_str(), "ru" | "ua" | "en"),
         "currency" => matches!(value.as_str(), "₴" | "$" | "€" | "₽"),
         "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
         "last_day_print_seen" => local_date_format_is_valid(&value),
@@ -1091,7 +1096,8 @@ fn get_live_segment() -> Result<Option<LiveSegment>, String> {
     connection
         .query_row(
             "SELECT s.id, s.ts_start, s.ts_end, s.app, s.window_title, s.domain, s.status,
-                    COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral')
+                    COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral'),
+                    COALESCE(c.id, 0) = 0
              FROM segments s
              LEFT JOIN categories c ON c.id = s.category_id
              WHERE s.id = CAST((SELECT value FROM settings WHERE key = 'active_segment_id') AS INTEGER)
@@ -1108,6 +1114,7 @@ fn get_live_segment() -> Result<Option<LiveSegment>, String> {
                     status: row.get(6)?,
                     category_name: row.get(7)?,
                     category_kind: row.get(8)?,
+                    is_uncategorized: row.get(9)?,
                 })
             },
         )

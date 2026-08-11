@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { ProgressDay } from "../progress";
 import type { KindLabels } from "../share";
 import { ChartTooltip } from "./ChartTooltip";
+import { localeForLang } from "../i18n";
+import { useI18n } from "../i18nContext";
 
 interface CalendarHeatmapProps {
   days: ProgressDay[];
@@ -12,8 +14,8 @@ interface CalendarHeatmapProps {
 
 type HeatMode = "useful" | "waste";
 
-function dateLabel(localDate: string): string {
-  return new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" })
+function dateLabel(localDate: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long" })
     .format(new Date(`${localDate}T12:00:00`));
 }
 
@@ -22,6 +24,8 @@ function thresholdPercent(value: number, thresholdMinutes: number): number {
 }
 
 export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }: CalendarHeatmapProps) {
+  const { lang, t } = useI18n();
+  const locale = localeForLang(lang);
   const [mode, setMode] = useState<HeatMode>("useful");
   const [activeDate, setActiveDate] = useState("");
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
@@ -29,14 +33,14 @@ export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }:
   const monthLabels = days.filter((_, index) => index % 7 === 0).map((day, index) => ({
     key: day.local_date,
     column: index + 1,
-    label: new Intl.DateTimeFormat("ru-RU", { month: "short" }).format(new Date(`${day.local_date}T12:00:00`)),
+    label: new Intl.DateTimeFormat(locale, { month: "short" }).format(new Date(`${day.local_date}T12:00:00`)),
   })).filter((month, index, labels) => index === 0 || month.label !== labels[index - 1].label);
 
   return (
     <section className={`card heatmap-card heatmap-mode-${mode}`} aria-labelledby="heatmap-title">
       <div className="card-heading heatmap-heading">
-        <div><span className="eyebrow">История · 12 недель</span><h2 id="heatmap-title">Календарь прогресса</h2></div>
-        <div className="segmented-control" role="group" aria-label="Показатель календаря">
+        <div><span className="eyebrow">{t("heatmap.eyebrow")}</span><h2 id="heatmap-title">{t("heatmap.title")}</h2></div>
+        <div className="segmented-control" role="group" aria-label={t("heatmap.control")}>
           <button type="button" aria-pressed={mode === "useful"} onClick={() => setMode("useful")}>{kindLabels.useful}</button>
           <button type="button" aria-pressed={mode === "waste"} onClick={() => setMode("waste")}>{kindLabels.waste}</button>
         </div>
@@ -50,8 +54,8 @@ export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }:
           {monthLabels.map((month) => <span key={month.key} style={{ gridColumn: month.column }}>{month.label}</span>)}
         </div>
         <div className="heatmap-body">
-          <div className="heatmap-weekdays" aria-hidden="true">{["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((day) => <span key={day}>{day}</span>)}</div>
-          <div className="heatmap-grid" role="img" aria-label={`Календарь: ${mode === "useful" ? kindLabels.useful : kindLabels.waste}`}>
+          <div className="heatmap-weekdays" aria-hidden="true">{t("heatmap.weekdays").split("|").map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="heatmap-grid" role="img" aria-label={t("heatmap.calendar", { label: mode === "useful" ? kindLabels.useful : kindLabels.waste })}>
             {days.map((day) => {
               const value = mode === "useful" ? day.useful_ms : day.waste_ms;
               const level = mode === "useful" ? day.useful_level : day.waste_level;
@@ -59,8 +63,8 @@ export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }:
               const percent = thresholdPercent(value, threshold);
               const modeLabel = mode === "useful" ? kindLabels.useful : kindLabels.waste;
               const title = day.future
-                ? `${dateLabel(day.local_date)} · будущий день`
-                : `${dateLabel(day.local_date)} · ${modeLabel}: ${formatDuration(value)} из ${threshold}м · ${percent}% · ${day.passed ? "день зачтён" : "не зачтён"}`;
+                ? `${dateLabel(day.local_date, locale)} · ${t("heatmap.future")}`
+                : t("heatmap.dayTitle", { date: dateLabel(day.local_date, locale), label: modeLabel, duration: formatDuration(value), threshold, percent, status: day.passed ? t("trends.dayPassed") : t("heatmap.notPassed") });
               return (
                 <span
                   key={day.local_date}
@@ -71,7 +75,7 @@ export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }:
                     setTooltip({ x: event.clientX, y: event.clientY, visible: true });
                   }}
                 >
-                  {day.passed && <i className="pass-dot" aria-label="День зачтён" />}
+                  {day.passed && <i className="pass-dot" aria-label={t("score.passed")} />}
                 </span>
               );
             })}
@@ -81,25 +85,25 @@ export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }:
       <ChartTooltip {...tooltip}>
         {activeDay && (
           <>
-            <strong>{dateLabel(activeDay.local_date)}</strong>
+            <strong>{dateLabel(activeDay.local_date, locale)}</strong>
             {activeDay.future ? (
-              <span>Будущий день</span>
+              <span>{t("heatmap.futureTitle")}</span>
             ) : (
               <>
                 <span className={`kind-${mode}`}>
-                  {mode === "useful" ? kindLabels.useful : kindLabels.waste}: {formatDuration(mode === "useful" ? activeDay.useful_ms : activeDay.waste_ms)} из {mode === "useful" ? activeDay.useful_goal_min : activeDay.waste_limit_min}м
+                  {mode === "useful" ? kindLabels.useful : kindLabels.waste}: {formatDuration(mode === "useful" ? activeDay.useful_ms : activeDay.waste_ms)} / {mode === "useful" ? activeDay.useful_goal_min : activeDay.waste_limit_min}{t("common.minutesShort")}
                 </span>
-                <span>{thresholdPercent(
+                <span>{t("heatmap.ofThreshold", { percent: thresholdPercent(
                   mode === "useful" ? activeDay.useful_ms : activeDay.waste_ms,
                   mode === "useful" ? activeDay.useful_goal_min : activeDay.waste_limit_min,
-                )}% порога</span>
-                <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? "День зачтён" : "Не зачтён"}</b>
+                ) })}</span>
+                <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? t("score.passed") : t("heatmap.notPassedTitle")}</b>
               </>
             )}
           </>
         )}
       </ChartTooltip>
-      <div className="heatmap-legend"><span>0</span>{[1, 2, 3, 4].map((level) => <i key={level} className={`heat-cell level-${level}`} />)}<span>≥100% порога</span><b><i className="pass-dot" /> день зачтён</b></div>
+      <div className="heatmap-legend"><span>0</span>{[1, 2, 3, 4].map((level) => <i key={level} className={`heat-cell level-${level}`} />)}<span>{t("heatmap.legendThreshold")}</span><b><i className="pass-dot" /> {t("heatmap.legendPassed")}</b></div>
     </section>
   );
 }

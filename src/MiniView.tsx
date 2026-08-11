@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ProgressOverview } from "./progress";
+import { localeForLang } from "./i18n";
+import { useI18n } from "./i18nContext";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
@@ -20,6 +22,7 @@ interface LiveSegment {
   status: "active" | "away";
   category_name: string;
   category_kind: CategoryKind;
+  is_uncategorized: boolean;
 }
 
 interface BulletBarProps {
@@ -42,6 +45,7 @@ function cleanAppName(app: string): string {
 }
 
 function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
+  const { t } = useI18n();
   const thresholdMs = thresholdMin * 60_000;
   const scaleMs = Math.max(thresholdMs * 1.25, valueMs, 1);
   const fill = thresholdMs === 0 ? (valueMs > 0 ? 100 : 0) : Math.min(100, valueMs / scaleMs * 100);
@@ -52,8 +56,8 @@ function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
       <div className="mini-bullet-copy">
         <span>{label}</span>
         <strong>
-          {Math.floor(valueMs / 60_000)}м
-          {thresholdMs > 0 && <small> / {thresholdMin}м</small>}
+          {Math.floor(valueMs / 60_000)}{t("common.minutesShort")}
+          {thresholdMs > 0 && <small> / {thresholdMin}{t("common.minutesShort")}</small>}
         </strong>
       </div>
       <div className="mini-bullet-rail" aria-hidden="true">
@@ -65,6 +69,7 @@ function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
 }
 
 export function MiniView() {
+  const { lang, t } = useI18n();
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
@@ -93,9 +98,9 @@ export function MiniView() {
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : "Не удалось обновить мини-окно");
+      setError(typeof reason === "string" ? reason : t("error.miniRefresh"));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void invoke("fix_mini_window");
@@ -123,7 +128,7 @@ export function MiniView() {
       await loadMini();
     } catch (reason: unknown) {
       setPaused(!nextPaused);
-      setError(typeof reason === "string" ? reason : "Не удалось изменить трекинг");
+      setError(typeof reason === "string" ? reason : t("error.changeTracking"));
     }
   }
 
@@ -135,7 +140,7 @@ export function MiniView() {
       await invoke("set_mini_pinned", { pinned: nextPinned });
     } catch (reason: unknown) {
       setPinned(!nextPinned);
-      setError(typeof reason === "string" ? reason : "Не удалось закрепить окно");
+      setError(typeof reason === "string" ? reason : t("error.miniPin"));
     }
   }
 
@@ -152,39 +157,39 @@ export function MiniView() {
         }}
       >
         <span className={`mini-pulse ${away ? "is-away" : liveSegment && !paused ? "is-live" : ""}`} />
-        <span>{away ? "AFK" : paused ? "Пауза" : liveSegment ? cleanAppName(liveSegment.app) : "TTLI"}</span>
+        <span>{away ? t("common.afk") : paused ? t("dashboard.pause") : liveSegment ? cleanAppName(liveSegment.app) : "TTLI"}</span>
         <i aria-hidden="true">•••</i>
       </div>
 
-      <section className="mini-session" aria-label="Текущая сессия">
+      <section className="mini-session" aria-label={t("mini.currentSession")}>
         <strong>{formatClock(sessionMs)}</strong>
-        <span>{liveSegment ? liveSegment.category_name : paused ? "Наблюдение приостановлено" : "Ждём активное окно"}</span>
+        <span>{liveSegment ? (liveSegment.is_uncategorized ? t("common.uncategorized") : liveSegment.category_name) : paused ? t("mini.trackingPaused") : t("mini.waitingWindow")}</span>
       </section>
 
       {progress ? (
-        <section className="mini-metrics" aria-label="Прогресс дня">
+        <section className="mini-metrics" aria-label={t("mini.dayProgress")}>
           <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} thresholdMin={progress.today.useful_goal_min} />
           <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} thresholdMin={progress.today.waste_limit_min} />
           <BulletBar kind="neutral" label={kindLabels.neutral} valueMs={progress.today.neutral_ms} thresholdMin={0} />
           <div className="mini-rank">
             <span>{progress.current_rank}</span>
             <div aria-hidden="true"><i style={{ width: `${rankProgress}%` }} /></div>
-            <strong>{progress.lifetime_xp.toLocaleString("ru-RU")} XP</strong>
+            <strong>{progress.lifetime_xp.toLocaleString(localeForLang(lang))} XP</strong>
           </div>
         </section>
-      ) : <div className="mini-loading" aria-label="Загрузка" />}
+      ) : <div className="mini-loading" aria-label={t("common.loading")} />}
 
       {error && <p className="mini-error">{error}</p>}
 
       <footer className="mini-actions">
-        <button type="button" onClick={(event) => void toggleTracking(event)}>{paused ? "Продолжить" : "Пауза"}</button>
-        <button type="button" onClick={() => void invoke("show_dashboard")}>Дашборд</button>
+        <button type="button" onClick={(event) => void toggleTracking(event)}>{paused ? t("dashboard.continue") : t("dashboard.pause")}</button>
+        <button type="button" onClick={() => void invoke("show_dashboard")}>{t("mini.dashboard")}</button>
         <button
           type="button"
           className={pinned ? "is-pinned" : ""}
           aria-pressed={pinned}
-          aria-label={pinned ? "Открепить мини-окно" : "Закрепить мини-окно поверх остальных"}
-          title={pinned ? "Открепить" : "Закрепить поверх окон"}
+          aria-label={pinned ? t("mini.unpin") : t("mini.pin")}
+          title={pinned ? t("mini.unpinTitle") : t("mini.pinTitle")}
           onClick={(event) => void togglePin(event)}
         >
           {pinned ? "●" : "○"}

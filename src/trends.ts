@@ -17,6 +17,12 @@ export interface AfkDay {
   afk_ms: number;
 }
 
-export function formatLocalDate(localDate: string, options: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat("ru-RU", options).format(new Date(`${localDate}T12:00:00`));
+import { localeForLang, type Lang } from "./i18n";
+
+export function formatLocalDate(
+  localDate: string,
+  options: Intl.DateTimeFormatOptions,
+  lang: Lang = "ru",
+): string {
+  return new Intl.DateTimeFormat(localeForLang(lang), options).format(new Date(`${localDate}T12:00:00`));
 }

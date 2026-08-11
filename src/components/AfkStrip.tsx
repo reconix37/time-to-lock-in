@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatLocalDate, type AfkDay } from "../trends";
 import { ChartTooltip } from "./ChartTooltip";
+import { useI18n } from "../i18nContext";
 
 interface AfkStripProps {
   days: AfkDay[];
@@ -8,6 +9,7 @@ interface AfkStripProps {
 }
 
 export function AfkStrip({ days, formatDuration }: AfkStripProps) {
+  const { lang, t } = useI18n();
   const visibleDays = days.slice(-7);
   const latestDay = visibleDays[visibleDays.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
@@ -18,15 +20,15 @@ export function AfkStrip({ days, formatDuration }: AfkStripProps) {
   return (
     <section className="card afk-strip-card" aria-labelledby="afk-strip-title">
       <div className="card-heading trends-heading">
-        <div><span className="eyebrow">Перерывы</span><h2 id="afk-strip-title">AFK по дням</h2></div>
-        <span className="mono-meta">7 дней</span>
+        <div><span className="eyebrow">{t("afk.eyebrow")}</span><h2 id="afk-strip-title">{t("afk.title")}</h2></div>
+        <span className="mono-meta">{t("common.days", { count: 7 })}</span>
       </div>
       <div
         className="afk-strip"
         onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
       >
         {visibleDays.map((day) => {
-          const label = formatLocalDate(day.local_date, { weekday: "short" });
+          const label = formatLocalDate(day.local_date, { weekday: "short" }, lang);
           return (
             <button
               type="button"
@@ -47,7 +49,7 @@ export function AfkStrip({ days, formatDuration }: AfkStripProps) {
       </div>
       {activeDay && (
         <ChartTooltip {...tooltip}>
-          <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
+          <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" }, lang)}</strong>
           <span className="is-afk">AFK {formatDuration(activeDay.afk_ms)}</span>
         </ChartTooltip>
       )}

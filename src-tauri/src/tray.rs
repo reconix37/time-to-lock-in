@@ -25,16 +25,54 @@ struct TraySnapshot {
     observed_label: String,
 }
 
+struct TrayLabels {
+    open: &'static str,
+    pause: &'static str,
+    resume: &'static str,
+    exit: &'static str,
+    loading: &'static str,
+}
+
+fn tray_labels(language: &str) -> TrayLabels {
+    match language {
+        "ua" => TrayLabels {
+            open: "Відкрити дашборд",
+            pause: "Пауза",
+            resume: "Продовжити",
+            exit: "Вихід",
+            loading: "TTLI — статистика завантажується",
+        },
+        "en" => TrayLabels {
+            open: "Open dashboard",
+            pause: "Pause",
+            resume: "Resume",
+            exit: "Exit",
+            loading: "TTLI — loading statistics",
+        },
+        _ => TrayLabels {
+            open: "Открыть дашборд",
+            pause: "Пауза",
+            resume: "Продолжить",
+            exit: "Выход",
+            loading: "TTLI — статистика загружается",
+        },
+    }
+}
+
 pub fn install(
     app: &AppHandle,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>, String> {
-    let open_item = MenuItem::with_id(app, "open", "Открыть дашборд", true, None::<&str>)
+    let connection = db::open()?;
+    let language = db::setting(&connection, "language")?.unwrap_or_else(|| "ru".to_string());
+    drop(connection);
+    let labels = tray_labels(&language);
+    let open_item = MenuItem::with_id(app, "open", labels.open, true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let pause_item = MenuItem::with_id(app, "pause", "Пауза", true, None::<&str>)
+    let pause_item = MenuItem::with_id(app, "pause", labels.pause, true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let exit_item = MenuItem::with_id(app, "exit", "Выход", true, None::<&str>)
+    let exit_item = MenuItem::with_id(app, "exit", labels.exit, true, None::<&str>)
         .map_err(|error| error.to_string())?;
     let menu = Menu::with_items(app, &[&open_item, &pause_item, &exit_item])
         .map_err(|error| error.to_string())?;
@@ -43,7 +81,7 @@ pub fn install(
     let tray = TrayIconBuilder::with_id("ttli-tray")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("TTLI — статистика загружается")
+        .tooltip(labels.loading)
         .icon(counter_icon(0, "neutral", false))
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "open" => show_dashboard(app),
@@ -69,7 +107,14 @@ pub fn install(
         .build(app)
         .map_err(|error| error.to_string())?;
 
-    Ok(spawn_updater(tray, pause_item, paused, stop))
+    Ok(spawn_updater(
+        tray,
+        pause_item,
+        paused,
+        stop,
+        labels.pause,
+        labels.resume,
+    ))
 }
 
 pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
@@ -236,6 +281,8 @@ fn spawn_updater(
     pause_item: MenuItem<tauri::Wry>,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    pause_label: &'static str,
+    resume_label: &'static str,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
@@ -259,11 +306,7 @@ fn spawn_updater(
                 )));
             }
             let is_paused = paused.load(Ordering::Relaxed);
-            let _ = pause_item.set_text(if is_paused {
-                "Продолжить"
-            } else {
-                "Пауза"
-            });
+            let _ = pause_item.set_text(if is_paused { resume_label } else { pause_label });
 
             for _ in 0..50 {
                 if stop.load(Ordering::Relaxed) {

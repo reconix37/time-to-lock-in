@@ -152,6 +152,7 @@ pub fn initialize() -> Result<(), String> {
         ("observed_min", "60".to_string()),
         ("idle_timeout_min", "5".to_string()),
         ("theme", "dawn".to_string()),
+        ("language", "ru".to_string()),
         ("onboarding_done", "0".to_string()),
         ("tray_only", "1".to_string()),
         ("mini_pinned", "1".to_string()),

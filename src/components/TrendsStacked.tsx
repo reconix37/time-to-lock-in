@@ -2,6 +2,7 @@ import { useState } from "react";
 import { formatLocalDate, type DailySeriesDay } from "../trends";
 import type { KindLabels } from "../share";
 import { ChartTooltip } from "./ChartTooltip";
+import { useI18n } from "../i18nContext";
 
 interface TrendsStackedProps {
   days: DailySeriesDay[];
@@ -21,6 +22,7 @@ const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 
 export function TrendsStacked({ days, range, onRangeChange, formatDuration, kindLabels }: TrendsStackedProps) {
+  const { lang, t } = useI18n();
   const visibleDays = days.slice(-range);
   const latestDay = visibleDays[visibleDays.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
@@ -42,15 +44,13 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
     return `${path} V ${goalY} H ${slotEnd}`;
   }, "");
   const yTicks = [0, yMax / 2, yMax];
-  const usefulGoalLabel = kindLabels.useful === "Полезное"
-    ? "Цель полезного"
-    : `Цель · ${kindLabels.useful}`;
+  const usefulGoalLabel = t("trends.goalLabel", { label: kindLabels.useful });
 
   return (
     <section className="card trends-card" aria-labelledby="stacked-title">
       <div className="card-heading trends-heading">
-        <div><span className="eyebrow">Состав дня</span><h2 id="stacked-title">Куда уходили дни</h2></div>
-        <div className="segmented-control" aria-label="Период составного графика">
+        <div><span className="eyebrow">{t("trends.compositionEyebrow")}</span><h2 id="stacked-title">{t("trends.compositionTitle")}</h2></div>
+        <div className="segmented-control" aria-label={t("trends.period")}>
           {([7, 30] as const).map((option) => (
             <button
               type="button"
@@ -58,13 +58,13 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
               aria-pressed={range === option}
               onClick={() => onRangeChange(option)}
             >
-              {option} дней
+              {t("common.days", { count: option })}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="trends-legend" aria-label="Легенда графика">
+      <div className="trends-legend" aria-label={t("chart.legend")}>
         <span className="kind-useful"><i />{kindLabels.useful}</span>
         <span className="kind-neutral"><i />{kindLabels.neutral}</span>
         <span className="kind-waste"><i />{kindLabels.waste}</span>
@@ -76,7 +76,7 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
         onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
         onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
       >
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Состав времени за ${range} дней`}>
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={t("trends.compositionAria", { days: range })}>
           {yTicks.map((tick) => (
             <g className="trends-grid-tick" key={tick}>
               <line x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} />
@@ -90,14 +90,14 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
             const bottom = y(0);
             const showLabel = range === 7 || index % 5 === 0 || index === visibleDays.length - 1;
             const tooltip = [
-              formatLocalDate(day.local_date, { weekday: "long", day: "numeric", month: "long" }),
+              formatLocalDate(day.local_date, { weekday: "long", day: "numeric", month: "long" }, lang),
               `${kindLabels.useful}: ${formatDuration(day.useful_ms)}`,
               `${kindLabels.neutral}: ${formatDuration(day.neutral_ms)}`,
-              `${kindLabels.waste}: ${formatDuration(day.waste_ms)} / лимит ${day.waste_limit_min}м`,
-              `Учтено: ${formatDuration(day.observed_ms)}`,
-              `${usefulGoalLabel}: ${day.useful_goal_min}м`,
-              `Статус: ${day.passed ? "день зачтён" : "день не зачтён"}`,
-              `Public XP: +${day.useful_xp}`,
+              t("trends.limitTooltip", { label: kindLabels.waste, duration: formatDuration(day.waste_ms), limit: day.waste_limit_min }),
+              t("trends.accountedTooltip", { duration: formatDuration(day.observed_ms) }),
+              `${usefulGoalLabel}: ${day.useful_goal_min}${t("common.minutesShort")}`,
+              t("trends.statusTooltip", { status: day.passed ? t("trends.dayPassed") : t("trends.dayNotPassed") }),
+              `${t("common.publicXp")}: +${day.useful_xp}`,
             ].join("\n");
             return (
               <g
@@ -121,7 +121,7 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
                 <rect className="trend-stack kind-waste" x={x(index) - barWidth / 2} y={totalTop} width={barWidth} height={neutralTop - totalTop} />
                 {showLabel && (
                   <text className="trends-x-label" x={x(index)} y={HEIGHT - 18}>
-                    {formatLocalDate(day.local_date, range === 7 ? { weekday: "short" } : { day: "2-digit", month: "2-digit" })}
+                    {formatLocalDate(day.local_date, range === 7 ? { weekday: "short" } : { day: "2-digit", month: "2-digit" }, lang)}
                   </text>
                 )}
               </g>
@@ -133,12 +133,12 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
 
       {activeDay && (
         <ChartTooltip {...tooltip}>
-          <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
+          <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" }, lang)}</strong>
           <span className="kind-useful">{kindLabels.useful} {formatDuration(activeDay.useful_ms)}</span>
           <span className="kind-neutral">{kindLabels.neutral} {formatDuration(activeDay.neutral_ms)}</span>
-          <span className="kind-waste">{kindLabels.waste} {formatDuration(activeDay.waste_ms)} / {activeDay.waste_limit_min}м</span>
-          <span>Цель {activeDay.useful_goal_min}м · XP +{activeDay.useful_xp}</span>
-          <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? "Зачтён" : "Не зачтён"}</b>
+          <span className="kind-waste">{kindLabels.waste} {formatDuration(activeDay.waste_ms)} / {activeDay.waste_limit_min}{t("common.minutesShort")}</span>
+          <span>{t("common.goal")} {activeDay.useful_goal_min}{t("common.minutesShort")} · XP +{activeDay.useful_xp}</span>
+          <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? t("trends.passedShort") : t("trends.notPassedShort")}</b>
         </ChartTooltip>
       )}
     </section>
