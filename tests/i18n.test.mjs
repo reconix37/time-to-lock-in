@@ -11,6 +11,10 @@ test("translates every supported language and replaces placeholders", () => {
     translate("ru", "classification.historyWarning", { app: "Chrome", count: 48 }),
     "Будет переклассифицирована вся история Chrome — 48 сегментов",
   );
+  assert.equal(
+    translate("en", "classification.titleMatchCount", { count: 3 }),
+    "Matches 3 segments",
+  );
 });
 
 test("all dictionaries expose the same message keys", () => {

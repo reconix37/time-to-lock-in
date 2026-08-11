@@ -318,11 +318,14 @@ button:focus-visible {
 .classification-scope-label { margin-top: 2px; color: var(--subtle); font: 10px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
 .classification-option { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; padding: 8px; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; }
 .classification-option:hover { background: var(--hl-low); }
+.classification-option:has(input:disabled) { cursor: default; opacity: .6; }
 .classification-option.is-default:has(input:checked) { border-color: color-mix(in srgb, var(--iris) 45%, var(--hl-med)); background: color-mix(in srgb, var(--iris) 8%, var(--surface)); }
 .classification-option input { margin: 3px 0 0; accent-color: var(--iris); }
 .classification-option strong, .classification-option small { display: block; }
 .classification-option strong { font-size: 12px; font-weight: 500; }
 .classification-option small { margin-top: 2px; color: var(--subtle); font-size: 10px; }
+.classification-option .classification-pattern { margin-top: 8px; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.classification-pattern code { font: inherit; }
 .classification-option .classification-warning { margin-top: 6px; color: var(--muted); }
 .classification-apply { justify-self: end; padding: 7px 12px; border: 0; border-radius: var(--radius-sm); background: var(--love); color: var(--bg); cursor: pointer; }
 .classification-apply:hover { background: var(--love-hover); }

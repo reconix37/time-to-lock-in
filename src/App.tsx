@@ -20,6 +20,7 @@ import {
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
+import { titleRulePattern } from "./classification";
 import { langNames, localeForLang, type Lang, type Translate } from "./i18n";
 import { I18nProvider, useI18n } from "./i18nContext";
 import "./styles/tokens.css";
@@ -88,6 +89,8 @@ interface ClassificationTarget {
   segmentId: number;
   anchor: string;
 }
+
+type ClassificationScope = "single" | "title" | "app";
 
 interface ReclassificationSummary {
   changed_segments: number;
@@ -196,7 +199,7 @@ function DashboardView() {
   const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
   const [classificationTarget, setClassificationTarget] = useState<ClassificationTarget | null>(null);
   const [classificationCategoryId, setClassificationCategoryId] = useState(0);
-  const [classificationRemember, setClassificationRemember] = useState(false);
+  const [classificationScope, setClassificationScope] = useState<ClassificationScope>("single");
   const [classificationSaving, setClassificationSaving] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -432,15 +435,23 @@ function DashboardView() {
     setManagerNotice(t("toast.history", { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }));
   }
 
-  async function reclassify(segmentId: number, categoryId: number, remember: boolean) {
+  async function reclassify(segment: Segment, categoryId: number, scope: ClassificationScope) {
     setClassificationSaving(true);
     try {
       await invoke("set_segment_category", {
-        segmentId,
+        segmentId: segment.id,
         categoryId: categoryId === 0 ? null : categoryId,
-        remember: categoryId === 0 ? false : remember,
+        remember: categoryId !== 0 && scope === "app",
       });
-      if (categoryId !== 0 && remember) await reclassifyHistory();
+      if (categoryId !== 0 && scope === "title") {
+        await invoke<Rule>("create_rule", {
+          matchType: "title",
+          pattern: titleRulePattern(segment.window_title),
+          categoryId,
+          priority: 0,
+        });
+      }
+      if (categoryId !== 0 && scope !== "single") await reclassifyHistory();
       setClassificationTarget(null);
       await loadDashboard();
     } catch (reason: unknown) {
@@ -690,7 +701,7 @@ function DashboardView() {
   function openClassification(segment: Segment, anchor: string) {
     setClassificationTarget({ segmentId: segment.id, anchor });
     setClassificationCategoryId(segment.category_id || 0);
-    setClassificationRemember(false);
+    setClassificationScope("single");
   }
 
   async function saveSettings() {
@@ -835,7 +846,11 @@ function DashboardView() {
     const isOpen = classificationTarget?.segmentId === segment.id && classificationTarget.anchor === anchor;
     const selectedCategory = categoryById.get(classificationCategoryId);
     const appName = cleanAppName(segment.app);
+    const titlePattern = titleRulePattern(segment.window_title);
     const appSegmentCount = isOpen ? segments.filter((item) => item.app === segment.app).length : 0;
+    const titleSegmentCount = isOpen && titlePattern
+      ? segments.filter((item) => item.window_title.toLowerCase().includes(titlePattern.toLowerCase())).length
+      : 0;
     return (
       <div className="category-control" data-classification-root="true">
         <button
@@ -857,7 +872,7 @@ function DashboardView() {
                 onChange={(event) => {
                   const categoryId = Number(event.target.value);
                   setClassificationCategoryId(categoryId);
-                  setClassificationRemember(false);
+                  setClassificationScope("single");
                 }}
               >
                 <option value={0}>{t("common.uncategorized")}</option>
@@ -867,39 +882,65 @@ function DashboardView() {
               </select>
             </label>
             <span className="classification-scope-label">{t("classification.applyTo")}</span>
-            {classificationCategoryId !== 0 && (
-              <label className="classification-option">
-                <input
-                  type="radio"
-                  name={`classification-scope-${anchor}`}
-                  checked={classificationRemember}
-                  onChange={() => setClassificationRemember(true)}
-                />
-                <span>
-                  <strong>{t("classification.always", { app: appName, category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
-                  <small>{t("classification.remember")}</small>
-                  {classificationRemember && (
-                    <small className="classification-warning">
-                      {t("classification.historyWarning", { app: appName, count: appSegmentCount })}
-                    </small>
-                  )}
-                </span>
-              </label>
-            )}
             <label className="classification-option is-default">
               <input
                 type="radio"
                 name={`classification-scope-${anchor}`}
-                checked={!classificationRemember}
-                onChange={() => setClassificationRemember(false)}
+                checked={classificationScope === "single"}
+                onChange={() => setClassificationScope("single")}
               />
               <span><strong>{t("classification.onlySegment")}</strong><small>{t("classification.onlySegmentHint")}</small></span>
             </label>
+            {classificationCategoryId !== 0 && (
+              <>
+                <label className="classification-option">
+                  <input
+                    type="radio"
+                    name={`classification-scope-${anchor}`}
+                    checked={classificationScope === "title"}
+                    disabled={!titlePattern}
+                    onChange={() => setClassificationScope("title")}
+                  />
+                  <span>
+                    <strong>{t("classification.titleAlways", { category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
+                    <small>{t("classification.titleHint")}</small>
+                    {classificationScope === "title" && (
+                      <>
+                        <small className="classification-pattern">
+                          {t("classification.titlePattern")}: <code>{titlePattern}</code>
+                        </small>
+                        <small>{t("classification.titleMatchCount", { count: titleSegmentCount })}</small>
+                        <small className="classification-warning">
+                          {t("classification.titleHistoryWarning", { count: titleSegmentCount })}
+                        </small>
+                      </>
+                    )}
+                  </span>
+                </label>
+                <label className="classification-option">
+                  <input
+                    type="radio"
+                    name={`classification-scope-${anchor}`}
+                    checked={classificationScope === "app"}
+                    onChange={() => setClassificationScope("app")}
+                  />
+                  <span>
+                    <strong>{t("classification.always", { app: appName, category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
+                    <small>{t("classification.remember")}</small>
+                    {classificationScope === "app" && (
+                      <small className="classification-warning">
+                        {t("classification.historyWarning", { app: appName, count: appSegmentCount })}
+                      </small>
+                    )}
+                  </span>
+                </label>
+              </>
+            )}
             <button
               type="button"
               className="classification-apply"
               disabled={classificationSaving}
-              onClick={() => void reclassify(segment.id, classificationCategoryId, classificationRemember)}
+              onClick={() => void reclassify(segment, classificationCategoryId, classificationScope)}
             >
               {classificationSaving ? t("common.saving") : t("common.apply")}
             </button>
