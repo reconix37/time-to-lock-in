@@ -94,6 +94,12 @@ pub struct ReclassificationSummary {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct ClassificationMatchStats {
+    pub match_count: i64,
+    pub manual_count: i64,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct DailyProgressRecord {
     pub local_date: String,
     pub useful_ms: i64,
@@ -267,7 +273,7 @@ pub fn initialize() -> Result<(), String> {
                 )
                 .map_err(|error| error.to_string())?;
         }
-        reclassify_history_in_transaction(&transaction)?;
+        reclassify_history_in_transaction(&transaction, false, None)?;
     }
 
     let crashed_segment_id = transaction
@@ -710,6 +716,8 @@ fn preserve_legacy_manual_categories(transaction: &Transaction<'_>) -> Result<()
 
 fn reclassify_history_in_transaction(
     transaction: &Transaction<'_>,
+    overwrite_manual: bool,
+    manual_rule_scope: Option<(&str, &str)>,
 ) -> Result<ReclassificationSummary, String> {
     let rules = transaction
         .prepare(
@@ -733,18 +741,19 @@ fn reclassify_history_in_transaction(
     let changes = transaction
         .prepare(
             "SELECT id, app, window_title, domain, COALESCE(category_id, 0),
-                    MAX(0, ts_end - ts_start)
-             FROM segments WHERE manual_category = 0",
+                    MAX(0, ts_end - ts_start), manual_category
+             FROM segments WHERE manual_category = 0 OR ?1",
         )
         .map_err(|error| error.to_string())?
-        .query_map([], |row| {
+        .query_map([overwrite_manual], |row| {
             let id = row.get::<_, i64>(0)?;
             let app = row.get::<_, String>(1)?.to_lowercase();
             let title = row.get::<_, String>(2)?;
             let domain = row.get::<_, String>(3)?.to_lowercase();
             let current_category_id = row.get::<_, i64>(4)?;
             let duration_ms = row.get::<_, i64>(5)?;
-            let category_id = rules
+            let manual_category = row.get::<_, i64>(6)?;
+            let rule_category_id = rules
                 .iter()
                 .find(|(match_type, pattern, _)| match match_type.as_str() {
                     "domain" => domain.contains(pattern),
@@ -752,13 +761,36 @@ fn reclassify_history_in_transaction(
                     "exe" => app.starts_with(pattern),
                     _ => false,
                 })
-                .map_or(0, |(_, _, category_id)| *category_id);
-            Ok((id, current_category_id, category_id, duration_ms))
+                .map(|(_, _, category_id)| *category_id);
+            let manual_in_scope =
+                manual_rule_scope.is_none_or(|(match_type, pattern)| match match_type {
+                    "domain" => domain.contains(pattern),
+                    "title" => title_matches(pattern, &title),
+                    "exe" => app.starts_with(pattern),
+                    _ => false,
+                });
+            Ok((
+                id,
+                current_category_id,
+                rule_category_id,
+                duration_ms,
+                manual_category,
+                manual_in_scope,
+            ))
         })
         .map_err(|error| error.to_string())?
         .filter_map(|result| match result {
-            Ok((_, current, category_id, _)) if current == category_id => None,
-            other => Some(other),
+            Ok((id, current, rule_category_id, duration, manual_category, manual_in_scope)) => {
+                let category_id = rule_category_id.unwrap_or(0);
+                if current == category_id
+                    || (manual_category == 1 && (rule_category_id.is_none() || !manual_in_scope))
+                {
+                    None
+                } else {
+                    Some(Ok((id, current, category_id, duration)))
+                }
+            }
+            Err(error) => Some(Err(error)),
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -766,7 +798,7 @@ fn reclassify_history_in_transaction(
     for (segment_id, _, category_id, _) in &changes {
         transaction
             .execute(
-                "UPDATE segments SET category_id = ?1 WHERE id = ?2",
+                "UPDATE segments SET category_id = ?1, manual_category = 0 WHERE id = ?2",
                 params![category_id, segment_id],
             )
             .map_err(|error| error.to_string())?;
@@ -778,13 +810,92 @@ fn reclassify_history_in_transaction(
     })
 }
 
-pub fn reclassify_history(connection: &mut Connection) -> Result<ReclassificationSummary, String> {
+pub fn reclassify_history(
+    connection: &mut Connection,
+    overwrite_manual: bool,
+    manual_match_type: Option<&str>,
+    manual_pattern: Option<&str>,
+) -> Result<ReclassificationSummary, String> {
+    let manual_rule_scope = match (manual_match_type, manual_pattern) {
+        (Some(match_type), Some(pattern))
+            if matches!(match_type, "exe" | "title" | "domain") && !pattern.trim().is_empty() =>
+        {
+            Some((match_type.to_string(), pattern.trim().to_lowercase()))
+        }
+        (None, None) => None,
+        _ => return Err("invalid manual overwrite scope".to_string()),
+    };
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
-    let summary = reclassify_history_in_transaction(&transaction)?;
+    let summary = reclassify_history_in_transaction(
+        &transaction,
+        overwrite_manual,
+        manual_rule_scope
+            .as_ref()
+            .map(|(match_type, pattern)| (match_type.as_str(), pattern.as_str())),
+    )?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(summary)
+}
+
+pub fn classification_match_stats(
+    connection: &Connection,
+    match_type: &str,
+    pattern: &str,
+) -> Result<ClassificationMatchStats, String> {
+    if !matches!(match_type, "exe" | "title" | "domain") {
+        return Err("invalid rule match type".to_string());
+    }
+    let normalized_pattern = pattern.trim().to_lowercase();
+    if normalized_pattern.is_empty() {
+        return Err("rule pattern cannot be empty".to_string());
+    }
+
+    if matches!(match_type, "exe" | "domain") {
+        let filter = if match_type == "exe" {
+            "substr(lower(app), 1, length(?1)) = ?1"
+        } else {
+            "instr(lower(domain), ?1) > 0"
+        };
+        return connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*), COALESCE(SUM(manual_category), 0)
+                     FROM segments WHERE {filter}"
+                ),
+                [&normalized_pattern],
+                |row| {
+                    Ok(ClassificationMatchStats {
+                        match_count: row.get(0)?,
+                        manual_count: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(|error| error.to_string());
+    }
+
+    let mut statement = connection
+        .prepare("SELECT window_title, manual_category FROM segments")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut stats = ClassificationMatchStats {
+        match_count: 0,
+        manual_count: 0,
+    };
+    for row in rows {
+        let (title, manual_category) = row.map_err(|error| error.to_string())?;
+        if title_matches(&normalized_pattern, &title) {
+            stats.match_count += 1;
+            stats.manual_count += i64::from(manual_category == 1);
+        }
+    }
+
+    Ok(stats)
 }
 
 pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecord>, String> {
@@ -1280,7 +1391,8 @@ mod tests {
                 .expect("segment");
         }
 
-        let summary = reclassify_history(&mut connection).expect("reclassification");
+        let summary =
+            reclassify_history(&mut connection, false, None, None).expect("reclassification");
 
         assert_eq!(summary.changed_segments, 4);
         assert_eq!(summary.changed_duration_ms, 2_400_000);
@@ -1320,6 +1432,75 @@ mod tests {
     }
 
     #[test]
+    fn counts_matching_manual_segments_and_can_repaint_them() {
+        let mut connection = score_schema();
+        for (id, name, kind) in [(1, "Work", "useful"), (3, "Brainrot", "waste")] {
+            connection
+                .execute(
+                    "INSERT INTO categories (id, name, color, kind, created_at)
+                     VALUES (?1, ?2, '#000000', ?3, 0)",
+                    params![id, name, kind],
+                )
+                .expect("category");
+        }
+        connection
+            .execute(
+                "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
+                 VALUES ('title', 'Игра престолов 4 сезон', 1, 0, 0)",
+                [],
+            )
+            .expect("rule");
+        connection
+            .execute(
+                "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
+                 VALUES ('title', 'Игра престолов 5 сезон', 1, 0, 0)",
+                [],
+            )
+            .expect("unrelated rule");
+        for (title, manual_category) in [
+            ("Игра престолов 4 сезон 2 серия", 1),
+            ("Игра престолов 4 сезон 3 серия", 0),
+            ("Игра престолов 5 сезон 2 серия", 1),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO segments (
+                        ts_start, ts_end, app, window_title, category_id, status,
+                        manual_category
+                     ) VALUES (0, 60000, 'browser.exe', ?1, 3, 'crashed', ?2)",
+                    params![title, manual_category],
+                )
+                .expect("segment");
+        }
+
+        let counts = classification_match_stats(&connection, "title", "Игра престолов 4 сезон")
+            .expect("match stats");
+        assert_eq!(counts.match_count, 2);
+        assert_eq!(counts.manual_count, 1);
+        let app_counts =
+            classification_match_stats(&connection, "exe", "browser.exe").expect("app match stats");
+        assert_eq!(app_counts.match_count, 3);
+        assert_eq!(app_counts.manual_count, 2);
+
+        let summary = reclassify_history(
+            &mut connection,
+            true,
+            Some("title"),
+            Some("игра престолов 4 сезон"),
+        )
+        .expect("reclassification");
+        assert_eq!(summary.changed_segments, 2);
+        let classifications = connection
+            .prepare("SELECT category_id, manual_category FROM segments ORDER BY id")
+            .expect("query")
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("classifications");
+        assert_eq!(classifications, vec![(1, 0), (1, 0), (3, 1)]);
+    }
+
+    #[test]
     fn reclassifies_episode_variants_within_the_same_season() {
         let mut connection = score_schema();
         connection
@@ -1350,7 +1531,7 @@ mod tests {
                 .expect("segment");
         }
 
-        reclassify_history(&mut connection).expect("reclassification");
+        reclassify_history(&mut connection, false, None, None).expect("reclassification");
 
         let categories = connection
             .prepare("SELECT category_id FROM segments ORDER BY id")

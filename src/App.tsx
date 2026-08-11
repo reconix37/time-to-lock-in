@@ -98,6 +98,16 @@ interface ReclassificationSummary {
   changed_duration_ms: number;
 }
 
+interface ClassificationMatchStats {
+  match_count: number;
+  manual_count: number;
+}
+
+interface ManualRuleScope {
+  matchType: RuleMatchType;
+  pattern: string;
+}
+
 interface UpdateInfo {
   version: string;
 }
@@ -213,6 +223,8 @@ function DashboardView() {
   const [classificationCategoryId, setClassificationCategoryId] = useState(0);
   const [classificationScope, setClassificationScope] = useState<ClassificationScope>("single");
   const [classificationSaving, setClassificationSaving] = useState(false);
+  const [classificationMatchStats, setClassificationMatchStats] = useState<ClassificationMatchStats | null>(null);
+  const [overwriteManual, setOverwriteManual] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -401,6 +413,40 @@ function DashboardView() {
     };
   }, [classificationTarget, classificationSaving]);
 
+  const classificationSegment = classificationTarget
+    ? segments.find((item) => item.id === classificationTarget.segmentId)
+    : undefined;
+  const classificationMatchType = classificationScope === "title"
+    ? "title"
+    : classificationScope === "app" ? "exe" : null;
+  const classificationPattern = classificationSegment && classificationMatchType
+    ? classificationMatchType === "title"
+      ? titleRulePattern(classificationSegment.window_title)
+      : classificationSegment.app
+    : "";
+
+  useEffect(() => {
+    if (!classificationTarget || !classificationMatchType || !classificationPattern) {
+      setClassificationMatchStats(null);
+      return;
+    }
+    let active = true;
+    setClassificationMatchStats(null);
+    void invoke<ClassificationMatchStats>("get_classification_match_stats", {
+      matchType: classificationMatchType,
+      pattern: classificationPattern,
+    })
+      .then((stats) => {
+        if (active) setClassificationMatchStats(stats);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(typeof reason === "string" ? reason : t("error.loadData"));
+      });
+    return () => {
+      active = false;
+    };
+  }, [classificationMatchType, classificationPattern, classificationTarget, t]);
+
   const categoryById = useMemo(
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
@@ -469,8 +515,15 @@ function DashboardView() {
     }
   }
 
-  async function reclassifyHistory(): Promise<void> {
-    const summary = await invoke<ReclassificationSummary>("reclassify_history");
+  async function reclassifyHistory(
+    overwriteManualCategories: boolean,
+    manualRuleScope?: ManualRuleScope,
+  ): Promise<void> {
+    const summary = await invoke<ReclassificationSummary>("reclassify_history", {
+      overwriteManual: overwriteManualCategories,
+      manualMatchType: manualRuleScope?.matchType ?? null,
+      manualPattern: manualRuleScope?.pattern ?? null,
+    });
     const totalMinutes = Math.floor(summary.changed_duration_ms / 60_000);
     setManagerNotice(t("toast.history", { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }));
   }
@@ -491,7 +544,13 @@ function DashboardView() {
           priority: 0,
         });
       }
-      if (categoryId !== 0 && scope !== "single") await reclassifyHistory();
+      if (categoryId !== 0 && scope !== "single") {
+        const manualRuleScope: ManualRuleScope | undefined = overwriteManual ? {
+          matchType: scope === "title" ? "title" : "exe",
+          pattern: scope === "title" ? titleRulePattern(segment.window_title) : segment.app,
+        } : undefined;
+        await reclassifyHistory(overwriteManual, manualRuleScope);
+      }
       setClassificationTarget(null);
       await loadDashboard();
     } catch (reason: unknown) {
@@ -621,7 +680,7 @@ function DashboardView() {
         color: newCategoryColor,
         kind: newCategoryKind,
       });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setCategories((current) => [...current, category]);
       if (newRuleCategoryId === null) setNewRuleCategoryId(category.id);
       setNewCategoryName("");
@@ -642,7 +701,7 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("delete_category", { id: category.id });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setCategories((current) => current.filter((item) => item.id !== category.id));
       setRules((current) => current.filter((rule) => rule.category_id !== category.id));
       if (newRuleCategoryId === category.id) {
@@ -665,7 +724,7 @@ function DashboardView() {
         name: category.name,
         kind: category.kind,
       });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setCategories((current) => current.map((item) => item.id === updated.id ? updated : item));
       await loadDashboard();
     } catch (reason: unknown) {
@@ -696,7 +755,7 @@ function DashboardView() {
         categoryId: newRuleCategoryId,
         priority,
       });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setRules((current) => [...current, rule].sort((left, right) =>
         right.priority - left.priority
           || RULE_TYPE_PRIORITY[right.match_type] - RULE_TYPE_PRIORITY[left.match_type]
@@ -717,7 +776,7 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("delete_rule", { id: ruleId });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setRules((current) => current.filter((rule) => rule.id !== ruleId));
     } catch (reason: unknown) {
       setManagerError(typeof reason === "string" ? reason : t("error.deleteRule"));
@@ -731,12 +790,26 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("update_rule", { id: ruleId, categoryId });
-      await reclassifyHistory();
+      await reclassifyHistory(false);
       setRules((current) => current.map((rule) =>
         rule.id === ruleId ? { ...rule, category_id: categoryId } : rule,
       ));
     } catch (reason: unknown) {
       setManagerError(typeof reason === "string" ? reason : t("error.changeRule"));
+    } finally {
+      setManagerSaving(false);
+    }
+  }
+
+  async function repaintAllHistory() {
+    if (!window.confirm(t("manager.confirmRepaintAll"))) return;
+    setManagerSaving(true);
+    setManagerError(null);
+    try {
+      await reclassifyHistory(true);
+      await loadDashboard();
+    } catch (reason: unknown) {
+      setManagerError(typeof reason === "string" ? reason : t("error.repaintHistory"));
     } finally {
       setManagerSaving(false);
     }
@@ -781,6 +854,8 @@ function DashboardView() {
     setClassificationTarget({ segmentId: segment.id, anchor });
     setClassificationCategoryId(segment.category_id || 0);
     setClassificationScope("single");
+    setClassificationMatchStats(null);
+    setOverwriteManual(false);
   }
 
   async function saveSettings() {
@@ -926,10 +1001,26 @@ function DashboardView() {
     const selectedCategory = categoryById.get(classificationCategoryId);
     const appName = cleanAppName(segment.app);
     const titlePattern = titleRulePattern(segment.window_title);
-    const appSegmentCount = isOpen ? segments.filter((item) => item.app === segment.app).length : 0;
-    const titleSegmentCount = isOpen && titlePattern
-      ? segments.filter((item) => item.window_title.toLowerCase().includes(titlePattern.toLowerCase())).length
-      : 0;
+    const matchCount = classificationMatchStats?.match_count;
+    const manualCount = classificationMatchStats?.manual_count ?? 0;
+    const manualOverrideControl = manualCount > 0 ? (
+      <div className="classification-manual">
+        <small>{t("classification.manualNote", { count: manualCount })}</small>
+        <label>
+          <input
+            type="checkbox"
+            checked={overwriteManual}
+            onChange={(event) => setOverwriteManual(event.target.checked)}
+          />
+          <span>{t("classification.overwriteManual")}</span>
+        </label>
+        <small className="classification-warning">
+          {overwriteManual
+            ? t("classification.manualWillRepaint", { count: manualCount })
+            : t("classification.manualWontRepaint", { count: manualCount })}
+        </small>
+      </div>
+    ) : null;
     return (
       <div className="category-control" data-classification-root="true">
         <button
@@ -952,6 +1043,8 @@ function DashboardView() {
                   const categoryId = Number(event.target.value);
                   setClassificationCategoryId(categoryId);
                   setClassificationScope("single");
+                  setClassificationMatchStats(null);
+                  setOverwriteManual(false);
                 }}
               >
                 <option value={0}>{t("common.uncategorized")}</option>
@@ -978,7 +1071,11 @@ function DashboardView() {
                     name={`classification-scope-${anchor}`}
                     checked={classificationScope === "title"}
                     disabled={!titlePattern}
-                    onChange={() => setClassificationScope("title")}
+                    onChange={() => {
+                      setClassificationScope("title");
+                      setClassificationMatchStats(null);
+                      setOverwriteManual(false);
+                    }}
                   />
                   <span>
                     <strong>{t("classification.titleAlways", { category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
@@ -988,37 +1085,51 @@ function DashboardView() {
                         <small className="classification-pattern">
                           {t("classification.titlePattern")}: <code>{titlePattern}</code>
                         </small>
-                        <small>{t("classification.titleMatchCount", { count: titleSegmentCount })}</small>
-                        <small className="classification-warning">
-                          {t("classification.titleHistoryWarning", { count: titleSegmentCount })}
-                        </small>
+                        {matchCount === undefined ? (
+                          <small>{t("common.loading")}</small>
+                        ) : (
+                          <>
+                            <small>{t("classification.titleMatchCount", { count: matchCount })}</small>
+                            <small className="classification-warning">
+                              {t("classification.titleHistoryWarning", { count: matchCount })}
+                            </small>
+                          </>
+                        )}
                       </>
                     )}
                   </span>
                 </label>
+                {classificationScope === "title" && manualOverrideControl}
                 <label className="classification-option">
                   <input
                     type="radio"
                     name={`classification-scope-${anchor}`}
                     checked={classificationScope === "app"}
-                    onChange={() => setClassificationScope("app")}
+                    onChange={() => {
+                      setClassificationScope("app");
+                      setClassificationMatchStats(null);
+                      setOverwriteManual(false);
+                    }}
                   />
                   <span>
                     <strong>{t("classification.always", { app: appName, category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
                     <small>{t("classification.remember")}</small>
-                    {classificationScope === "app" && (
+                    {classificationScope === "app" && (matchCount === undefined ? (
+                      <small>{t("common.loading")}</small>
+                    ) : (
                       <small className="classification-warning">
-                        {t("classification.historyWarning", { app: appName, count: appSegmentCount })}
+                        {t("classification.historyWarning", { app: appName, count: matchCount })}
                       </small>
-                    )}
+                    ))}
                   </span>
                 </label>
+                {classificationScope === "app" && manualOverrideControl}
               </>
             )}
             <button
               type="button"
               className="classification-apply"
-              disabled={classificationSaving}
+              disabled={classificationSaving || (classificationScope !== "single" && matchCount === undefined)}
               onClick={() => void reclassify(segment, classificationCategoryId, classificationScope)}
             >
               {classificationSaving ? t("common.saving") : t("common.apply")}
@@ -1504,17 +1615,27 @@ function DashboardView() {
                 <div role="tabpanel">
                   <div className="manager-toolbar">
                     <p>{t("manager.ruleCount", { count: rules.length })}</p>
-                    <button
-                      type="button"
-                      className="manager-add-button"
-                      disabled={manageableCategories.length === 0}
-                      onClick={() => {
-                        setRuleFormOpen((open) => !open);
-                        if (newRuleCategoryId === null) setNewRuleCategoryId(manageableCategories[0]?.id ?? null);
-                      }}
-                    >
-                      {t("manager.addRule")}
-                    </button>
+                    <div className="manager-toolbar-actions">
+                      <button
+                        type="button"
+                        className="manager-add-button"
+                        disabled={managerSaving || rules.length === 0}
+                        onClick={() => void repaintAllHistory()}
+                      >
+                        {t("manager.repaintAll")}
+                      </button>
+                      <button
+                        type="button"
+                        className="manager-add-button"
+                        disabled={manageableCategories.length === 0}
+                        onClick={() => {
+                          setRuleFormOpen((open) => !open);
+                          if (newRuleCategoryId === null) setNewRuleCategoryId(manageableCategories[0]?.id ?? null);
+                        }}
+                      >
+                        {t("manager.addRule")}
+                      </button>
+                    </div>
                   </div>
 
                   {ruleFormOpen && (

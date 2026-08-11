@@ -201,6 +201,12 @@ struct ReclassificationSummary {
 }
 
 #[derive(Serialize)]
+struct ClassificationMatchStats {
+    match_count: i64,
+    manual_count: i64,
+}
+
+#[derive(Serialize)]
 struct ImportedChallenge {
     code: String,
     useful_goal_min: i64,
@@ -1028,12 +1034,34 @@ fn set_segment_category(
 }
 
 #[tauri::command]
-fn reclassify_history() -> Result<ReclassificationSummary, String> {
+fn reclassify_history(
+    overwrite_manual: bool,
+    manual_match_type: Option<String>,
+    manual_pattern: Option<String>,
+) -> Result<ReclassificationSummary, String> {
     let mut connection = db::open()?;
-    let summary = db::reclassify_history(&mut connection)?;
+    let summary = db::reclassify_history(
+        &mut connection,
+        overwrite_manual,
+        manual_match_type.as_deref(),
+        manual_pattern.as_deref(),
+    )?;
     Ok(ReclassificationSummary {
         changed_segments: summary.changed_segments,
         changed_duration_ms: summary.changed_duration_ms,
+    })
+}
+
+#[tauri::command]
+fn get_classification_match_stats(
+    match_type: String,
+    pattern: String,
+) -> Result<ClassificationMatchStats, String> {
+    let connection = db::open()?;
+    let stats = db::classification_match_stats(&connection, &match_type, &pattern)?;
+    Ok(ClassificationMatchStats {
+        match_count: stats.match_count,
+        manual_count: stats.manual_count,
     })
 }
 
@@ -1312,6 +1340,7 @@ pub fn run() {
             set_setting,
             set_segment_category,
             reclassify_history,
+            get_classification_match_stats,
             get_db_size_mb,
             get_apps_today,
             set_tracking_paused,

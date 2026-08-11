@@ -191,6 +191,7 @@ button:focus-visible {
 .manager-loading { min-height: 280px; border-radius: var(--radius-sm); }
 .manager-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .manager-toolbar p { margin: 0; color: var(--subtle); font: 11px var(--font-mono); }
+.manager-toolbar-actions { display: flex; gap: 8px; }
 .manager-add-button, .manager-cancel-button {
   padding: 7px 12px;
   border: var(--border);
@@ -339,6 +340,11 @@ button:focus-visible {
 .classification-option .classification-pattern { margin-top: 8px; font-family: var(--font-mono); overflow-wrap: anywhere; }
 .classification-pattern code { font: inherit; }
 .classification-option .classification-warning { margin-top: 6px; color: var(--muted); }
+.classification-manual { display: grid; gap: 4px; margin: 0 8px 4px 32px; color: var(--muted); }
+.classification-manual > small { font-size: 12px; }
+.classification-manual > label { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 12px; cursor: pointer; }
+.classification-manual input { margin: 0; accent-color: var(--iris); }
+.classification-manual .classification-warning { color: var(--warn); }
 .classification-apply { justify-self: end; padding: 7px 12px; border: 0; border-radius: var(--radius-sm); background: var(--love); color: var(--bg); cursor: pointer; }
 .classification-apply:hover { background: var(--love-hover); }
 .classification-apply:disabled { cursor: default; opacity: .6; }
