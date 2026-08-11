@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
+import { formatObservedClock, getMiniVerdict } from "./miniVerdict";
 
 type CategoryKind = "useful" | "neutral" | "waste";
-
-const DEFAULT_KIND_LABELS: Record<CategoryKind, string> = {
-  useful: "Полезное",
-  neutral: "Нейтральное",
-  waste: "Потери",
-};
 
 interface LiveSegment {
   id: number;
@@ -25,44 +20,46 @@ interface LiveSegment {
   is_uncategorized: boolean;
 }
 
-interface BulletBarProps {
+type ContextIdentity = Pick<LiveSegment, "app" | "window_title" | "domain">;
+
+type BulletBarProps = {
   kind: "useful" | "neutral" | "waste";
   label: string;
   valueMs: number;
-  thresholdMin: number;
-}
-
-function formatClock(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  const hours = Math.floor(seconds / 3_600);
-  const minutes = Math.floor(seconds % 3_600 / 60);
-  const remainder = seconds % 60;
-  return [hours, minutes, remainder].map((value) => value.toString().padStart(2, "0")).join(":");
-}
+} & ({ threshold: { minutes: number; label: string } } | { threshold?: undefined });
 
 function cleanAppName(app: string): string {
   return app.replace(/\.exe$/i, "");
 }
 
-function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
+function sameContext(previous: ContextIdentity, next: ContextIdentity): boolean {
+  return previous.app === next.app
+    && previous.window_title === next.window_title
+    && previous.domain === next.domain;
+}
+
+function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
   const { t } = useI18n();
-  const thresholdMs = thresholdMin * 60_000;
-  const scaleMs = Math.max(thresholdMs * 1.25, valueMs, 1);
-  const fill = thresholdMs === 0 ? (valueMs > 0 ? 100 : 0) : Math.min(100, valueMs / scaleMs * 100);
-  const tick = Math.min(100, thresholdMs / scaleMs * 100);
+  const thresholdMs = threshold === undefined ? null : threshold.minutes * 60_000;
+  const scaleMs = thresholdMs === null ? Math.max(valueMs, 1) : Math.max(thresholdMs * 1.25, valueMs, 1);
+  const overflowedWaste = kind === "waste" && thresholdMs !== null && valueMs > thresholdMs;
+  const fill = overflowedWaste ? 100 : Math.min(100, valueMs / scaleMs * 100);
+  const tick = thresholdMs === null ? null : Math.min(100, thresholdMs / scaleMs * 100);
+  const valueMin = Math.floor(valueMs / 60_000);
 
   return (
     <div className={`mini-bullet kind-${kind}`}>
       <div className="mini-bullet-copy">
         <span>{label}</span>
         <strong>
-          {Math.floor(valueMs / 60_000)}{t("common.minutesShort")}
-          {thresholdMs > 0 && <small> / {thresholdMin}{t("common.minutesShort")}</small>}
+          {threshold === undefined
+            ? t("mini.minutes", { minutes: valueMin })
+            : <>{valueMin} / {threshold.minutes} <small>· {threshold.label}</small></>}
         </strong>
       </div>
       <div className="mini-bullet-rail" aria-hidden="true">
         <i style={{ width: `${fill}%` }} />
-        {thresholdMs > 0 && <span style={{ left: `${tick}%` }} />}
+        {tick !== null && <span style={{ left: `${tick}%` }} />}
       </div>
     </div>
   );
@@ -70,13 +67,24 @@ function BulletBar({ kind, label, valueMs, thresholdMin }: BulletBarProps) {
 
 export function MiniView() {
   const { lang, t } = useI18n();
+  const defaultKindLabels: Record<CategoryKind, string> = {
+    useful: t("mini.defaultUseful"),
+    neutral: t("mini.defaultNeutral"),
+    waste: t("mini.defaultWaste"),
+  };
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
   const [pinned, setPinned] = useState(true);
-  const [kindLabels, setKindLabels] = useState(DEFAULT_KIND_LABELS);
-  const [now, setNow] = useState(Date.now());
+  const [kindLabels, setKindLabels] = useState(defaultKindLabels);
+  const [loaded, setLoaded] = useState(false);
+  const [showSwitchExplanation, setShowSwitchExplanation] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previousContext = useRef<ContextIdentity | null>(null);
+  const explanationHandled = useRef(false);
+  const explanationNeedsPersistence = useRef(false);
+  const explanationSaveInFlight = useRef(false);
+  const explanationTimer = useRef<number | null>(null);
 
   const loadMini = useCallback(async () => {
     try {
@@ -91,14 +99,46 @@ export function MiniView() {
       setPaused(trackingPaused);
       setPinned(settings.mini_pinned === "1");
       setKindLabels({
-        useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
-        neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
-        waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
+        useful: settings.kind_label_useful ?? defaultKindLabels.useful,
+        neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
+        waste: settings.kind_label_waste ?? defaultKindLabels.waste,
       });
+      if (settings.mini_observed_explained_v1 === "1") {
+        explanationHandled.current = true;
+        explanationNeedsPersistence.current = false;
+      } else if (
+        !explanationHandled.current
+        && previousContext.current !== null
+        && nextLiveSegment !== null
+        && !sameContext(previousContext.current, nextLiveSegment)
+      ) {
+        explanationHandled.current = true;
+        explanationNeedsPersistence.current = true;
+        setShowSwitchExplanation(true);
+        if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
+        explanationTimer.current = window.setTimeout(() => setShowSwitchExplanation(false), 4_500);
+      }
+      if (nextLiveSegment !== null) previousContext.current = nextLiveSegment;
+      if (explanationNeedsPersistence.current && !explanationSaveInFlight.current) {
+        explanationSaveInFlight.current = true;
+        void invoke("set_setting", { key: "mini_observed_explained_v1", value: "1" })
+          .then(() => {
+            explanationNeedsPersistence.current = false;
+          })
+          .catch((reason: unknown) => {
+            setError(typeof reason === "string" ? reason : t("error.saveSettings"));
+          })
+          .finally(() => {
+            explanationSaveInFlight.current = false;
+          });
+      }
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
+      setLiveSegment(null);
       setError(typeof reason === "string" ? reason : t("error.miniRefresh"));
+    } finally {
+      setLoaded(true);
     }
   }, [t]);
 
@@ -106,18 +146,11 @@ export function MiniView() {
     void invoke("fix_mini_window");
     void loadMini();
     const refresh = window.setInterval(() => void loadMini(), 5_000);
-    const clock = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => {
       window.clearInterval(refresh);
-      window.clearInterval(clock);
+      if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
     };
   }, [loadMini]);
-
-  const rankProgress = useMemo(() => {
-    if (!progress || progress.next_rank_threshold === null) return 100;
-    const span = progress.next_rank_threshold - progress.current_rank_threshold;
-    return Math.min(100, Math.max(0, (progress.lifetime_xp - progress.current_rank_threshold) / span * 100));
-  }, [progress]);
 
   async function toggleTracking(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -145,7 +178,31 @@ export function MiniView() {
   }
 
   const away = liveSegment?.status === "away";
-  const sessionMs = liveSegment ? now - liveSegment.ts_start : 0;
+  const verdict = progress ? getMiniVerdict({
+    usefulMs: progress.today.useful_ms,
+    wasteMs: progress.today.waste_ms,
+    observedMs: progress.today.observed_ms,
+    usefulGoalMin: progress.today.useful_goal_min,
+    wasteLimitMin: progress.today.waste_limit_min,
+    observedMin: progress.today.observed_min,
+    usefulLabel: kindLabels.useful,
+    wasteLabel: kindLabels.waste,
+  }) : null;
+  const verdictText = showSwitchExplanation
+    ? t("mini.switchExplanation")
+    : verdict ? t(verdict.key, verdict.vars) : t("mini.verdictInProgress");
+  const currentState = paused
+    ? t("mini.trackingPaused")
+    : !loaded
+      ? t("mini.determiningWindow")
+      : away
+        ? t("mini.nowBreak")
+        : liveSegment
+          ? t("mini.nowCategory", {
+              app: cleanAppName(liveSegment.app),
+              category: liveSegment.is_uncategorized ? t("common.uncategorized") : liveSegment.category_name,
+            })
+          : t("mini.noActiveWindow");
 
   return (
     <main className="mini-shell">
@@ -156,32 +213,34 @@ export function MiniView() {
           if (event.button === 0) void invoke("start_mini_drag");
         }}
       >
-        <span className={`mini-pulse ${away ? "is-away" : liveSegment && !paused ? "is-live" : ""}`} />
-        <span>{away ? t("common.afk") : paused ? t("dashboard.pause") : liveSegment ? cleanAppName(liveSegment.app) : "TTLI"}</span>
+        <span className="mini-brand">TTLI</span>
+        <span className={`mini-pulse ${paused ? "" : away ? "is-away" : liveSegment ? "is-live" : ""}`} />
         <i aria-hidden="true">•••</i>
       </div>
 
-      <section className="mini-session" aria-label={t("mini.currentSession")}>
-        <strong>{formatClock(sessionMs)}</strong>
-        <span>{liveSegment ? (liveSegment.is_uncategorized ? t("common.uncategorized") : liveSegment.category_name) : paused ? t("mini.trackingPaused") : t("mini.waitingWindow")}</span>
+      <section className="mini-hero" aria-label={t("mini.observedToday")}>
+        <span>{t("mini.observedToday")}</span>
+        <strong>{formatObservedClock(progress?.today.observed_ms ?? 0)}</strong>
       </section>
+
+      <p className={`mini-verdict${showSwitchExplanation ? " is-explanation" : ""}`} title={verdictText}>{verdictText}</p>
 
       {progress ? (
         <section className="mini-metrics" aria-label={t("mini.dayProgress")}>
-          <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} thresholdMin={progress.today.useful_goal_min} />
-          <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} thresholdMin={progress.today.waste_limit_min} />
-          <BulletBar kind="neutral" label={kindLabels.neutral} valueMs={progress.today.neutral_ms} thresholdMin={0} />
-          <div className="mini-rank">
-            <span>{progress.current_rank}</span>
-            <div aria-hidden="true"><i style={{ width: `${rankProgress}%` }} /></div>
-            <strong>{progress.lifetime_xp.toLocaleString(localeForLang(lang))} XP</strong>
-          </div>
+          <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} threshold={{ minutes: progress.today.useful_goal_min, label: t("mini.goalSuffix") }} />
+          <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} threshold={{ minutes: progress.today.waste_limit_min, label: t("mini.limitSuffix") }} />
+          <BulletBar kind="neutral" label={kindLabels.neutral} valueMs={progress.today.neutral_ms} />
         </section>
       ) : <div className="mini-loading" aria-label={t("common.loading")} />}
+
+      <p className="mini-current" title={currentState}>{currentState}</p>
 
       {error && <p className="mini-error">{error}</p>}
 
       <footer className="mini-actions">
+        <span className="mini-rank">
+          {progress ? `${progress.current_rank} · ${progress.lifetime_xp.toLocaleString(localeForLang(lang))} XP` : "—"}
+        </span>
         <button type="button" onClick={(event) => void toggleTracking(event)}>{paused ? t("dashboard.continue") : t("dashboard.pause")}</button>
         <button type="button" onClick={() => void invoke("show_dashboard")}>{t("mini.dashboard")}</button>
         <button

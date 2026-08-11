@@ -954,7 +954,9 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
         "language" => matches!(value.as_str(), "ru" | "ua" | "en"),
         "currency" => matches!(value.as_str(), "₴" | "$" | "€" | "₽"),
-        "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
+        "onboarding_done" | "tray_only" | "mini_observed_explained_v1" => {
+            matches!(value.as_str(), "0" | "1")
+        }
         "last_day_print_seen" => local_date_format_is_valid(&value),
         "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" | "kind_label_observed" => {
             !value.trim().is_empty() && value.chars().count() <= 80
