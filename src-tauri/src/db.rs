@@ -28,6 +28,21 @@ pub struct DailyProgressRecord {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct DailySeriesRecord {
+    pub local_date: String,
+    pub useful_ms: i64,
+    pub neutral_ms: i64,
+    pub waste_ms: i64,
+    pub observed_ms: i64,
+    pub useful_goal_min: i64,
+    pub waste_limit_min: i64,
+    pub observed_min: i64,
+    pub passed: bool,
+    pub useful_xp: i64,
+    pub useful_ma_7d_ms: i64,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct CumulativePointRecord {
     pub timestamp_ms: i64,
     pub hour: i64,
@@ -435,7 +450,8 @@ pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecor
                        SUM(CASE WHEN c.kind = 'waste' THEN ds.duration_ms ELSE 0 END) AS waste_ms
                 FROM daily_stats ds
                 LEFT JOIN categories c ON c.id = ds.category_id
-                WHERE ds.local_date < date('now', 'localtime')
+                WHERE ds.local_date BETWEEN date('now', 'localtime', '-' || (?1 - 1) || ' days')
+                                        AND date('now', 'localtime', '-1 day')
                 GROUP BY ds.local_date
              ), today AS (
                 SELECT o.local_date,
@@ -476,6 +492,95 @@ pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecor
                 useful_goal_min: row.get(4)?,
                 waste_limit_min: row.get(5)?,
                 observed_min: row.get(6)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(records)
+}
+
+pub fn daily_series(connection: &Connection, days: i64) -> Result<Vec<DailySeriesRecord>, String> {
+    if !(1..=366).contains(&days) {
+        return Err("days must be between 1 and 366".to_string());
+    }
+
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE calendar(local_date, position) AS (
+                SELECT date('now', 'localtime', '-' || (?1 - 1) || ' days'), 0
+                UNION ALL
+                SELECT date(local_date, '+1 day'), position + 1
+                FROM calendar WHERE position < ?1 - 1
+             ), historical AS (
+                SELECT ds.local_date,
+                       SUM(CASE WHEN c.kind = 'useful' THEN ds.duration_ms ELSE 0 END) AS useful_ms,
+                       SUM(CASE WHEN c.kind = 'neutral' THEN ds.duration_ms ELSE 0 END) AS neutral_ms,
+                       SUM(CASE WHEN c.kind = 'waste' THEN ds.duration_ms ELSE 0 END) AS waste_ms
+                FROM daily_stats ds
+                LEFT JOIN categories c ON c.id = ds.category_id
+                WHERE ds.local_date < date('now', 'localtime')
+                GROUP BY ds.local_date
+             ), today AS (
+                SELECT o.local_date,
+                       SUM(CASE WHEN c.kind = 'useful' THEN o.duration_ms ELSE 0 END) AS useful_ms,
+                       SUM(CASE WHEN c.kind = 'neutral' THEN o.duration_ms ELSE 0 END) AS neutral_ms,
+                       SUM(CASE WHEN c.kind = 'waste' THEN o.duration_ms ELSE 0 END) AS waste_ms
+                FROM segment_day_overlaps o
+                LEFT JOIN categories c ON c.id = o.category_id
+                WHERE o.local_date = date('now', 'localtime')
+                GROUP BY o.local_date
+             ), totals AS (
+                SELECT * FROM historical UNION ALL SELECT * FROM today
+             ), filled AS (
+                SELECT calendar.local_date,
+                       COALESCE(totals.useful_ms, 0) AS useful_ms,
+                       COALESCE(totals.neutral_ms, 0) AS neutral_ms,
+                       COALESCE(totals.waste_ms, 0) AS waste_ms,
+                       goals.useful_goal_min,
+                       goals.waste_limit_min,
+                       goals.observed_min
+                FROM calendar
+                LEFT JOIN totals ON totals.local_date = calendar.local_date
+                JOIN goal_history goals ON goals.effective_local_date = (
+                    SELECT MAX(history.effective_local_date)
+                    FROM goal_history history
+                    WHERE history.effective_local_date <= calendar.local_date
+                )
+             )
+             SELECT local_date,
+                    useful_ms,
+                    neutral_ms,
+                    waste_ms,
+                    useful_ms + neutral_ms + waste_ms AS observed_ms,
+                    useful_goal_min,
+                    waste_limit_min,
+                    observed_min,
+                    useful_ms >= useful_goal_min * 60000
+                        AND waste_ms <= waste_limit_min * 60000
+                        AND useful_ms + neutral_ms + waste_ms >= observed_min * 60000 AS passed,
+                    useful_ms / 60000 AS useful_xp,
+                    CAST(AVG(useful_ms) OVER (
+                        ORDER BY local_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+                    ) AS INTEGER) AS useful_ma_7d_ms
+             FROM filled
+             ORDER BY local_date",
+        )
+        .map_err(|error| error.to_string())?;
+    let records = statement
+        .query_map([days], |row| {
+            Ok(DailySeriesRecord {
+                local_date: row.get(0)?,
+                useful_ms: row.get(1)?,
+                neutral_ms: row.get(2)?,
+                waste_ms: row.get(3)?,
+                observed_ms: row.get(4)?,
+                useful_goal_min: row.get(5)?,
+                waste_limit_min: row.get(6)?,
+                observed_min: row.get(7)?,
+                passed: row.get::<_, i64>(8)? != 0,
+                useful_xp: row.get(9)?,
+                useful_ma_7d_ms: row.get(10)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -594,8 +699,8 @@ pub fn today_cumulative(
 #[cfg(test)]
 mod tests {
     use super::{
-        progress_series, refresh_daily_stats, segment_local_dates, set_setting, today_cumulative,
-        upsert_exe_rule, MIGRATION_001, MIGRATION_002,
+        daily_series, progress_series, refresh_daily_stats, segment_local_dates, set_setting,
+        today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002,
     };
     use rusqlite::{params, Connection};
 
@@ -896,6 +1001,74 @@ mod tests {
                 .useful_goal_min,
             180,
             "today uses the new goal"
+        );
+    }
+
+    #[test]
+    fn daily_series_zero_fills_dates_and_joins_effective_goals() {
+        let connection = score_schema();
+        connection
+            .execute(
+                "INSERT INTO goal_history (
+                    effective_local_date, useful_goal_min, waste_limit_min, observed_min
+                 ) VALUES (date('now', 'localtime', '-2 days'), 180, 45, 90)",
+                [],
+            )
+            .expect("historical goal");
+        connection
+            .execute(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Work', '#000000', 'useful', 0)",
+                [],
+            )
+            .expect("category");
+        connection
+            .execute(
+                "INSERT INTO daily_stats (local_date, category_id, duration_ms, xp)
+                 VALUES (date('now', 'localtime', '-1 day'), 1, 10800000, 180)",
+                [],
+            )
+            .expect("daily stats");
+
+        let series = daily_series(&connection, 4).expect("daily series");
+
+        assert_eq!(series.len(), 4);
+        assert_eq!(series[0].useful_ms, 0, "missing dates are zero-filled");
+        assert_eq!(series[1].useful_goal_min, 180);
+        assert_eq!(series[1].waste_limit_min, 45);
+        assert_eq!(series[1].observed_min, 90);
+        assert_eq!(series[2].useful_xp, 180);
+        assert_eq!(series[2].observed_ms, 10_800_000);
+        assert!(series[2].passed);
+    }
+
+    #[test]
+    fn daily_series_uses_six_lead_in_days_for_the_first_displayed_average() {
+        let connection = score_schema();
+        connection
+            .execute(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Work', '#000000', 'useful', 0)",
+                [],
+            )
+            .expect("category");
+        for offset in 29..=35 {
+            connection
+                .execute(
+                    "INSERT INTO daily_stats (local_date, category_id, duration_ms, xp)
+                     VALUES (date('now', 'localtime', '-' || ?1 || ' days'), 1, ?2, ?2 / 60000)",
+                    params![offset, (36 - offset) * 60_000],
+                )
+                .expect("daily stats");
+        }
+
+        let source = daily_series(&connection, 36).expect("36 source days");
+
+        assert_eq!(source.len(), 36);
+        assert_eq!(
+            source[6].useful_ma_7d_ms,
+            4 * 60_000,
+            "index 6 is the first displayed day and averages all seven source days"
         );
     }
 }

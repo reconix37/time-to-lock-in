@@ -61,6 +61,21 @@ struct TodayCumulative {
     waste_limit_min: i64,
 }
 
+#[derive(Serialize)]
+struct DailySeriesDay {
+    local_date: String,
+    useful_ms: i64,
+    neutral_ms: i64,
+    waste_ms: i64,
+    observed_ms: i64,
+    useful_goal_min: i64,
+    waste_limit_min: i64,
+    observed_min: i64,
+    passed: bool,
+    useful_xp: i64,
+    useful_ma_7d_ms: i64,
+}
+
 #[derive(Clone, Serialize)]
 struct ProgressDay {
     local_date: String,
@@ -188,6 +203,29 @@ fn get_progress_overview() -> Result<ProgressOverview, String> {
         next_rank: next.map(|(name, _)| name),
         next_rank_threshold: next.map(|(_, threshold)| threshold),
         calendar,
+    })
+}
+
+#[tauri::command]
+fn get_daily_series(days: i64) -> Result<Vec<DailySeriesDay>, String> {
+    let connection = db::open()?;
+    db::daily_series(&connection, days).map(|series| {
+        series
+            .into_iter()
+            .map(|day| DailySeriesDay {
+                local_date: day.local_date,
+                useful_ms: day.useful_ms,
+                neutral_ms: day.neutral_ms,
+                waste_ms: day.waste_ms,
+                observed_ms: day.observed_ms,
+                useful_goal_min: day.useful_goal_min,
+                waste_limit_min: day.waste_limit_min,
+                observed_min: day.observed_min,
+                passed: day.passed,
+                useful_xp: day.useful_xp,
+                useful_ma_7d_ms: day.useful_ma_7d_ms,
+            })
+            .collect()
     })
 }
 
@@ -669,6 +707,7 @@ pub fn run() {
             get_today_stats,
             get_today_cumulative,
             get_progress_overview,
+            get_daily_series,
             get_categories,
             create_category,
             delete_category,

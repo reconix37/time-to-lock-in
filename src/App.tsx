@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
 import { DayScorecard } from "./components/DayScorecard";
+import { TrendsStacked } from "./components/TrendsStacked";
+import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
+import type { DailySeriesDay } from "./trends";
 import "./styles/tokens.css";
 import "./App.css";
 
@@ -150,6 +153,9 @@ function App() {
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
+  const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
+  const [dashboardView, setDashboardView] = useState<"today" | "trends">("today");
+  const [trendsRange, setTrendsRange] = useState<7 | 30>(7);
   const [apps, setApps] = useState<AppToday[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -195,12 +201,13 @@ function App() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextApps, nextSettings, trackingPaused] =
+      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextApps, nextSettings, trackingPaused] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
           invoke<ProgressOverview>("get_progress_overview"),
           invoke<TodayCumulative>("get_today_cumulative"),
+          invoke<DailySeriesDay[]>("get_daily_series", { days: 36 }),
           invoke<AppToday[]>("get_apps_today"),
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
@@ -209,6 +216,7 @@ function App() {
       setCategories(nextCategories);
       setProgress(nextProgress);
       setCumulative(nextCumulative);
+      setDailySeries(nextDailySeries);
       setStats(nextProgress.today);
       setApps(nextApps);
       setSettings(nextSettings);
@@ -734,6 +742,24 @@ function App() {
 
       {error && <div className="error-banner">{error}. Данные обновятся автоматически.</div>}
 
+      <nav className="dashboard-view-tabs" aria-label="Раздел дашборда">
+        <button
+          type="button"
+          aria-current={dashboardView === "today" ? "page" : undefined}
+          onClick={() => setDashboardView("today")}
+        >
+          Сегодня
+        </button>
+        <button
+          type="button"
+          aria-current={dashboardView === "trends" ? "page" : undefined}
+          onClick={() => setDashboardView("trends")}
+        >
+          Тренды
+        </button>
+      </nav>
+
+      {dashboardView === "today" ? <>
       {loading || !progress ? (
         <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
       ) : (
@@ -939,6 +965,27 @@ function App() {
           todayDate={progress.today.local_date}
           formatDuration={formatDuration}
         />
+      )}
+      </> : (
+        <section className="trends-section" aria-label="Тренды активности">
+          <div className="trends-section-heading">
+            <div><span className="eyebrow">История</span><h1>Объяснить последние дни</h1></div>
+            <p>Состав показывает, куда ушло время. Среднее отделяет направление от шума отдельных дней.</p>
+          </div>
+          {loading || dailySeries.length === 0 ? (
+            <div className="card trends-skeleton skeleton" aria-label="Загрузка трендов" />
+          ) : (
+            <>
+              <TrendsStacked
+                days={dailySeries}
+                range={trendsRange}
+                onRangeChange={setTrendsRange}
+                formatDuration={formatDuration}
+              />
+              <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} />
+            </>
+          )}
+        </section>
       )}
 
       {categoryManagerOpen && (
