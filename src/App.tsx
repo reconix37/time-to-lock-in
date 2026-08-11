@@ -196,7 +196,7 @@ function DashboardView() {
   const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
   const [classificationTarget, setClassificationTarget] = useState<ClassificationTarget | null>(null);
   const [classificationCategoryId, setClassificationCategoryId] = useState(0);
-  const [classificationRemember, setClassificationRemember] = useState(true);
+  const [classificationRemember, setClassificationRemember] = useState(false);
   const [classificationSaving, setClassificationSaving] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -690,7 +690,7 @@ function DashboardView() {
   function openClassification(segment: Segment, anchor: string) {
     setClassificationTarget({ segmentId: segment.id, anchor });
     setClassificationCategoryId(segment.category_id || 0);
-    setClassificationRemember(segment.category_id !== 0);
+    setClassificationRemember(false);
   }
 
   async function saveSettings() {
@@ -834,6 +834,8 @@ function DashboardView() {
     const category = categoryById.get(segment.category_id);
     const isOpen = classificationTarget?.segmentId === segment.id && classificationTarget.anchor === anchor;
     const selectedCategory = categoryById.get(classificationCategoryId);
+    const appName = cleanAppName(segment.app);
+    const appSegmentCount = isOpen ? segments.filter((item) => item.app === segment.app).length : 0;
     return (
       <div className="category-control" data-classification-root="true">
         <button
@@ -855,7 +857,7 @@ function DashboardView() {
                 onChange={(event) => {
                   const categoryId = Number(event.target.value);
                   setClassificationCategoryId(categoryId);
-                  setClassificationRemember(categoryId !== 0);
+                  setClassificationRemember(false);
                 }}
               >
                 <option value={0}>{t("common.uncategorized")}</option>
@@ -866,17 +868,25 @@ function DashboardView() {
             </label>
             <span className="classification-scope-label">{t("classification.applyTo")}</span>
             {classificationCategoryId !== 0 && (
-              <label className="classification-option is-default">
+              <label className="classification-option">
                 <input
                   type="radio"
                   name={`classification-scope-${anchor}`}
                   checked={classificationRemember}
                   onChange={() => setClassificationRemember(true)}
                 />
-                <span><strong>{t("classification.always", { app: cleanAppName(segment.app), category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong><small>{t("classification.remember")}</small></span>
+                <span>
+                  <strong>{t("classification.always", { app: appName, category: selectedCategory?.name ?? t("classification.categoryFallback") })}</strong>
+                  <small>{t("classification.remember")}</small>
+                  {classificationRemember && (
+                    <small className="classification-warning">
+                      {t("classification.historyWarning", { app: appName, count: appSegmentCount })}
+                    </small>
+                  )}
+                </span>
               </label>
             )}
-            <label className="classification-option">
+            <label className="classification-option is-default">
               <input
                 type="radio"
                 name={`classification-scope-${anchor}`}

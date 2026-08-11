@@ -7,6 +7,10 @@ test("translates every supported language and replaces placeholders", () => {
   assert.equal(translate("ru", "rank.next", { name: "Стажёр" }), "До ранга «Стажёр»");
   assert.equal(translate("ua", "rank.next", { name: "Стажёр" }), "До рангу «Стажёр»");
   assert.equal(translate("en", "rank.next", { name: "Стажёр" }), "Until rank “Стажёр”");
+  assert.equal(
+    translate("ru", "classification.historyWarning", { app: "Chrome", count: 48 }),
+    "Будет переклассифицирована вся история Chrome — 48 сегментов",
+  );
 });
 
 test("all dictionaries expose the same message keys", () => {
