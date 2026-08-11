@@ -22,6 +22,7 @@ struct TraySnapshot {
     useful_label: String,
     neutral_label: String,
     waste_label: String,
+    observed_label: String,
 }
 
 pub fn install(
@@ -246,13 +247,14 @@ fn spawn_updater(
                     snapshot.away,
                 )));
                 let _ = tray.set_tooltip(Some(format!(
-                    "TTLI · {} {}м · {} {}м · {} {}м · Наблюдение {}м",
+                    "TTLI · {} {}м · {} {}м · {} {}м · {} {}м",
                     snapshot.useful_label,
                     useful_minutes,
                     snapshot.neutral_label,
                     snapshot.neutral_ms / 60_000,
                     snapshot.waste_label,
                     snapshot.waste_ms / 60_000,
+                    snapshot.observed_label,
                     (snapshot.useful_ms + snapshot.neutral_ms + snapshot.waste_ms) / 60_000,
                 )));
             }
@@ -306,6 +308,8 @@ fn tray_snapshot() -> Result<TraySnapshot, String> {
         .unwrap_or_else(|| "Нейтральное".to_string());
     let waste_label =
         db::setting(&connection, "kind_label_waste")?.unwrap_or_else(|| "Потери".to_string());
+    let observed_label = db::setting(&connection, "kind_label_observed")?
+        .unwrap_or_else(|| "Наблюдение".to_string());
     Ok(TraySnapshot {
         useful_ms,
         neutral_ms,
@@ -315,6 +319,7 @@ fn tray_snapshot() -> Result<TraySnapshot, String> {
         useful_label,
         neutral_label,
         waste_label,
+        observed_label,
     })
 }
 

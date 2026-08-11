@@ -7,6 +7,7 @@ export interface KindLabels {
   useful: string;
   neutral: string;
   waste: string;
+  observed: string;
 }
 
 export interface DayPrintEntry {
@@ -231,7 +232,7 @@ export async function renderDayPrintPng(day: DayPrintData, kindLabels: KindLabel
 
   condition(context, colors, 326, kindLabels.useful.toLocaleUpperCase("ru-RU"), minutes(day.useful_ms), day.useful_goal_min, day.useful_passed);
   condition(context, colors, 382, kindLabels.waste.toLocaleUpperCase("ru-RU"), minutes(day.waste_ms), day.waste_limit_min, day.waste_passed, true);
-  condition(context, colors, 438, "НАБЛЮДЕНИЕ", minutes(day.observed_ms), day.observed_min, day.observed_passed);
+  condition(context, colors, 438, kindLabels.observed.toLocaleUpperCase("ru-RU"), minutes(day.observed_ms), day.observed_min, day.observed_passed);
   if (day.challenge_passed !== null) {
     context.fillStyle = day.challenge_passed ? colors.useful : colors.waste;
     font(context, 24, 700);
@@ -304,7 +305,7 @@ export async function renderWeekPng(week: WeekSummaryData, kindLabels: KindLabel
     context.fillStyle = colors.waste;
     context.fillText(`${kindInitial(kindLabels.waste)} ${duration(day.waste_ms)}`, 510, y);
     context.fillStyle = colors.neutral;
-    context.fillText(`Н ${duration(day.observed_ms)}`, 670, y);
+    context.fillText(`${kindInitial(kindLabels.observed)} ${duration(day.observed_ms)}`, 670, y);
     context.textAlign = "right";
     context.fillStyle = colors.muted;
     context.fillText(day.passed ? "ДЕНЬ СИЛЫ" : "ДЕНЬ ЗОМБИ", WIDTH - PADDING, y);
@@ -349,7 +350,7 @@ export async function renderChallengePng(day: DayPrintData, kindLabels: KindLabe
   context.fillText("ТРИ УСЛОВИЯ", PADDING, 374);
   condition(context, colors, 448, kindLabels.useful.toLocaleUpperCase("ru-RU"), minutes(day.useful_ms), minutes(day.useful_ms), true);
   condition(context, colors, 516, kindLabels.waste.toLocaleUpperCase("ru-RU"), minutes(day.waste_ms), minutes(day.waste_ms), true, true);
-  condition(context, colors, 584, "НАБЛЮДЕНИЕ", minutes(day.observed_ms), minutes(day.observed_ms), true);
+  condition(context, colors, 584, kindLabels.observed.toLocaleUpperCase("ru-RU"), minutes(day.observed_ms), minutes(day.observed_ms), true);
   divider(context, colors, 636);
   context.fillStyle = colors.text;
   font(context, 31, 700);

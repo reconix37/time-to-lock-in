@@ -162,6 +162,7 @@ pub fn initialize() -> Result<(), String> {
         ("kind_label_useful", "Полезное".to_string()),
         ("kind_label_neutral", "Нейтральное".to_string()),
         ("kind_label_waste", "Потери".to_string()),
+        ("kind_label_observed", "Наблюдение".to_string()),
     ] {
         transaction
             .execute(

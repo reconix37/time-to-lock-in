@@ -99,10 +99,11 @@ const EMPTY_STATS: TodayStats = {
   observed_ms: 0,
 };
 
-const DEFAULT_KIND_LABELS: Record<CategoryKind, string> = {
+const DEFAULT_KIND_LABELS: KindLabels = {
   useful: "Полезное",
   neutral: "Нейтральное",
   waste: "Потери",
+  observed: "Наблюдение",
 };
 
 const CATEGORY_COLORS = ["#286983", "#ea9d34", "#b4637a", "#56949f", "#907aa9", "#9893a5"];
@@ -201,6 +202,7 @@ function DashboardView() {
   const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
   const [kindLabelNeutral, setKindLabelNeutral] = useState(DEFAULT_KIND_LABELS.neutral);
   const [kindLabelWaste, setKindLabelWaste] = useState(DEFAULT_KIND_LABELS.waste);
+  const [kindLabelObserved, setKindLabelObserved] = useState(DEFAULT_KIND_LABELS.observed);
   const [usefulGoalMin, setUsefulGoalMin] = useState("120");
   const [wasteLimitMin, setWasteLimitMin] = useState("60");
   const [observedMin, setObservedMin] = useState("60");
@@ -365,6 +367,7 @@ function DashboardView() {
     useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
     neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
     waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
+    observed: settings.kind_label_observed ?? DEFAULT_KIND_LABELS.observed,
   }), [settings]);
   const appTimeline = useMemo<AppTimelineItem[]>(() => apps
     .map((app) => {
@@ -450,6 +453,7 @@ function DashboardView() {
     setKindLabelUseful(settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful);
     setKindLabelNeutral(settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral);
     setKindLabelWaste(settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste);
+    setKindLabelObserved(settings.kind_label_observed ?? DEFAULT_KIND_LABELS.observed);
     setUsefulGoalMin(settings.useful_goal_min ?? "120");
     setWasteLimitMin(settings.waste_limit_min ?? "60");
     setObservedMin(settings.observed_min ?? "60");
@@ -667,10 +671,11 @@ function DashboardView() {
   async function saveSettings() {
     const chromeId = extensionChromeId.trim();
     const edgeId = extensionEdgeId.trim();
-    const nextKindLabels: Record<CategoryKind, string> = {
+    const nextKindLabels: KindLabels = {
       useful: kindLabelUseful.trim(),
       neutral: kindLabelNeutral.trim(),
       waste: kindLabelWaste.trim(),
+      observed: kindLabelObserved.trim(),
     };
     const isValidId = (value: string) => value === "" || /^[a-p]{32}$/.test(value);
     if (!isValidId(chromeId) || !isValidId(edgeId)) {
@@ -705,6 +710,7 @@ function DashboardView() {
         invoke<void>("set_setting", { key: "kind_label_useful", value: nextKindLabels.useful }),
         invoke<void>("set_setting", { key: "kind_label_neutral", value: nextKindLabels.neutral }),
         invoke<void>("set_setting", { key: "kind_label_waste", value: nextKindLabels.waste }),
+        invoke<void>("set_setting", { key: "kind_label_observed", value: nextKindLabels.observed }),
       ]);
       setSettings((current) => ({
         ...current,
@@ -713,6 +719,7 @@ function DashboardView() {
         kind_label_useful: nextKindLabels.useful,
         kind_label_neutral: nextKindLabels.neutral,
         kind_label_waste: nextKindLabels.waste,
+        kind_label_observed: nextKindLabels.observed,
         useful_goal_min: usefulGoalMin,
         waste_limit_min: wasteLimitMin,
         observed_min: observedMin,
@@ -935,7 +942,7 @@ function DashboardView() {
       {loading || !progress ? (
         <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
       ) : (
-        <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} />
+        <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} observedLabel={kindLabels.observed} />
       )}
 
       {dayPrint && (dayPrint.observed_ms > 0 || dayPrint.afk_ms > 0) && (
@@ -952,6 +959,7 @@ function DashboardView() {
           message={shareMessage}
           formatDuration={formatDuration}
           kindLabels={kindLabels}
+          observedLabel={kindLabels.observed}
           onDateChange={(localDate) => void selectDayPrint(localDate)}
           onShareDay={() => void shareArtifact("day")}
           onShareWeek={() => void shareArtifact("week")}
@@ -1468,7 +1476,7 @@ function DashboardView() {
                 <div className="goal-settings-grid">
                   <label className="settings-field"><span>{kindLabelUseful} · цель, мин</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
                   <label className="settings-field"><span>{kindLabelWaste} · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
-                  <label className="settings-field"><span>Наблюдение · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{kindLabelObserved} · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
                 </div>
                 <div className="money-settings-grid">
                   <label className="settings-field">
@@ -1529,6 +1537,10 @@ function DashboardView() {
                   <label className="settings-field">
                     <span>Название {DEFAULT_KIND_LABELS.waste}</span>
                     <input required maxLength={80} value={kindLabelWaste} onChange={(event) => setKindLabelWaste(event.target.value)} />
+                  </label>
+                  <label className="settings-field">
+                    <span>Название {DEFAULT_KIND_LABELS.observed}</span>
+                    <input required maxLength={80} value={kindLabelObserved} onChange={(event) => setKindLabelObserved(event.target.value)} />
                   </label>
                 </div>
               </section>
