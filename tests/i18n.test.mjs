@@ -15,6 +15,14 @@ test("translates every supported language and replaces placeholders", () => {
     translate("en", "classification.titleMatchCount", { count: 3 }),
     "Matches 3 segments",
   );
+  assert.equal(
+    translate("ru", "updates.available", { version: "0.2.0" }),
+    "Доступна версия 0.2.0",
+  );
+  assert.equal(
+    translate("ua", "updates.error", { message: "offline" }),
+    "Не вдалося перевірити: offline",
+  );
 });
 
 test("all dictionaries expose the same message keys", () => {

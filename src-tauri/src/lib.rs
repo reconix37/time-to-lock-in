@@ -13,6 +13,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 
 struct TrackingControl {
     paused: Arc<AtomicBool>,
@@ -1168,6 +1169,20 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+}
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater.check().await.map_err(|error| error.to_string())?;
+    Ok(update.map(|update| UpdateInfo {
+        version: update.version,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let paused = Arc::new(AtomicBool::new(false));
@@ -1188,6 +1203,7 @@ pub fn run() {
     builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -1264,6 +1280,7 @@ pub fn run() {
             start_mini_drag,
             get_autostart,
             set_autostart,
+            check_for_updates,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");

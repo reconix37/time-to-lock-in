@@ -134,6 +134,11 @@ button:focus-visible {
 .settings-toggle { display: flex; align-items: center; gap: 10px; margin-top: 20px; color: var(--text); font-size: 13px; cursor: pointer; }
 .settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--iris); cursor: pointer; }
 .settings-toggle input:disabled { cursor: default; opacity: .6; }
+.update-check-button { margin-top: 20px; padding: 8px 12px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
+.update-check-button:hover { background: var(--hl-low); }
+.update-check-button:disabled { cursor: default; opacity: .6; }
+.update-status { min-height: 16px; margin-top: 8px; color: var(--ok); font-size: 12px; }
+.update-status .is-error { color: var(--bad); }
 .settings-hint { margin: 16px 0 0; color: var(--subtle); font-size: 12px; }
 .settings-token { display: grid; gap: 6px; margin-top: 24px; color: var(--muted); font-size: 12px; font-weight: 500; }
 .settings-token > div { display: flex; min-width: 0; gap: 8px; align-items: center; }

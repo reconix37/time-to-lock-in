@@ -97,6 +97,12 @@ interface ReclassificationSummary {
   changed_duration_ms: number;
 }
 
+interface UpdateInfo {
+  version: string;
+}
+
+type UpdateCheck = "idle" | "checking" | "available" | "latest" | "error";
+
 const EMPTY_STATS: TodayStats = {
   useful_ms: 0,
   neutral_ms: 0,
@@ -205,6 +211,9 @@ function DashboardView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>("idle");
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [extensionChromeId, setExtensionChromeId] = useState("");
   const [extensionEdgeId, setExtensionEdgeId] = useState("");
   const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
@@ -480,6 +489,25 @@ function DashboardView() {
     } catch (reason: unknown) {
       setAutostart(!enabled);
       setSettingsError(typeof reason === "string" ? reason : t("error.changeAutostart"));
+    }
+  }
+
+  async function checkForUpdates() {
+    setUpdateCheck("checking");
+    setUpdateInfo(null);
+    setUpdateError(null);
+    try {
+      const info = await invoke<UpdateInfo | null>("check_for_updates");
+      if (info) {
+        setUpdateInfo(info);
+        setUpdateCheck("available");
+      } else {
+        setUpdateCheck("latest");
+      }
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setUpdateError(message);
+      setUpdateCheck("error");
     }
   }
 
@@ -1710,6 +1738,27 @@ function DashboardView() {
                   />
                   <span>{t("settings.autostart")}</span>
                 </label>
+              </section>
+
+              <section className="settings-section" aria-labelledby="updates-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="updates-settings-title">{t("updates.title")}</h3>
+                </div>
+                <button
+                  type="button"
+                  className="update-check-button"
+                  disabled={updateCheck === "checking"}
+                  onClick={() => void checkForUpdates()}
+                >
+                  {updateCheck === "checking" ? t("updates.checking") : t("updates.check")}
+                </button>
+                <div className="update-status" aria-live="polite">
+                  {updateCheck === "available" && updateInfo && t("updates.available", { version: updateInfo.version })}
+                  {updateCheck === "latest" && t("updates.latest")}
+                  {updateCheck === "error" && updateError && (
+                    <span className="is-error">{t("updates.error", { message: updateError })}</span>
+                  )}
+                </div>
               </section>
 
               <div className="database-size">
