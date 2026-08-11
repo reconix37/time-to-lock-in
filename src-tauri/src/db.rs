@@ -8,6 +8,75 @@ const MIGRATION_002: &str = include_str!("../migrations/002_score_day.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.sql");
 
+const TITLE_NOISE_WORDS: &[&str] = &[
+    "смотреть",
+    "смотрите",
+    "сериал",
+    "фильм",
+    "онлайн",
+    "бесплатно",
+    "в",
+    "хорошем",
+    "качестве",
+    "все",
+    "watch",
+    "online",
+    "free",
+    "hd",
+    "full",
+    "film",
+    "movie",
+    "series",
+    "in",
+    "good",
+    "quality",
+    "4k",
+    "1080p",
+    "720p",
+];
+const EPISODE_WORDS: &[&str] = &["серия", "серии", "серий", "эпизод", "episode", "episodes"];
+const SEASON_WORDS: &[&str] = &["сезон", "season"];
+
+pub(crate) fn title_matches(pattern: &str, title: &str) -> bool {
+    let pattern_lower = pattern.to_lowercase();
+    let title_lower = title.to_lowercase();
+    let tokens = pattern_lower
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let significant_tokens = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            let is_number = token.chars().all(|character| character.is_ascii_digit());
+            let previous = index
+                .checked_sub(1)
+                .and_then(|previous| tokens.get(previous));
+            let next = tokens.get(index + 1);
+            let beside_episode = is_number
+                && (previous.is_some_and(|previous| EPISODE_WORDS.contains(previous))
+                    || next.is_some_and(|next| EPISODE_WORDS.contains(next)));
+            let beside_season = is_number
+                && (previous.is_some_and(|previous| SEASON_WORDS.contains(previous))
+                    || next.is_some_and(|next| SEASON_WORDS.contains(next)));
+            ((token.chars().count() >= 2 || beside_season)
+                && !TITLE_NOISE_WORDS.contains(token)
+                && !EPISODE_WORDS.contains(token)
+                && !beside_episode)
+                .then_some(*token)
+        })
+        .collect::<Vec<_>>();
+
+    if significant_tokens.is_empty() {
+        return title_lower.contains(&pattern_lower);
+    }
+
+    // Ручные title-правила тоже получают AND-поиск: порядок слов и разделители не важны.
+    significant_tokens
+        .iter()
+        .all(|token| title_lower.contains(token))
+}
+
 pub struct CategoryRecord {
     pub id: i64,
     pub name: String,
@@ -606,14 +675,14 @@ fn preserve_legacy_manual_categories(transaction: &Transaction<'_>) -> Result<()
         .map_err(|error| error.to_string())?
         .query_map([], |row| {
             let app = row.get::<_, String>(1)?.to_lowercase();
-            let title = row.get::<_, String>(2)?.to_lowercase();
+            let title = row.get::<_, String>(2)?;
             let domain = row.get::<_, String>(3)?.to_lowercase();
             let current_category_id = row.get::<_, i64>(4)?;
             let rule_category_id = rules
                 .iter()
                 .find(|(match_type, pattern, _)| match match_type.as_str() {
                     "domain" => domain.contains(pattern),
-                    "title" => title.contains(pattern),
+                    "title" => title_matches(pattern, &title),
                     "exe" => app.starts_with(pattern),
                     _ => false,
                 })
@@ -671,7 +740,7 @@ fn reclassify_history_in_transaction(
         .query_map([], |row| {
             let id = row.get::<_, i64>(0)?;
             let app = row.get::<_, String>(1)?.to_lowercase();
-            let title = row.get::<_, String>(2)?.to_lowercase();
+            let title = row.get::<_, String>(2)?;
             let domain = row.get::<_, String>(3)?.to_lowercase();
             let current_category_id = row.get::<_, i64>(4)?;
             let duration_ms = row.get::<_, i64>(5)?;
@@ -679,7 +748,7 @@ fn reclassify_history_in_transaction(
                 .iter()
                 .find(|(match_type, pattern, _)| match match_type.as_str() {
                     "domain" => domain.contains(pattern),
-                    "title" => title.contains(pattern),
+                    "title" => title_matches(pattern, &title),
                     "exe" => app.starts_with(pattern),
                     _ => false,
                 })
@@ -1248,6 +1317,49 @@ mod tests {
                 ("waste".to_string(), 600_000, 0),
             ]
         );
+    }
+
+    #[test]
+    fn reclassifies_episode_variants_within_the_same_season() {
+        let mut connection = score_schema();
+        connection
+            .execute(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Chill', '#000000', 'neutral', 0)",
+                [],
+            )
+            .expect("category");
+        connection
+            .execute(
+                "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
+                 VALUES ('title', ?1, 1, 0, 0)",
+                ["Смотреть сериал Игра престолов 4 сезон 2 серия онлайн бесплатно"],
+            )
+            .expect("legacy title rule");
+        for title in [
+            "Игра престолов 4 сезон 3 серия",
+            "Игра престолов 5 сезон 3 серия",
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO segments (
+                        ts_start, ts_end, app, window_title, category_id, status
+                     ) VALUES (0, 60000, 'browser.exe', ?1, 0, 'crashed')",
+                    [title],
+                )
+                .expect("segment");
+        }
+
+        reclassify_history(&mut connection).expect("reclassification");
+
+        let categories = connection
+            .prepare("SELECT category_id FROM segments ORDER BY id")
+            .expect("query")
+            .query_map([], |row| row.get::<_, i64>(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("categories");
+        assert_eq!(categories, vec![1, 0]);
     }
 
     #[test]

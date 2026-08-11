@@ -1,5 +1,5 @@
 use crate::db;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::Receiver, Arc};
@@ -245,24 +245,36 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
 
 fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, String> {
     let domain = state.domain.to_lowercase();
-    let title = state.title.to_lowercase();
     let app = state.app.to_lowercase();
-    connection
-        .query_row(
-            "SELECT category_id FROM rules
-             WHERE (match_type = 'domain' AND instr(?1, pattern) > 0)
-                OR (match_type = 'title' AND instr(?2, pattern) > 0)
-                OR (match_type = 'exe' AND instr(?3, pattern) = 1)
+    let mut statement = connection
+        .prepare(
+            "SELECT match_type, pattern, category_id FROM rules
              ORDER BY priority DESC,
                       CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
-                      id ASC
-             LIMIT 1",
-            params![domain, title, app],
-            |row| row.get(0),
+                      id ASC",
         )
-        .optional()
-        .map(|category_id| category_id.unwrap_or(0))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let rules = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?.to_lowercase(),
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    Ok(rules
+        .iter()
+        .find(|(match_type, pattern, _)| match match_type.as_str() {
+            "domain" => domain.contains(pattern),
+            "title" => db::title_matches(pattern, &state.title),
+            "exe" => app.starts_with(pattern),
+            _ => false,
+        })
+        .map_or(0, |(_, _, category_id)| *category_id))
 }
 
 #[cfg(windows)]
