@@ -906,7 +906,7 @@ pub fn afk_series(connection: &Connection, days: i64) -> Result<Vec<AfkDayRecord
              ORDER BY bounds.local_date",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let records = statement
         .query_map([days], |row| {
             Ok(AfkDayRecord {
                 local_date: row.get(0)?,
@@ -915,7 +915,9 @@ pub fn afk_series(connection: &Connection, days: i64) -> Result<Vec<AfkDayRecord
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    Ok(records)
 }
 
 pub fn afk_duration_for_day(connection: &Connection, local_date: &str) -> Result<i64, String> {
