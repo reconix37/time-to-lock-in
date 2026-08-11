@@ -21,7 +21,7 @@ import {
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
-import { titleRulePattern } from "./classification";
+import { nextRulePriority, titleRulePattern } from "./classification";
 import { langNames, localeForLang, type Lang, type Translate } from "./i18n";
 import { I18nProvider, useI18n } from "./i18nContext";
 import "./styles/tokens.css";
@@ -531,17 +531,22 @@ function DashboardView() {
   async function reclassify(segment: Segment, categoryId: number, scope: ClassificationScope) {
     setClassificationSaving(true);
     try {
+      const createsRule = categoryId !== 0 && scope !== "single";
+      const priority = createsRule
+        ? nextRulePriority(await invoke<Rule[]>("get_rules"))
+        : null;
       await invoke("set_segment_category", {
         segmentId: segment.id,
         categoryId: categoryId === 0 ? null : categoryId,
         remember: categoryId !== 0 && scope === "app",
+        rulePriority: priority,
       });
       if (categoryId !== 0 && scope === "title") {
         await invoke<Rule>("create_rule", {
           matchType: "title",
           pattern: titleRulePattern(segment.window_title),
           categoryId,
-          priority: 0,
+          priority,
         });
       }
       if (categoryId !== 0 && scope !== "single") {
@@ -1125,6 +1130,9 @@ function DashboardView() {
                 </label>
                 {classificationScope === "app" && manualOverrideControl}
               </>
+            )}
+            {classificationCategoryId !== 0 && classificationScope !== "single" && (
+              <small className="classification-highest-priority">{t("classification.highestPriority")}</small>
             )}
             <button
               type="button"

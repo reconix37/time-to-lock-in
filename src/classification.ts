@@ -37,6 +37,10 @@ const EPISODE_WORDS = new Set([
   "episodes",
 ]);
 
+export function nextRulePriority(rules: readonly { priority: number }[]): number {
+  return Math.max(0, ...rules.map((rule) => rule.priority)) + 1;
+}
+
 function isEpisodeNumber(tokens: string[], index: number): boolean {
   if (!/^\d+$/.test(tokens[index])) return false;
 

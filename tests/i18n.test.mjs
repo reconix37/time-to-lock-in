@@ -15,6 +15,9 @@ test("translates every supported language and replaces placeholders", () => {
     translate("en", "classification.titleMatchCount", { count: 3 }),
     "Matches 3 segments",
   );
+  assert.equal(translate("ru", "classification.highestPriority"), "Правило создано с высшим приоритетом");
+  assert.equal(translate("ua", "classification.highestPriority"), "Правило створено з найвищим пріоритетом");
+  assert.equal(translate("en", "classification.highestPriority"), "Rule created with highest priority");
   assert.equal(
     translate("ru", "updates.available", { version: "0.2.0" }),
     "Доступна версия 0.2.0",

@@ -345,6 +345,7 @@ button:focus-visible {
 .classification-manual > label { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 12px; cursor: pointer; }
 .classification-manual input { margin: 0; accent-color: var(--iris); }
 .classification-manual .classification-warning { color: var(--warn); }
+.classification-highest-priority { margin-left: 32px; color: var(--iris); font-size: 11px; }
 .classification-apply { justify-self: end; padding: 7px 12px; border: 0; border-radius: var(--radius-sm); background: var(--love); color: var(--bg); cursor: pointer; }
 .classification-apply:hover { background: var(--love-hover); }
 .classification-apply:disabled { cursor: default; opacity: .6; }

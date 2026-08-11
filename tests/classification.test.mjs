@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { titleRulePattern } from "../src/classification.ts";
+import { nextRulePriority, titleRulePattern } from "../src/classification.ts";
+
+test("assigns popup rules one priority above every existing rule", () => {
+  assert.equal(nextRulePriority([]), 1);
+  assert.equal(nextRulePriority([{ priority: -3 }, { priority: 0 }]), 1);
+  assert.equal(nextRulePriority([{ priority: 4 }, { priority: 12 }, { priority: 7 }]), 13);
+});
 
 test("builds a stable title rule pattern from a visible browser title", () => {
   assert.equal(

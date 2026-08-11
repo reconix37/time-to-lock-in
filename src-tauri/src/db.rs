@@ -565,6 +565,7 @@ pub fn upsert_exe_rule(
     connection: &Connection,
     app: &str,
     category_id: i64,
+    priority: i64,
 ) -> Result<i64, String> {
     if category_id == 0 {
         return Err("Без категории нельзя привязать".to_string());
@@ -586,8 +587,8 @@ pub fn upsert_exe_rule(
     if let Some(rule_id) = existing_id {
         connection
             .execute(
-                "UPDATE rules SET category_id = ?1 WHERE id = ?2",
-                params![category_id, rule_id],
+                "UPDATE rules SET category_id = ?1, priority = ?2 WHERE id = ?3",
+                params![category_id, priority, rule_id],
             )
             .map_err(|error| error.to_string())?;
         return Ok(rule_id);
@@ -596,8 +597,8 @@ pub fn upsert_exe_rule(
     connection
         .execute(
             "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
-             VALUES ('exe', ?1, ?2, 0, ?3)",
-            params![normalized_app, category_id, now_ms()],
+             VALUES ('exe', ?1, ?2, ?3, ?4)",
+            params![normalized_app, category_id, priority, now_ms()],
         )
         .map_err(|error| error.to_string())?;
     Ok(connection.last_insert_rowid())
@@ -1321,24 +1322,25 @@ mod tests {
                 .expect("category");
         }
 
-        let rule_id = upsert_exe_rule(&connection, "Example.EXE", 1).expect("insert rule");
-        let updated_id = upsert_exe_rule(&connection, "example.exe", 2).expect("update rule");
+        let rule_id = upsert_exe_rule(&connection, "Example.EXE", 1, 4).expect("insert rule");
+        let updated_id = upsert_exe_rule(&connection, "example.exe", 2, 9).expect("update rule");
 
         assert_eq!(updated_id, rule_id);
         let stored = connection
             .query_row(
-                "SELECT match_type, pattern, category_id FROM rules WHERE id = ?1",
+                "SELECT match_type, pattern, category_id, priority FROM rules WHERE id = ?1",
                 [rule_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
                     ))
                 },
             )
             .expect("stored rule");
-        assert_eq!(stored, ("exe".to_string(), "example.exe".to_string(), 2));
+        assert_eq!(stored, ("exe".to_string(), "example.exe".to_string(), 2, 9));
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM rules", [], |row| row.get::<_, i64>(0))
@@ -1385,7 +1387,7 @@ mod tests {
         connection.execute_batch(MIGRATION_001).expect("schema");
 
         assert_eq!(
-            upsert_exe_rule(&connection, "example.exe", 0),
+            upsert_exe_rule(&connection, "example.exe", 0, 1),
             Err("Без категории нельзя привязать".to_string())
         );
     }

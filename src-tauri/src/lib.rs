@@ -1016,6 +1016,7 @@ fn set_segment_category(
     segment_id: i64,
     category_id: Option<i64>,
     remember: bool,
+    rule_priority: Option<i64>,
 ) -> Result<(), String> {
     if segment_id <= 0 {
         return Err("invalid segment id".to_string());
@@ -1051,7 +1052,7 @@ fn set_segment_category(
         .map_err(|error| error.to_string())?;
     if remember {
         if let Some(id) = category_id.filter(|id| *id != 0) {
-            db::upsert_exe_rule(&transaction, &app, id)?;
+            db::upsert_exe_rule(&transaction, &app, id, rule_priority.unwrap_or(0))?;
         }
     }
     for local_date in db::segment_local_dates(&transaction, segment_id)? {
