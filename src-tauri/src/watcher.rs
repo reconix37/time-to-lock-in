@@ -239,17 +239,20 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
 }
 
 fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, String> {
+    let domain = state.domain.to_lowercase();
+    let title = state.title.to_lowercase();
+    let app = state.app.to_lowercase();
     connection
         .query_row(
             "SELECT category_id FROM rules
-             WHERE (match_type = 'domain' AND instr(lower(?1), pattern) > 0)
-                OR (match_type = 'title' AND instr(lower(?2), pattern) > 0)
-                OR (match_type = 'exe' AND instr(lower(?3), pattern) = 1)
+             WHERE (match_type = 'domain' AND instr(?1, pattern) > 0)
+                OR (match_type = 'title' AND instr(?2, pattern) > 0)
+                OR (match_type = 'exe' AND instr(?3, pattern) = 1)
              ORDER BY priority DESC,
                       CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
                       id ASC
              LIMIT 1",
-            params![state.domain, state.title, state.app],
+            params![domain, title, app],
             |row| row.get(0),
         )
         .optional()

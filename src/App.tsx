@@ -15,6 +15,7 @@ import {
   renderWeekPng,
   savePng,
   type DayPrintData,
+  type KindLabels,
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
@@ -83,6 +84,11 @@ interface SegmentGroup {
 interface ClassificationTarget {
   segmentId: number;
   anchor: string;
+}
+
+interface ReclassificationSummary {
+  changed_segments: number;
+  changed_duration_ms: number;
 }
 
 const EMPTY_STATS: TodayStats = {
@@ -197,6 +203,7 @@ function DashboardView() {
   const [wasteLimitMin, setWasteLimitMin] = useState("60");
   const [observedMin, setObservedMin] = useState("60");
   const [hourlyRate, setHourlyRate] = useState("");
+  const [currency, setCurrency] = useState("₴");
   const [challengeInput, setChallengeInput] = useState("");
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeImported, setChallengeImported] = useState(false);
@@ -208,6 +215,7 @@ function DashboardView() {
   const [managerLoading, setManagerLoading] = useState(false);
   const [managerSaving, setManagerSaving] = useState(false);
   const [managerError, setManagerError] = useState<string | null>(null);
+  const [managerNotice, setManagerNotice] = useState<string | null>(null);
   const [categoryFormOpen, setCategoryFormOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryColor, setNewCategoryColor] = useState(CATEGORY_COLORS[3]);
@@ -282,6 +290,12 @@ function DashboardView() {
   }, [dark]);
 
   useEffect(() => {
+    if (!managerNotice) return;
+    const timeout = window.setTimeout(() => setManagerNotice(null), 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [managerNotice]);
+
+  useEffect(() => {
     if (selectedApp === null) return;
     const clearSelection = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSelectedApp(null);
@@ -343,7 +357,7 @@ function DashboardView() {
   const live = !paused && latestSegment?.status === "active" && now - latestSegment.ts_end <= 10_000
     ? latestSegment
     : undefined;
-  const kindLabels = useMemo<Record<CategoryKind, string>>(() => ({
+  const kindLabels = useMemo<KindLabels>(() => ({
     useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
     neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
     waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
@@ -390,6 +404,12 @@ function DashboardView() {
     }
   }
 
+  async function reclassifyHistory(): Promise<void> {
+    const summary = await invoke<ReclassificationSummary>("reclassify_history");
+    const totalMinutes = Math.floor(summary.changed_duration_ms / 60_000);
+    setManagerNotice(`Переклассифицировано ${Math.floor(totalMinutes / 60)} ч ${totalMinutes % 60} мин истории`);
+  }
+
   async function reclassify(segmentId: number, categoryId: number, remember: boolean) {
     setClassificationSaving(true);
     try {
@@ -398,6 +418,7 @@ function DashboardView() {
         categoryId: categoryId === 0 ? null : categoryId,
         remember: categoryId === 0 ? false : remember,
       });
+      if (categoryId !== 0 && remember) await reclassifyHistory();
       setClassificationTarget(null);
       await loadDashboard();
     } catch (reason: unknown) {
@@ -429,6 +450,7 @@ function DashboardView() {
     setWasteLimitMin(settings.waste_limit_min ?? "60");
     setObservedMin(settings.observed_min ?? "60");
     setHourlyRate(settings.hourly_rate ?? "");
+    setCurrency(settings.currency ?? "₴");
     setChallengeInput("");
     setChallengeError(null);
     setChallengeImported(false);
@@ -448,6 +470,7 @@ function DashboardView() {
     setCategoryFormOpen(false);
     setRuleFormOpen(false);
     setManagerError(null);
+    setManagerNotice(null);
     setCategoryManagerOpen(true);
     setManagerLoading(true);
     try {
@@ -475,6 +498,7 @@ function DashboardView() {
         color: newCategoryColor,
         kind: newCategoryKind,
       });
+      await reclassifyHistory();
       setCategories((current) => [...current, category]);
       if (newRuleCategoryId === null) setNewRuleCategoryId(category.id);
       setNewCategoryName("");
@@ -495,6 +519,7 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("delete_category", { id: category.id });
+      await reclassifyHistory();
       setCategories((current) => current.filter((item) => item.id !== category.id));
       setRules((current) => current.filter((rule) => rule.category_id !== category.id));
       if (newRuleCategoryId === category.id) {
@@ -503,6 +528,26 @@ function DashboardView() {
       await loadDashboard();
     } catch (reason: unknown) {
       setManagerError(typeof reason === "string" ? reason : "Не удалось удалить категорию");
+    } finally {
+      setManagerSaving(false);
+    }
+  }
+
+  async function updateCategory(category: Category) {
+    setManagerSaving(true);
+    setManagerError(null);
+    try {
+      const updated = await invoke<Category>("update_category", {
+        id: category.id,
+        name: category.name,
+        kind: category.kind,
+      });
+      await reclassifyHistory();
+      setCategories((current) => current.map((item) => item.id === updated.id ? updated : item));
+      await loadDashboard();
+    } catch (reason: unknown) {
+      setManagerError(typeof reason === "string" ? reason : "Не удалось изменить категорию");
+      setCategories(await invoke<Category[]>("get_categories").catch(() => categories));
     } finally {
       setManagerSaving(false);
     }
@@ -528,6 +573,7 @@ function DashboardView() {
         categoryId: newRuleCategoryId,
         priority,
       });
+      await reclassifyHistory();
       setRules((current) => [...current, rule].sort((left, right) =>
         right.priority - left.priority
           || RULE_TYPE_PRIORITY[right.match_type] - RULE_TYPE_PRIORITY[left.match_type]
@@ -548,6 +594,7 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("delete_rule", { id: ruleId });
+      await reclassifyHistory();
       setRules((current) => current.filter((rule) => rule.id !== ruleId));
     } catch (reason: unknown) {
       setManagerError(typeof reason === "string" ? reason : "Не удалось удалить правило");
@@ -561,6 +608,7 @@ function DashboardView() {
     setManagerError(null);
     try {
       await invoke<void>("update_rule", { id: ruleId, categoryId });
+      await reclassifyHistory();
       setRules((current) => current.map((rule) =>
         rule.id === ruleId ? { ...rule, category_id: categoryId } : rule,
       ));
@@ -646,6 +694,7 @@ function DashboardView() {
       await invoke<void>("set_setting", { key: "waste_limit_min", value: wasteLimitMin });
       await invoke<void>("set_setting", { key: "observed_min", value: observedMin });
       await invoke<void>("set_setting", { key: "hourly_rate", value: hourlyRate.replace(",", ".") });
+      await invoke<void>("set_setting", { key: "currency", value: currency });
       await Promise.all([
         invoke<void>("set_setting", { key: "extension_chrome_id", value: chromeId }),
         invoke<void>("set_setting", { key: "extension_edge_id", value: edgeId }),
@@ -664,6 +713,7 @@ function DashboardView() {
         waste_limit_min: wasteLimitMin,
         observed_min: observedMin,
         hourly_rate: hourlyRate.replace(",", "."),
+        currency,
       }));
       setSettingsOpen(false);
       setError(null);
@@ -694,13 +744,13 @@ function DashboardView() {
       let fileName: string;
       if (kind === "week") {
         const week = await invoke<WeekSummaryData>("get_week_summary");
-        dataUrl = await renderWeekPng(week);
+        dataUrl = await renderWeekPng(week, kindLabels);
         fileName = `ttli-week-${week.days[0]?.local_date ?? dayPrint.local_date}.png`;
       } else if (kind === "challenge") {
-        dataUrl = await renderChallengePng(dayPrint);
+        dataUrl = await renderChallengePng(dayPrint, kindLabels);
         fileName = `ttli-challenge-${dayPrint.local_date}.png`;
       } else {
-        dataUrl = await renderDayPrintPng(dayPrint);
+        dataUrl = await renderDayPrintPng(dayPrint, kindLabels);
         fileName = `ttli-day-print-${dayPrint.local_date}.png`;
       }
       const saved = await savePng(dataUrl, fileName);
@@ -827,6 +877,7 @@ function DashboardView() {
           }).format(now)}
         </span>
         <button className="pause-button" onClick={() => void toggleTracking()}>{paused ? "Продолжить" : "Пауза"}</button>
+        <button className="mini-open-button" onClick={() => void invoke("show_mini")}>Мини-окно</button>
         <button className="manager-open-button" onClick={() => void openCategoryManager()} aria-label="Открыть категории и правила">
           <span aria-hidden="true">🗂</span><span className="manager-open-label">Категории</span>
         </button>
@@ -857,6 +908,7 @@ function DashboardView() {
       </section>
 
       {error && <div className="error-banner">{error}. Данные обновятся автоматически.</div>}
+      {managerNotice && <div className="history-toast" role="status">{managerNotice}</div>}
 
       <nav className="dashboard-view-tabs" aria-label="Раздел дашборда">
         <button
@@ -879,7 +931,7 @@ function DashboardView() {
       {loading || !progress ? (
         <div className="card progress-skeleton skeleton" aria-label="Загрузка прогресса" />
       ) : (
-        <DayScorecard overview={progress} formatDuration={formatDuration} />
+        <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} />
       )}
 
       {dayPrint && dayPrint.observed_ms > 0 && (
@@ -893,6 +945,7 @@ function DashboardView() {
           busyAction={shareBusy}
           message={shareMessage}
           formatDuration={formatDuration}
+          kindLabels={kindLabels}
           onDateChange={(localDate) => void selectDayPrint(localDate)}
           onShareDay={() => void shareArtifact("day")}
           onShareWeek={() => void shareArtifact("week")}
@@ -903,7 +956,7 @@ function DashboardView() {
       {loading || !cumulative ? (
         <div className="card cumulative-skeleton skeleton" aria-label="Загрузка графика дня" />
       ) : (
-        <CumulativeChart data={cumulative} formatDuration={formatDuration} />
+        <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
       )}
 
       <div className="dashboard-grid">
@@ -1098,6 +1151,7 @@ function DashboardView() {
           days={progress.calendar}
           todayDate={progress.today.local_date}
           formatDuration={formatDuration}
+          kindLabels={kindLabels}
         />
       )}
       </> : (
@@ -1115,8 +1169,9 @@ function DashboardView() {
                 range={trendsRange}
                 onRangeChange={setTrendsRange}
                 formatDuration={formatDuration}
+                kindLabels={kindLabels}
               />
-              <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} />
+              <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} kindLabels={kindLabels} />
             </>
           )}
         </section>
@@ -1225,8 +1280,35 @@ function DashboardView() {
                     ) : manageableCategories.map((category) => (
                       <div className="category-manager-row" key={category.id}>
                         <span className="manager-color-dot" style={{ backgroundColor: category.color }} />
-                        <strong>{category.name}</strong>
-                        <span className={`manager-kind kind-${category.kind}`}>{kindLabels[category.kind]}</span>
+                        <input
+                          className="category-name-input"
+                          aria-label={`Название категории ${category.name}`}
+                          disabled={managerSaving}
+                          maxLength={80}
+                          value={category.name}
+                          onChange={(event) => setCategories((current) => current.map((item) =>
+                            item.id === category.id ? { ...item, name: event.target.value } : item,
+                          ))}
+                          onBlur={() => void updateCategory(category)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                          }}
+                        />
+                        <select
+                          className={`manager-kind kind-${category.kind}`}
+                          aria-label={`Тип категории ${category.name}`}
+                          disabled={managerSaving}
+                          value={category.kind}
+                          onChange={(event) => {
+                            const next = { ...category, kind: event.target.value as CategoryKind };
+                            setCategories((current) => current.map((item) => item.id === category.id ? next : item));
+                            void updateCategory(next);
+                          }}
+                        >
+                          <option value="useful">{kindLabels.useful}</option>
+                          <option value="neutral">{kindLabels.neutral}</option>
+                          <option value="waste">{kindLabels.waste}</option>
+                        </select>
                         <button
                           type="button"
                           className="manager-delete-button"
@@ -1377,14 +1459,22 @@ function DashboardView() {
                   <span>Новые значения действуют с сегодняшней даты</span>
                 </div>
                 <div className="goal-settings-grid">
-                  <label className="settings-field"><span>Полезное · цель, мин</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
-                  <label className="settings-field"><span>Потери · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{kindLabelUseful} · цель, мин</span><input type="number" min="0" max="1440" step="1" value={usefulGoalMin} onChange={(event) => setUsefulGoalMin(event.target.value)} /></label>
+                  <label className="settings-field"><span>{kindLabelWaste} · лимит, мин</span><input type="number" min="0" max="1440" step="1" value={wasteLimitMin} onChange={(event) => setWasteLimitMin(event.target.value)} /></label>
                   <label className="settings-field"><span>Наблюдение · минимум, мин</span><input type="number" min="0" max="1440" step="1" value={observedMin} onChange={(event) => setObservedMin(event.target.value)} /></label>
                 </div>
-                <label className="settings-field">
-                  <span>Часовая ставка, ₽ · необязательно</span>
-                  <input type="text" inputMode="decimal" placeholder="Не показывать сожжённые ₽" value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} />
-                </label>
+                <div className="money-settings-grid">
+                  <label className="settings-field">
+                    <span>Часовая ставка · необязательно</span>
+                    <input type="text" inputMode="decimal" placeholder="Не показывать сожжённые деньги" value={hourlyRate} onChange={(event) => setHourlyRate(event.target.value)} />
+                  </label>
+                  <label className="settings-field">
+                    <span>Валюта</span>
+                    <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                      {["₴", "$", "€", "₽"].map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+                    </select>
+                  </label>
+                </div>
               </section>
 
               <section className="settings-section" aria-labelledby="challenge-settings-title">
@@ -1466,6 +1556,7 @@ function DashboardView() {
                 <p className="settings-hint" id="settings-hint">
                   ID подхватывается автоматически при первом контакте расширения — достаточно вставить токен. Поля ниже заполняются сами; вручную править нужно только если что-то пошло не так (ID виден в chrome://extensions → TTLI Tracker → ID).
                 </p>
+                <p className="settings-hint">Мини-окно: клик по иконке TTLI в трее или кнопка &quot;Мини-окно&quot; на дашборде</p>
                 <div className="settings-token">
                   <span>Токен расширения</span>
                   <div>

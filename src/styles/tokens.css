@@ -26,6 +26,7 @@
   --border:1px solid var(--hl-med);
   --shadow:0 1px 3px rgba(0,0,0,0.35);
   --term-bg:#1f1c2b; --term-text:#e0def4; --term-muted:#908caa;
+  --heat-0:#353149;
   --heat-1:color-mix(in srgb, var(--cat-useful) 22%, var(--hl-low));
   --heat-2:color-mix(in srgb, var(--cat-useful) 42%, var(--hl-low));
   --heat-3:color-mix(in srgb, var(--cat-useful) 65%, var(--hl-low));

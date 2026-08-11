@@ -56,4 +56,4 @@ CREATE TABLE IF NOT EXISTS settings (
 -- useful_goal_min=120, waste_limit_min=60, observed_min=60,
 -- idle_timeout_min=5, hourly_rate=NULL (opt-in), theme=dawn,
 -- onboarding_done=0, extension_token=<генерируется>,
--- mini_window_pos=<x,y>, tray_only=1, mini_pinned=0
+-- mini_window_pos=<x,y>, tray_only=1, mini_pinned=1, currency=₴

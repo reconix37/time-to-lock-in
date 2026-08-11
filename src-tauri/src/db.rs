@@ -6,6 +6,7 @@ use uuid::Uuid;
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_score_day.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
+const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.sql");
 
 pub struct CategoryRecord {
     pub id: i64,
@@ -15,6 +16,12 @@ pub struct CategoryRecord {
     pub kind: String,
     pub goal_multiplier: f64,
     pub sort_order: i64,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ReclassificationSummary {
+    pub changed_segments: i64,
+    pub changed_duration_ms: i64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,7 +148,8 @@ pub fn initialize() -> Result<(), String> {
         ("theme", "dawn".to_string()),
         ("onboarding_done", "0".to_string()),
         ("tray_only", "1".to_string()),
-        ("mini_pinned", "0".to_string()),
+        ("mini_pinned", "1".to_string()),
+        ("currency", "₴".to_string()),
         ("extension_token", Uuid::new_v4().to_string()),
         ("extension_chrome_id", String::new()),
         ("extension_edge_id", String::new()),
@@ -166,6 +174,23 @@ pub fn initialize() -> Result<(), String> {
         transaction
             .execute_batch(MIGRATION_003)
             .map_err(|error| error.to_string())?;
+    }
+    if previous_version < 4 {
+        transaction
+            .execute_batch(MIGRATION_004)
+            .map_err(|error| error.to_string())?;
+        if previous_version > 0 {
+            preserve_legacy_manual_categories(&transaction)?;
+            // До v4 значение 0 было дефолтом, поэтому апгрейд включает новый pinned-дефолт.
+            transaction
+                .execute(
+                    "UPDATE settings SET value = '1'
+                     WHERE key = 'mini_pinned' AND value = '0'",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        reclassify_history_in_transaction(&transaction)?;
     }
 
     let crashed_segment_id = transaction
@@ -199,7 +224,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=3;")
+        .execute_batch("PRAGMA user_version=4;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -366,6 +391,47 @@ pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRe
     })
 }
 
+pub fn update_category(id: i64, name: &str, kind: &str) -> Result<CategoryRecord, String> {
+    if id <= 0 {
+        return Err("Недопустимый идентификатор категории".to_string());
+    }
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() || normalized_name.chars().count() > 80 {
+        return Err("Название должно содержать от 1 до 80 символов".to_string());
+    }
+    if !matches!(kind, "useful" | "neutral" | "waste") {
+        return Err("Недопустимый тип категории".to_string());
+    }
+    let connection = open()?;
+    let updated = connection
+        .execute(
+            "UPDATE categories SET name = ?1, kind = ?2 WHERE id = ?3",
+            params![normalized_name, kind, id],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Err("Категория не найдена".to_string());
+    }
+    connection
+        .query_row(
+            "SELECT id, name, color, icon, kind, goal_multiplier, sort_order
+             FROM categories WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(CategoryRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    icon: row.get(3)?,
+                    kind: row.get(4)?,
+                    goal_multiplier: row.get(5)?,
+                    sort_order: row.get(6)?,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn delete_category(id: i64) -> Result<(), String> {
     if id == 0 {
         return Err("Категорию «Без категории» нельзя удалить".to_string());
@@ -502,6 +568,146 @@ fn rebuild_daily_stats(transaction: &Transaction<'_>) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn preserve_legacy_manual_categories(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rules = transaction
+        .prepare(
+            "SELECT match_type, pattern, category_id
+             FROM rules
+             ORDER BY priority DESC,
+                      CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
+                      id ASC",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?.to_lowercase(),
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let manual_ids = transaction
+        .prepare(
+            "SELECT id, app, window_title, domain, category_id
+             FROM segments WHERE COALESCE(category_id, 0) <> 0",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            let app = row.get::<_, String>(1)?.to_lowercase();
+            let title = row.get::<_, String>(2)?.to_lowercase();
+            let domain = row.get::<_, String>(3)?.to_lowercase();
+            let current_category_id = row.get::<_, i64>(4)?;
+            let rule_category_id = rules
+                .iter()
+                .find(|(match_type, pattern, _)| match match_type.as_str() {
+                    "domain" => domain.contains(pattern),
+                    "title" => title.contains(pattern),
+                    "exe" => app.starts_with(pattern),
+                    _ => false,
+                })
+                .map_or(0, |(_, _, category_id)| *category_id);
+            Ok((row.get::<_, i64>(0)?, current_category_id, rule_category_id))
+        })
+        .map_err(|error| error.to_string())?
+        .filter_map(|result| match result {
+            Ok((segment_id, current, classified)) if current != classified => Some(Ok(segment_id)),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for segment_id in manual_ids {
+        transaction
+            .execute(
+                "UPDATE segments SET manual_category = 1 WHERE id = ?1",
+                [segment_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn reclassify_history_in_transaction(
+    transaction: &Transaction<'_>,
+) -> Result<ReclassificationSummary, String> {
+    let rules = transaction
+        .prepare(
+            "SELECT match_type, pattern, category_id
+             FROM rules
+             ORDER BY priority DESC,
+                      CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
+                      id ASC",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?.to_lowercase(),
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let changes = transaction
+        .prepare(
+            "SELECT id, app, window_title, domain, COALESCE(category_id, 0),
+                    MAX(0, ts_end - ts_start)
+             FROM segments WHERE manual_category = 0",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            let id = row.get::<_, i64>(0)?;
+            let app = row.get::<_, String>(1)?.to_lowercase();
+            let title = row.get::<_, String>(2)?.to_lowercase();
+            let domain = row.get::<_, String>(3)?.to_lowercase();
+            let current_category_id = row.get::<_, i64>(4)?;
+            let duration_ms = row.get::<_, i64>(5)?;
+            let category_id = rules
+                .iter()
+                .find(|(match_type, pattern, _)| match match_type.as_str() {
+                    "domain" => domain.contains(pattern),
+                    "title" => title.contains(pattern),
+                    "exe" => app.starts_with(pattern),
+                    _ => false,
+                })
+                .map_or(0, |(_, _, category_id)| *category_id);
+            Ok((id, current_category_id, category_id, duration_ms))
+        })
+        .map_err(|error| error.to_string())?
+        .filter_map(|result| match result {
+            Ok((_, current, category_id, _)) if current == category_id => None,
+            other => Some(other),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let changed_duration_ms = changes.iter().map(|(_, _, _, duration)| duration).sum();
+    for (segment_id, _, category_id, _) in &changes {
+        transaction
+            .execute(
+                "UPDATE segments SET category_id = ?1 WHERE id = ?2",
+                params![category_id, segment_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    rebuild_daily_stats(transaction)?;
+    Ok(ReclassificationSummary {
+        changed_segments: changes.len() as i64,
+        changed_duration_ms,
+    })
+}
+
+pub fn reclassify_history(connection: &mut Connection) -> Result<ReclassificationSummary, String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let summary = reclassify_history_in_transaction(&transaction)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(summary)
 }
 
 pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecord>, String> {
@@ -771,9 +977,9 @@ pub fn today_cumulative(
 #[cfg(test)]
 mod tests {
     use super::{
-        daily_series, import_challenge, progress_series, refresh_daily_stats, segment_local_dates,
-        set_setting, today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002,
-        MIGRATION_003,
+        daily_series, import_challenge, progress_series, reclassify_history, refresh_daily_stats,
+        segment_local_dates, set_setting, today_cumulative, upsert_exe_rule, MIGRATION_001,
+        MIGRATION_002, MIGRATION_003, MIGRATION_004,
     };
     use rusqlite::{params, Connection};
 
@@ -871,6 +1077,99 @@ mod tests {
             .execute_batch(MIGRATION_003)
             .expect("day print schema");
         connection
+            .execute_batch(MIGRATION_004)
+            .expect("history reclassification schema");
+        connection
+    }
+
+    #[test]
+    fn reclassifies_history_by_precedence_without_overwriting_manual_categories() {
+        let mut connection = score_schema();
+        for (id, name, kind) in [
+            (1, "Work", "useful"),
+            (2, "Chill", "neutral"),
+            (3, "Brainrot", "waste"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO categories (id, name, color, kind, created_at)
+                     VALUES (?1, ?2, '#000000', ?3, 0)",
+                    params![id, name, kind],
+                )
+                .expect("category");
+        }
+        for (match_type, pattern, category_id, priority) in [
+            ("exe", "example.exe", 2, 20),
+            ("title", "фокус", 1, 10),
+            ("domain", "example.com", 3, 10),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
+                     VALUES (?1, ?2, ?3, ?4, 0)",
+                    params![match_type, pattern, category_id, priority],
+                )
+                .expect("rule");
+        }
+        for (app, title, domain, category_id, manual_category) in [
+            ("EXAMPLE.EXE", "ФОКУС", "example.com", 0, 0),
+            ("OTHER.EXE", "ФОКУС", "example.com", 0, 0),
+            ("OTHER.EXE", "ФОКУС", "", 0, 0),
+            ("EXAMPLE.EXE", "Plain", "", 0, 0),
+            ("OTHER.EXE", "ФОКУС", "example.com", 1, 1),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO segments (
+                        ts_start, ts_end, app, window_title, domain, category_id, status,
+                        manual_category
+                     ) VALUES (
+                        strftime('%s', '2026-08-10 10:00:00', 'utc') * 1000,
+                        strftime('%s', '2026-08-10 10:10:00', 'utc') * 1000,
+                        ?1, ?2, ?3, ?4, 'crashed', ?5
+                     )",
+                    params![app, title, domain, category_id, manual_category],
+                )
+                .expect("segment");
+        }
+
+        let summary = reclassify_history(&mut connection).expect("reclassification");
+
+        assert_eq!(summary.changed_segments, 4);
+        assert_eq!(summary.changed_duration_ms, 2_400_000);
+        let categories = connection
+            .prepare("SELECT category_id FROM segments ORDER BY id")
+            .expect("query")
+            .query_map([], |row| row.get::<_, i64>(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("categories");
+        assert_eq!(categories, vec![2, 3, 1, 2, 1]);
+        let stats = connection
+            .prepare(
+                "SELECT c.kind, ds.duration_ms, ds.xp
+                 FROM daily_stats ds JOIN categories c ON c.id = ds.category_id
+                 WHERE ds.local_date = '2026-08-10' ORDER BY c.kind",
+            )
+            .expect("stats query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .expect("stats rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("stats");
+        assert_eq!(
+            stats,
+            vec![
+                ("neutral".to_string(), 1_200_000, 0),
+                ("useful".to_string(), 1_200_000, 20),
+                ("waste".to_string(), 600_000, 0),
+            ]
+        );
     }
 
     #[test]

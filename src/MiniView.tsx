@@ -4,6 +4,12 @@ import type { ProgressOverview } from "./progress";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
+const DEFAULT_KIND_LABELS: Record<CategoryKind, string> = {
+  useful: "Полезное",
+  neutral: "Нейтральное",
+  waste: "Потери",
+};
+
 interface LiveSegment {
   id: number;
   ts_start: number;
@@ -59,7 +65,8 @@ export function MiniView() {
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
-  const [pinned, setPinned] = useState(false);
+  const [pinned, setPinned] = useState(true);
+  const [kindLabels, setKindLabels] = useState(DEFAULT_KIND_LABELS);
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +82,11 @@ export function MiniView() {
       setLiveSegment(nextLiveSegment);
       setPaused(trackingPaused);
       setPinned(settings.mini_pinned === "1");
+      setKindLabels({
+        useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
+        neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
+        waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
+      });
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
@@ -128,7 +140,7 @@ export function MiniView() {
   const sessionMs = liveSegment ? now - liveSegment.ts_start : 0;
 
   return (
-    <main className="mini-shell" onClick={() => void invoke("show_dashboard")}>
+    <main className="mini-shell">
       <div
         className="mini-drag-strip"
         onMouseDown={(event) => {
@@ -148,8 +160,8 @@ export function MiniView() {
 
       {progress ? (
         <section className="mini-metrics" aria-label="Прогресс дня">
-          <BulletBar kind="useful" label="Полезное" valueMs={progress.today.useful_ms} thresholdMin={progress.today.useful_goal_min} />
-          <BulletBar kind="waste" label="Потери" valueMs={progress.today.waste_ms} thresholdMin={progress.today.waste_limit_min} />
+          <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} thresholdMin={progress.today.useful_goal_min} />
+          <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} thresholdMin={progress.today.waste_limit_min} />
           <div className="mini-rank">
             <span>{progress.current_rank}</span>
             <div aria-hidden="true"><i style={{ width: `${rankProgress}%` }} /></div>
@@ -160,7 +172,7 @@ export function MiniView() {
 
       {error && <p className="mini-error">{error}</p>}
 
-      <footer className="mini-actions" onClick={(event) => event.stopPropagation()}>
+      <footer className="mini-actions">
         <button type="button" onClick={(event) => void toggleTracking(event)}>{paused ? "Продолжить" : "Пауза"}</button>
         <button type="button" onClick={() => void invoke("show_dashboard")}>Дашборд</button>
         <button

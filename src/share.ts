@@ -3,6 +3,12 @@ import { toDataURL as qrToDataURL } from "qrcode";
 
 export const INSTALL_URL = "https://github.com/reconix37/time-to-lock-in/releases/latest";
 
+export interface KindLabels {
+  useful: string;
+  neutral: string;
+  waste: string;
+}
+
 export interface DayPrintEntry {
   app: string;
   category_name: string;
@@ -27,6 +33,7 @@ export interface DayPrintData {
   lifetime_xp: number;
   rank: string;
   burned_rubles: number | null;
+  currency: string;
   top_entries: DayPrintEntry[];
   challenge_code: string | null;
   challenge_passed: boolean | null;
@@ -44,6 +51,7 @@ export interface WeekSummaryData {
   strongest_day: string | null;
   waste_days: number;
   burned_rubles: number | null;
+  currency: string;
 }
 
 interface SharePalette {
@@ -117,6 +125,19 @@ function divider(context: CanvasRenderingContext2D, colors: SharePalette, y: num
   context.stroke();
 }
 
+function fittedText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {
+  if (context.measureText(value).width <= maxWidth) return value;
+  const characters = Array.from(value);
+  while (characters.length > 0 && context.measureText(`${characters.join("")}…`).width > maxWidth) {
+    characters.pop();
+  }
+  return `${characters.join("")}…`;
+}
+
+function kindInitial(label: string): string {
+  return Array.from(label.trim())[0]?.toLocaleUpperCase("ru-RU") ?? "?";
+}
+
 function condition(
   context: CanvasRenderingContext2D,
   colors: SharePalette,
@@ -132,7 +153,7 @@ function condition(
   context.fillText(passed ? "✓" : "×", PADDING, y);
   context.fillStyle = colors.text;
   font(context, 29);
-  context.fillText(label, PADDING + 58, y);
+  context.fillText(fittedText(context, label, 500), PADDING + 58, y);
   context.textAlign = "right";
   context.fillStyle = colors.muted;
   context.fillText(`${value}м ${limit ? "≤" : "≥"} ${threshold}м`, WIDTH - PADDING, y);
@@ -150,7 +171,7 @@ function categoryBars(
     const rowY = y + index * 72;
     context.fillStyle = colors.muted;
     font(context, 24);
-    context.fillText(item.label, PADDING, rowY);
+    context.fillText(fittedText(context, item.label, 650), PADDING, rowY);
     context.textAlign = "right";
     context.fillStyle = colors.text;
     context.fillText(duration(item.value), WIDTH - PADDING, rowY);
@@ -193,7 +214,7 @@ export function challengeCode(day: DayPrintData): string {
   return `TF-${minutes(day.useful_ms)}-${minutes(day.waste_ms)}-${minutes(day.observed_ms)}`;
 }
 
-export async function renderDayPrintPng(day: DayPrintData): Promise<string> {
+export async function renderDayPrintPng(day: DayPrintData, kindLabels: KindLabels): Promise<string> {
   const [canvas, context, colors] = createCanvas();
   context.fillStyle = colors.muted;
   font(context, 22);
@@ -206,8 +227,8 @@ export async function renderDayPrintPng(day: DayPrintData): Promise<string> {
   context.fillText(`${day.rank} · +${day.public_xp.toLocaleString("ru-RU")} XP`, PADDING, 226);
   divider(context, colors, 266);
 
-  condition(context, colors, 326, "ПОЛЕЗНОЕ", minutes(day.useful_ms), day.useful_goal_min, day.useful_passed);
-  condition(context, colors, 382, "ПОТЕРИ", minutes(day.waste_ms), day.waste_limit_min, day.waste_passed, true);
+  condition(context, colors, 326, kindLabels.useful.toLocaleUpperCase("ru-RU"), minutes(day.useful_ms), day.useful_goal_min, day.useful_passed);
+  condition(context, colors, 382, kindLabels.waste.toLocaleUpperCase("ru-RU"), minutes(day.waste_ms), day.waste_limit_min, day.waste_passed, true);
   condition(context, colors, 438, "НАБЛЮДЕНИЕ", minutes(day.observed_ms), day.observed_min, day.observed_passed);
   if (day.challenge_passed !== null) {
     context.fillStyle = day.challenge_passed ? colors.useful : colors.waste;
@@ -216,9 +237,9 @@ export async function renderDayPrintPng(day: DayPrintData): Promise<string> {
   }
   divider(context, colors, 528);
   categoryBars(context, colors, [
-    { label: "Полезное", value: day.useful_ms, color: colors.useful },
-    { label: "Нейтральное", value: day.neutral_ms, color: colors.neutral },
-    { label: "Потери", value: day.waste_ms, color: colors.waste },
+    { label: kindLabels.useful, value: day.useful_ms, color: colors.useful },
+    { label: kindLabels.neutral, value: day.neutral_ms, color: colors.neutral },
+    { label: kindLabels.waste, value: day.waste_ms, color: colors.waste },
   ], 582);
 
   let y = 828;
@@ -243,13 +264,13 @@ export async function renderDayPrintPng(day: DayPrintData): Promise<string> {
   if (day.burned_rubles !== null) {
     context.fillStyle = colors.waste;
     font(context, 25, 700);
-    context.fillText(`СОЖЖЕНО ₽ ${day.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`, PADDING, 1090);
+    context.fillText(`СОЖЖЕНО ${day.currency} ${day.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`, PADDING, 1090);
   }
   await footer(context, colors);
   return canvas.toDataURL("image/png");
 }
 
-export async function renderWeekPng(week: WeekSummaryData): Promise<string> {
+export async function renderWeekPng(week: WeekSummaryData, kindLabels: KindLabels): Promise<string> {
   const [canvas, context, colors] = createCanvas();
   context.fillStyle = colors.muted;
   font(context, 22);
@@ -271,11 +292,11 @@ export async function renderWeekPng(week: WeekSummaryData): Promise<string> {
     font(context, 25);
     context.fillText(dateLabel(day.local_date, { weekday: "short", day: "2-digit", month: "2-digit" }), PADDING + 52, y);
     context.fillStyle = colors.useful;
-    context.fillText(`U ${duration(day.useful_ms)}`, 350, y);
+    context.fillText(`${kindInitial(kindLabels.useful)} ${duration(day.useful_ms)}`, 350, y);
     context.fillStyle = colors.waste;
-    context.fillText(`W ${duration(day.waste_ms)}`, 510, y);
+    context.fillText(`${kindInitial(kindLabels.waste)} ${duration(day.waste_ms)}`, 510, y);
     context.fillStyle = colors.neutral;
-    context.fillText(`O ${duration(day.observed_ms)}`, 670, y);
+    context.fillText(`Н ${duration(day.observed_ms)}`, 670, y);
     context.textAlign = "right";
     context.fillStyle = colors.muted;
     context.fillText(day.passed ? "ДЕНЬ СИЛЫ" : "ДЕНЬ ЗОМБИ", WIDTH - PADDING, y);
@@ -284,9 +305,9 @@ export async function renderWeekPng(week: WeekSummaryData): Promise<string> {
   divider(context, colors, 894);
   context.fillStyle = colors.text;
   font(context, 29, 700);
-  context.fillText(`ПОЛЕЗНОЕ ${duration(week.useful_ms)}`, PADDING, 954);
+  context.fillText(fittedText(context, `${kindLabels.useful.toLocaleUpperCase("ru-RU")} ${duration(week.useful_ms)}`, WIDTH - PADDING * 2), PADDING, 954);
   context.fillStyle = colors.waste;
-  context.fillText(`ПОТЕРИ ${duration(week.waste_ms)}`, PADDING, 1002);
+  context.fillText(fittedText(context, `${kindLabels.waste.toLocaleUpperCase("ru-RU")} ${duration(week.waste_ms)}`, WIDTH - PADDING * 2), PADDING, 1002);
   context.fillStyle = colors.muted;
   font(context, 23);
   const strongest = week.strongest_day
@@ -296,13 +317,13 @@ export async function renderWeekPng(week: WeekSummaryData): Promise<string> {
   context.fillText(`Слито рабочих дней: ${week.waste_days}`, PADDING, 1092);
   if (week.burned_rubles !== null) {
     context.fillStyle = colors.waste;
-    context.fillText(`Сожжено ₽ ${week.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`, PADDING, 1132);
+    context.fillText(`Сожжено ${week.currency} ${week.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`, PADDING, 1132);
   }
   await footer(context, colors);
   return canvas.toDataURL("image/png");
 }
 
-export async function renderChallengePng(day: DayPrintData): Promise<string> {
+export async function renderChallengePng(day: DayPrintData, kindLabels: KindLabels): Promise<string> {
   const [canvas, context, colors] = createCanvas();
   const code = challengeCode(day);
   context.fillStyle = colors.muted;
@@ -318,8 +339,8 @@ export async function renderChallengePng(day: DayPrintData): Promise<string> {
   context.fillStyle = colors.muted;
   font(context, 23);
   context.fillText("ТРИ УСЛОВИЯ", PADDING, 374);
-  condition(context, colors, 448, "ПОЛЕЗНОЕ", minutes(day.useful_ms), minutes(day.useful_ms), true);
-  condition(context, colors, 516, "ПОТЕРИ", minutes(day.waste_ms), minutes(day.waste_ms), true, true);
+  condition(context, colors, 448, kindLabels.useful.toLocaleUpperCase("ru-RU"), minutes(day.useful_ms), minutes(day.useful_ms), true);
+  condition(context, colors, 516, kindLabels.waste.toLocaleUpperCase("ru-RU"), minutes(day.waste_ms), minutes(day.waste_ms), true, true);
   condition(context, colors, 584, "НАБЛЮДЕНИЕ", minutes(day.observed_ms), minutes(day.observed_ms), true);
   divider(context, colors, 636);
   context.fillStyle = colors.text;

@@ -1,3 +1,5 @@
+import type { KindLabels } from "../share";
+
 export interface CumulativePoint {
   timestamp_ms: number;
   hour: number;
@@ -15,6 +17,7 @@ export interface TodayCumulative {
 interface CumulativeChartProps {
   data: TodayCumulative;
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
 }
 
 const WIDTH = 760;
@@ -32,7 +35,7 @@ function pointHour(point: CumulativePoint): number {
   return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
 }
 
-export function CumulativeChart({ data, formatDuration }: CumulativeChartProps) {
+export function CumulativeChart({ data, formatDuration, kindLabels }: CumulativeChartProps) {
   const currentPoint = data.points.find((point) => point.is_current);
   const visiblePoints = data.points.filter((point) =>
     point.is_current || currentPoint === undefined || point.timestamp_ms <= currentPoint.timestamp_ms,
@@ -58,13 +61,13 @@ export function CumulativeChart({ data, formatDuration }: CumulativeChartProps) 
       <div className="card-heading cumulative-heading">
         <div><span className="eyebrow">Сегодня · по часам</span><h2 id="cumulative-title">Как росло время</h2></div>
         <div className="cumulative-legend" aria-label="Легенда графика">
-          <span className="kind-useful"><i />Полезное</span>
-          <span className="kind-waste"><i />Потери</span>
+          <span className="kind-useful"><i />{kindLabels.useful}</span>
+          <span className="kind-waste"><i />{kindLabels.waste}</span>
           <span className="is-reference"><i />Цель / лимит</span>
         </div>
       </div>
       <div className="cumulative-plot">
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Накопительно: полезное ${formatDuration(currentPoint?.useful_ms ?? 0)}, потери ${formatDuration(currentPoint?.waste_ms ?? 0)}`}>
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`Накопительно: ${kindLabels.useful} ${formatDuration(currentPoint?.useful_ms ?? 0)}, ${kindLabels.waste} ${formatDuration(currentPoint?.waste_ms ?? 0)}`}>
           {yTicks.map((tick) => (
             <g className="cumulative-y-tick" key={tick}>
               <line x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} />
@@ -90,8 +93,8 @@ export function CumulativeChart({ data, formatDuration }: CumulativeChartProps) 
         </svg>
       </div>
       <div className="cumulative-summary">
-        <span className="kind-useful">Полезное <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · цель {data.useful_goal_min}м</span>
-        <span className="kind-waste">Потери <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · лимит {data.waste_limit_min}м</span>
+        <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · цель {data.useful_goal_min}м</span>
+        <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · лимит {data.waste_limit_min}м</span>
       </div>
     </section>
   );

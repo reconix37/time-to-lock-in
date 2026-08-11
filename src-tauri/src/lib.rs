@@ -159,6 +159,7 @@ struct DayPrint {
     lifetime_xp: i64,
     rank: &'static str,
     burned_rubles: Option<f64>,
+    currency: String,
     top_entries: Vec<DayPrintEntry>,
     challenge_code: Option<String>,
     challenge_passed: Option<bool>,
@@ -177,6 +178,13 @@ struct WeekSummary {
     strongest_day: Option<String>,
     waste_days: usize,
     burned_rubles: Option<f64>,
+    currency: String,
+}
+
+#[derive(Serialize)]
+struct ReclassificationSummary {
+    changed_segments: i64,
+    changed_duration_ms: i64,
 }
 
 #[derive(Serialize)]
@@ -421,6 +429,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
         let amount = waste_ms as f64 / 3_600_000.0 * rate;
         (amount * 100.0).round() / 100.0
     });
+    let currency = db::setting(connection, "currency")?.unwrap_or_else(|| "₴".to_string());
 
     let mut statement = connection
         .prepare(
@@ -486,6 +495,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
         lifetime_xp,
         rank,
         burned_rubles,
+        currency,
         top_entries,
         challenge_code: challenge.map(|(code, _, _, _)| code),
         challenge_passed,
@@ -535,6 +545,10 @@ fn get_week_summary() -> Result<WeekSummary, String> {
     };
     let lifetime_xp = days.last().map_or(0, |day| day.lifetime_xp);
     let (rank, _, _) = rank_for_xp(lifetime_xp);
+    let currency = days
+        .first()
+        .map(|day| day.currency.clone())
+        .unwrap_or_else(|| "₴".to_string());
     Ok(WeekSummary {
         passed_count: days.iter().filter(|day| day.passed).count(),
         week_xp: days.iter().map(|day| day.public_xp).sum(),
@@ -550,6 +564,7 @@ fn get_week_summary() -> Result<WeekSummary, String> {
         rank,
         strongest_day,
         burned_rubles,
+        currency,
     })
 }
 
@@ -759,6 +774,11 @@ fn create_category(name: String, color: String, kind: String) -> Result<Category
 }
 
 #[tauri::command]
+fn update_category(id: i64, name: String, kind: String) -> Result<Category, String> {
+    db::update_category(id, &name, &kind).map(Category::from)
+}
+
+#[tauri::command]
 fn delete_category(id: i64) -> Result<(), String> {
     db::delete_category(id)
 }
@@ -897,6 +917,7 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         }
         "hourly_rate" => value.is_empty() || value.parse::<f64>().is_ok_and(|number| number >= 0.0),
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
+        "currency" => matches!(value.as_str(), "₴" | "$" | "€" | "₽"),
         "onboarding_done" | "tray_only" => matches!(value.as_str(), "0" | "1"),
         "last_day_print_seen" => local_date_format_is_valid(&value),
         "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" => {
@@ -953,7 +974,7 @@ fn set_segment_category(
         .ok_or_else(|| "segment does not exist".to_string())?;
     transaction
         .execute(
-            "UPDATE segments SET category_id = ?1 WHERE id = ?2",
+            "UPDATE segments SET category_id = ?1, manual_category = 1 WHERE id = ?2",
             params![category_id, segment_id],
         )
         .map_err(|error| error.to_string())?;
@@ -966,6 +987,16 @@ fn set_segment_category(
         db::refresh_daily_stats(&transaction, &local_date)?;
     }
     transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reclassify_history() -> Result<ReclassificationSummary, String> {
+    let mut connection = db::open()?;
+    let summary = db::reclassify_history(&mut connection)?;
+    Ok(ReclassificationSummary {
+        changed_segments: summary.changed_segments,
+        changed_duration_ms: summary.changed_duration_ms,
+    })
 }
 
 #[tauri::command]
@@ -1060,6 +1091,11 @@ fn show_dashboard(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn show_mini(app: tauri::AppHandle) -> Result<(), String> {
+    tray::show_mini(&app)
+}
+
+#[tauri::command]
 fn set_mini_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
     tray::set_mini_pinned(&app, pinned)
 }
@@ -1150,6 +1186,7 @@ pub fn run() {
             save_png,
             get_categories,
             create_category,
+            update_category,
             delete_category,
             get_rules,
             create_rule,
@@ -1158,12 +1195,14 @@ pub fn run() {
             get_settings,
             set_setting,
             set_segment_category,
+            reclassify_history,
             get_db_size_mb,
             get_apps_today,
             set_tracking_paused,
             get_tracking_paused,
             get_live_segment,
             show_dashboard,
+            show_mini,
             set_mini_pinned,
             fix_mini_window,
             start_mini_drag,

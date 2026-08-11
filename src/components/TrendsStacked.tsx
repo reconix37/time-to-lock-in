@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { formatLocalDate, type DailySeriesDay } from "../trends";
+import type { KindLabels } from "../share";
 
 interface TrendsStackedProps {
   days: DailySeriesDay[];
   range: 7 | 30;
   onRangeChange: (range: 7 | 30) => void;
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
 }
 
 const WIDTH = 1000;
@@ -17,7 +19,7 @@ const BOTTOM = 46;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 
-export function TrendsStacked({ days, range, onRangeChange, formatDuration }: TrendsStackedProps) {
+export function TrendsStacked({ days, range, onRangeChange, formatDuration, kindLabels }: TrendsStackedProps) {
   const visibleDays = days.slice(-range);
   const latestDay = visibleDays[visibleDays.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
@@ -38,6 +40,9 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration }: Tr
     return `${path} V ${goalY} H ${slotEnd}`;
   }, "");
   const yTicks = [0, yMax / 2, yMax];
+  const usefulGoalLabel = kindLabels.useful === "Полезное"
+    ? "Цель полезного"
+    : `Цель · ${kindLabels.useful}`;
 
   return (
     <section className="card trends-card" aria-labelledby="stacked-title">
@@ -58,10 +63,10 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration }: Tr
       </div>
 
       <div className="trends-legend" aria-label="Легенда графика">
-        <span className="kind-useful"><i />Полезное</span>
-        <span className="kind-neutral"><i />Нейтральное</span>
-        <span className="kind-waste"><i />Потери</span>
-        <span className="is-goal"><i />Цель полезного</span>
+        <span className="kind-useful"><i />{kindLabels.useful}</span>
+        <span className="kind-neutral"><i />{kindLabels.neutral}</span>
+        <span className="kind-waste"><i />{kindLabels.waste}</span>
+        <span className="is-goal"><i />{usefulGoalLabel}</span>
       </div>
 
       <div className={`trends-plot ${range === 30 ? "is-dense" : ""}`}>
@@ -80,11 +85,11 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration }: Tr
             const showLabel = range === 7 || index % 5 === 0 || index === visibleDays.length - 1;
             const tooltip = [
               formatLocalDate(day.local_date, { weekday: "long", day: "numeric", month: "long" }),
-              `Полезное: ${formatDuration(day.useful_ms)}`,
-              `Нейтральное: ${formatDuration(day.neutral_ms)}`,
-              `Потери: ${formatDuration(day.waste_ms)} / лимит ${day.waste_limit_min}м`,
+              `${kindLabels.useful}: ${formatDuration(day.useful_ms)}`,
+              `${kindLabels.neutral}: ${formatDuration(day.neutral_ms)}`,
+              `${kindLabels.waste}: ${formatDuration(day.waste_ms)} / лимит ${day.waste_limit_min}м`,
               `Учтено: ${formatDuration(day.observed_ms)}`,
-              `Цель полезного: ${day.useful_goal_min}м`,
+              `${usefulGoalLabel}: ${day.useful_goal_min}м`,
               `Статус: ${day.passed ? "день зачтён" : "день не зачтён"}`,
               `Public XP: +${day.useful_xp}`,
             ].join("\n");
@@ -122,9 +127,9 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration }: Tr
       {activeDay && (
         <div className="chart-tooltip" role="status">
           <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
-          <span className="kind-useful">Полезное {formatDuration(activeDay.useful_ms)}</span>
-          <span className="kind-neutral">Нейтральное {formatDuration(activeDay.neutral_ms)}</span>
-          <span className="kind-waste">Потери {formatDuration(activeDay.waste_ms)} / {activeDay.waste_limit_min}м</span>
+          <span className="kind-useful">{kindLabels.useful} {formatDuration(activeDay.useful_ms)}</span>
+          <span className="kind-neutral">{kindLabels.neutral} {formatDuration(activeDay.neutral_ms)}</span>
+          <span className="kind-waste">{kindLabels.waste} {formatDuration(activeDay.waste_ms)} / {activeDay.waste_limit_min}м</span>
           <span>Цель {activeDay.useful_goal_min}м · XP +{activeDay.useful_xp}</span>
           <b className={activeDay.passed ? "is-passed" : ""}>{activeDay.passed ? "Зачтён" : "Не зачтён"}</b>
         </div>

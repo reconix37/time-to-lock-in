@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { formatLocalDate, type DailySeriesDay } from "../trends";
+import type { KindLabels } from "../share";
 
 interface TrendsTrendProps {
   sourceDays: DailySeriesDay[];
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
 }
 
 const WIDTH = 1000;
@@ -25,7 +27,7 @@ function smoothPath(points: Array<[number, number]>): string {
   }, `M ${points[0][0]} ${points[0][1]}`);
 }
 
-export function TrendsTrend({ sourceDays, formatDuration }: TrendsTrendProps) {
+export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTrendProps) {
   const days = sourceDays.slice(-30);
   const latestDay = days[days.length - 1];
   const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
@@ -40,20 +42,23 @@ export function TrendsTrend({ sourceDays, formatDuration }: TrendsTrendProps) {
   const x = (index: number) => LEFT + slotWidth * index + slotWidth / 2;
   const averagePath = smoothPath(days.map((day, index) => [x(index), y(day.useful_ma_7d_ms)]));
   const yTicks = [0, yMax / 2, yMax];
+  const trendTitle = kindLabels.useful === "Полезное"
+    ? "Полезный тренд"
+    : `${kindLabels.useful} · тренд`;
 
   return (
     <section className="card trends-card" aria-labelledby="useful-trend-title">
       <div className="card-heading trends-heading">
-        <div><span className="eyebrow">Направление</span><h2 id="useful-trend-title">Полезный тренд</h2></div>
+        <div><span className="eyebrow">Направление</span><h2 id="useful-trend-title">{trendTitle}</h2></div>
         <span className="mono-meta">30 дней · MA7 с полным окном</span>
       </div>
       <div className="trends-legend" aria-label="Легенда графика">
-        <span className="kind-useful"><i />Полезное за день</span>
+        <span className="kind-useful"><i />{kindLabels.useful} за день</span>
         <span className="is-average"><i />Среднее за 7 дней</span>
       </div>
 
       <div className="trends-plot is-dense">
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Полезное время и среднее за семь дней">
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`${kindLabels.useful} и среднее за семь дней`}>
           {yTicks.map((tick) => (
             <g className="trends-grid-tick" key={tick}>
               <line x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} />
@@ -64,7 +69,7 @@ export function TrendsTrend({ sourceDays, formatDuration }: TrendsTrendProps) {
             const showLabel = index % 5 === 0 || index === days.length - 1;
             const tooltip = [
               formatLocalDate(day.local_date, { weekday: "long", day: "numeric", month: "long" }),
-              `Полезное: ${formatDuration(day.useful_ms)}`,
+              `${kindLabels.useful}: ${formatDuration(day.useful_ms)}`,
               `Среднее за 7 дней: ${formatDuration(day.useful_ma_7d_ms)}`,
               `Цель: ${day.useful_goal_min}м`,
               `Public XP: +${day.useful_xp}`,
@@ -106,7 +111,7 @@ export function TrendsTrend({ sourceDays, formatDuration }: TrendsTrendProps) {
       {activeDay && (
         <div className="chart-tooltip" role="status">
           <strong>{formatLocalDate(activeDay.local_date, { weekday: "short", day: "numeric", month: "short" })}</strong>
-          <span className="kind-useful">Полезное {formatDuration(activeDay.useful_ms)}</span>
+          <span className="kind-useful">{kindLabels.useful} {formatDuration(activeDay.useful_ms)}</span>
           <span className="is-average">MA7 {formatDuration(activeDay.useful_ma_7d_ms)}</span>
           <span>Цель {activeDay.useful_goal_min}м · XP +{activeDay.useful_xp}</span>
         </div>

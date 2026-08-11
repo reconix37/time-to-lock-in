@@ -19,6 +19,9 @@ struct TraySnapshot {
     waste_ms: i64,
     live_kind: String,
     away: bool,
+    useful_label: String,
+    neutral_label: String,
+    waste_label: String,
 }
 
 pub fn install(
@@ -113,10 +116,17 @@ pub fn toggle_mini(app: &AppHandle) {
     if mini.is_visible().unwrap_or(false) {
         let _ = mini.hide();
     } else {
-        let _ = clamp_mini_window(&mini);
-        let _ = mini.show();
-        let _ = mini.set_focus();
+        let _ = show_mini(app);
     }
+}
+
+pub fn show_mini(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    clamp_mini_window(&mini)?;
+    mini.show().map_err(|error| error.to_string())?;
+    mini.set_focus().map_err(|error| error.to_string())
 }
 
 pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
@@ -236,9 +246,12 @@ fn spawn_updater(
                     snapshot.away,
                 )));
                 let _ = tray.set_tooltip(Some(format!(
-                    "TTLI · Полезное {}м · Нейтральное {}м · Потери {}м · Наблюдение {}м",
+                    "TTLI · {} {}м · {} {}м · {} {}м · Наблюдение {}м",
+                    snapshot.useful_label,
                     useful_minutes,
+                    snapshot.neutral_label,
                     snapshot.neutral_ms / 60_000,
+                    snapshot.waste_label,
                     snapshot.waste_ms / 60_000,
                     (snapshot.useful_ms + snapshot.neutral_ms + snapshot.waste_ms) / 60_000,
                 )));
@@ -287,12 +300,21 @@ fn tray_snapshot() -> Result<TraySnapshot, String> {
         .optional()
         .map_err(|error| error.to_string())?;
     let (live_kind, status) = live.unwrap_or_else(|| ("neutral".to_string(), String::new()));
+    let useful_label =
+        db::setting(&connection, "kind_label_useful")?.unwrap_or_else(|| "Полезное".to_string());
+    let neutral_label = db::setting(&connection, "kind_label_neutral")?
+        .unwrap_or_else(|| "Нейтральное".to_string());
+    let waste_label =
+        db::setting(&connection, "kind_label_waste")?.unwrap_or_else(|| "Потери".to_string());
     Ok(TraySnapshot {
         useful_ms,
         neutral_ms,
         waste_ms,
         live_kind,
         away: status == "away",
+        useful_label,
+        neutral_label,
+        waste_label,
     })
 }
 

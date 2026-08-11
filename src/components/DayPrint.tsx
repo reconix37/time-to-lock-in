@@ -1,4 +1,4 @@
-import type { DayPrintData } from "../share";
+import type { DayPrintData, KindLabels } from "../share";
 
 interface DayPrintProps {
   data: DayPrintData;
@@ -7,6 +7,8 @@ interface DayPrintProps {
   busyAction: "day" | "week" | "challenge" | null;
   message: string | null;
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
+  observedLabel?: string;
   onDateChange: (localDate: string) => void;
   onShareDay: () => void;
   onShareWeek: () => void;
@@ -30,6 +32,8 @@ export function DayPrint({
   busyAction,
   message,
   formatDuration,
+  kindLabels,
+  observedLabel = "Наблюдение",
   onDateChange,
   onShareDay,
   onShareWeek,
@@ -61,9 +65,9 @@ export function DayPrint({
         ))}
         {data.top_entries.length === 0 && <p className="day-print-empty">Нет наблюдаемых сегментов.</p>}
         <div className="day-print-conditions">
-          {conditionLine("ПОЛЕЗНОЕ", data.useful_ms, data.useful_goal_min, data.useful_passed)}
-          {conditionLine("ПОТЕРИ", data.waste_ms, data.waste_limit_min, data.waste_passed, true)}
-          {conditionLine("НАБЛЮДЕНИЕ", data.observed_ms, data.observed_min, data.observed_passed)}
+          {conditionLine(kindLabels.useful.toLocaleUpperCase("ru-RU"), data.useful_ms, data.useful_goal_min, data.useful_passed)}
+          {conditionLine(kindLabels.waste.toLocaleUpperCase("ru-RU"), data.waste_ms, data.waste_limit_min, data.waste_passed, true)}
+          {conditionLine(observedLabel.toLocaleUpperCase("ru-RU"), data.observed_ms, data.observed_min, data.observed_passed)}
         </div>
         <p className={`day-print-status ${data.passed ? "is-ok" : "is-bad"}`}>
           STATUS: {data.passed ? "ДЕНЬ СИЛЫ" : "ДЕНЬ ЗОМБИ"} · +{data.public_xp} XP · {data.rank}
@@ -74,10 +78,10 @@ export function DayPrint({
           </p>
         )}
         <div className="day-print-totals">
-          <span>useful {formatDuration(data.useful_ms)}</span>
-          <span>neutral {formatDuration(data.neutral_ms)}</span>
-          <span>waste {formatDuration(data.waste_ms)}</span>
-          {data.burned_rubles !== null && <strong>сожжено ₽ {data.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong>}
+          <span>{kindLabels.useful} {formatDuration(data.useful_ms)}</span>
+          <span>{kindLabels.neutral} {formatDuration(data.neutral_ms)}</span>
+          <span>{kindLabels.waste} {formatDuration(data.waste_ms)}</span>
+          {data.burned_rubles !== null && <strong>сожжено {data.currency} {data.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong>}
         </div>
         <p className="day-print-privacy">Tracked locally. No screenshots.</p>
       </div>

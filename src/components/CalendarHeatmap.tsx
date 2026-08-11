@@ -1,10 +1,12 @@
 import { useState } from "react";
 import type { ProgressDay } from "../progress";
+import type { KindLabels } from "../share";
 
 interface CalendarHeatmapProps {
   days: ProgressDay[];
   todayDate: string;
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
 }
 
 type HeatMode = "useful" | "waste";
@@ -14,7 +16,7 @@ function dateLabel(localDate: string): string {
     .format(new Date(`${localDate}T12:00:00`));
 }
 
-export function CalendarHeatmap({ days, todayDate, formatDuration }: CalendarHeatmapProps) {
+export function CalendarHeatmap({ days, todayDate, formatDuration, kindLabels }: CalendarHeatmapProps) {
   const [mode, setMode] = useState<HeatMode>("useful");
   const monthLabels = days.filter((_, index) => index % 7 === 0).map((day, index) => ({
     key: day.local_date,
@@ -27,8 +29,8 @@ export function CalendarHeatmap({ days, todayDate, formatDuration }: CalendarHea
       <div className="card-heading heatmap-heading">
         <div><span className="eyebrow">История · 12 недель</span><h2 id="heatmap-title">Календарь прогресса</h2></div>
         <div className="segmented-control" role="group" aria-label="Показатель календаря">
-          <button type="button" aria-pressed={mode === "useful"} onClick={() => setMode("useful")}>Полезное</button>
-          <button type="button" aria-pressed={mode === "waste"} onClick={() => setMode("waste")}>Потери</button>
+          <button type="button" aria-pressed={mode === "useful"} onClick={() => setMode("useful")}>{kindLabels.useful}</button>
+          <button type="button" aria-pressed={mode === "waste"} onClick={() => setMode("waste")}>{kindLabels.waste}</button>
         </div>
       </div>
       <div className="heatmap-scroll">
@@ -36,8 +38,8 @@ export function CalendarHeatmap({ days, todayDate, formatDuration }: CalendarHea
           {monthLabels.map((month) => <span key={month.key} style={{ gridColumn: month.column }}>{month.label}</span>)}
         </div>
         <div className="heatmap-body">
-          <div className="heatmap-weekdays" aria-hidden="true"><span>пн</span><span>ср</span><span>пт</span></div>
-          <div className="heatmap-grid" role="img" aria-label={`Календарь: ${mode === "useful" ? "полезное время" : "потери"}`}>
+          <div className="heatmap-weekdays" aria-hidden="true">{["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="heatmap-grid" role="img" aria-label={`Календарь: ${mode === "useful" ? kindLabels.useful : kindLabels.waste}`}>
             {days.map((day) => {
               const value = mode === "useful" ? day.useful_ms : day.waste_ms;
               const level = mode === "useful" ? day.useful_level : day.waste_level;

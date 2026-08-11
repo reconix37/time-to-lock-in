@@ -1,8 +1,11 @@
 import type { ProgressOverview } from "../progress";
+import type { KindLabels } from "../share";
 
 interface DayScorecardProps {
   overview: ProgressOverview;
   formatDuration: (milliseconds: number) => string;
+  kindLabels: KindLabels;
+  observedLabel?: string;
 }
 
 interface BulletProps {
@@ -48,8 +51,11 @@ function Bullet({ kind, label, valueMs, thresholdMin, passed }: BulletProps) {
   );
 }
 
-export function DayScorecard({ overview, formatDuration }: DayScorecardProps) {
+export function DayScorecard({ overview, formatDuration, kindLabels, observedLabel = "Наблюдение" }: DayScorecardProps) {
   const { today } = overview;
+  const usefulTodayLabel = kindLabels.useful === "Полезное"
+    ? "полезного"
+    : kindLabels.useful;
   const rankSpan = overview.next_rank_threshold === null
     ? 1
     : overview.next_rank_threshold - overview.current_rank_threshold;
@@ -66,9 +72,9 @@ export function DayScorecard({ overview, formatDuration }: DayScorecardProps) {
         </span>
       </div>
       <div className="score-bullets">
-        <Bullet kind="useful" label="Полезное" valueMs={today.useful_ms} thresholdMin={today.useful_goal_min} passed={today.useful_passed} />
-        <Bullet kind="waste" label="Потери" valueMs={today.waste_ms} thresholdMin={today.waste_limit_min} passed={today.waste_passed} />
-        <Bullet kind="observed" label="Наблюдение" valueMs={today.observed_ms} thresholdMin={today.observed_min} passed={today.observed_passed} />
+        <Bullet kind="useful" label={kindLabels.useful} valueMs={today.useful_ms} thresholdMin={today.useful_goal_min} passed={today.useful_passed} />
+        <Bullet kind="waste" label={kindLabels.waste} valueMs={today.waste_ms} thresholdMin={today.waste_limit_min} passed={today.waste_passed} />
+        <Bullet kind="observed" label={observedLabel} valueMs={today.observed_ms} thresholdMin={today.observed_min} passed={today.observed_passed} />
       </div>
       <div className="rank-panel">
         <div className="rank-copy">
@@ -79,7 +85,7 @@ export function DayScorecard({ overview, formatDuration }: DayScorecardProps) {
         <div className="rank-progress">
           <div><span>{overview.next_rank ? `До ранга «${overview.next_rank}»` : "Максимальный ранг"}</span><strong>{overview.next_rank_threshold === null ? "MAX" : `${overview.next_rank_threshold - overview.lifetime_xp} XP`}</strong></div>
           <span className="rank-rail"><i style={{ width: `${rankProgress}%` }} /></span>
-          <small>Сегодня: {formatDuration(today.useful_ms)} полезного</small>
+          <small>Сегодня: {formatDuration(today.useful_ms)} {usefulTodayLabel}</small>
         </div>
       </div>
     </section>
