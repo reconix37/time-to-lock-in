@@ -45,6 +45,22 @@ struct TodayStats {
     observed_ms: i64,
 }
 
+#[derive(Serialize)]
+struct CumulativePoint {
+    timestamp_ms: i64,
+    hour: i64,
+    useful_ms: i64,
+    waste_ms: i64,
+    is_current: bool,
+}
+
+#[derive(Serialize)]
+struct TodayCumulative {
+    points: Vec<CumulativePoint>,
+    useful_goal_min: i64,
+    waste_limit_min: i64,
+}
+
 #[derive(Clone, Serialize)]
 struct ProgressDay {
     local_date: String,
@@ -223,10 +239,19 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
     let connection = db::open()?;
     let mut statement = connection
         .prepare(
-            "SELECT id, ts_start, ts_end, app, window_title, domain, COALESCE(category_id, 0), status
-             FROM segments
-             WHERE date(ts_start / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-             ORDER BY ts_start ASC",
+            "WITH bounds AS (
+                SELECT CAST(strftime('%s', date('now', 'localtime') || ' 00:00:00', 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                       CAST(strftime('%s', date('now', 'localtime') || ' 00:00:00', '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms
+             )
+             SELECT segments.id,
+                    MAX(segments.ts_start, bounds.day_start_ms),
+                    MIN(segments.ts_end, bounds.day_end_ms),
+                    segments.app, segments.window_title, segments.domain,
+                    COALESCE(segments.category_id, 0), segments.status
+             FROM segments CROSS JOIN bounds
+             WHERE segments.ts_end > bounds.day_start_ms
+               AND segments.ts_start < bounds.day_end_ms
+             ORDER BY segments.ts_start ASC",
         )
         .map_err(|error| error.to_string())?;
     let segments = statement
@@ -246,6 +271,27 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(segments)
+}
+
+#[tauri::command]
+fn get_today_cumulative() -> Result<TodayCumulative, String> {
+    let connection = db::open()?;
+    let cumulative = db::today_cumulative(&connection, db::now_ms())?;
+    Ok(TodayCumulative {
+        points: cumulative
+            .points
+            .into_iter()
+            .map(|point| CumulativePoint {
+                timestamp_ms: point.timestamp_ms,
+                hour: point.hour,
+                useful_ms: point.useful_ms,
+                waste_ms: point.waste_ms,
+                is_current: point.is_current,
+            })
+            .collect(),
+        useful_goal_min: cumulative.useful_goal_min,
+        waste_limit_min: cumulative.waste_limit_min,
+    })
 }
 
 #[tauri::command]
@@ -621,6 +667,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_today_segments,
             get_today_stats,
+            get_today_cumulative,
             get_progress_overview,
             get_categories,
             create_category,

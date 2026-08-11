@@ -27,6 +27,22 @@ pub struct DailyProgressRecord {
     pub observed_min: i64,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct CumulativePointRecord {
+    pub timestamp_ms: i64,
+    pub hour: i64,
+    pub useful_ms: i64,
+    pub waste_ms: i64,
+    pub is_current: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct TodayCumulativeRecord {
+    pub points: Vec<CumulativePointRecord>,
+    pub useful_goal_min: i64,
+    pub waste_limit_min: i64,
+}
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -468,11 +484,118 @@ pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecor
     Ok(records)
 }
 
+pub fn today_cumulative(
+    connection: &Connection,
+    current_ms: i64,
+) -> Result<TodayCumulativeRecord, String> {
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE context AS (
+                SELECT datetime(?1 / 1000, 'unixepoch', 'localtime', 'start of day') AS local_day,
+                       ?1 AS current_ms
+             ), bounds AS (
+                SELECT current_ms,
+                       CAST(strftime('%s', local_day, 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                       CAST(strftime('%s', local_day, '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms
+                FROM context
+             ), hours(hour) AS (
+                SELECT 0
+                UNION ALL
+                SELECT hour + 1 FROM hours WHERE hour < 23
+             ), buckets AS (
+                SELECT hours.hour,
+                       CAST(strftime('%s', context.local_day, '+' || hours.hour || ' hours', 'utc') AS INTEGER) * 1000 AS bucket_start_ms,
+                       CAST(strftime('%s', context.local_day, '+' || (hours.hour + 1) || ' hours', 'utc') AS INTEGER) * 1000 AS bucket_end_ms,
+                       context.current_ms
+                FROM hours CROSS JOIN context
+             ), hourly AS (
+                SELECT buckets.hour,
+                       buckets.bucket_end_ms AS timestamp_ms,
+                       COALESCE(SUM(CASE WHEN categories.kind = 'useful' THEN
+                           MAX(0, MIN(segments.ts_end, buckets.bucket_end_ms, buckets.current_ms) - MAX(segments.ts_start, buckets.bucket_start_ms))
+                       ELSE 0 END), 0) AS useful_ms,
+                       COALESCE(SUM(CASE WHEN categories.kind = 'waste' THEN
+                           MAX(0, MIN(segments.ts_end, buckets.bucket_end_ms, buckets.current_ms) - MAX(segments.ts_start, buckets.bucket_start_ms))
+                       ELSE 0 END), 0) AS waste_ms
+                FROM buckets
+                LEFT JOIN segments
+                  ON segments.status IN ('active', 'crashed')
+                 AND segments.ts_end > buckets.bucket_start_ms
+                 AND segments.ts_start < MIN(buckets.bucket_end_ms, buckets.current_ms)
+                LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
+                GROUP BY buckets.hour, buckets.bucket_end_ms
+             ), boundary_points AS (
+                SELECT day_start_ms AS timestamp_ms, 0 AS hour,
+                       0 AS useful_ms, 0 AS waste_ms, 0 AS is_current
+                FROM bounds
+                UNION ALL
+                SELECT timestamp_ms, hour + 1,
+                       SUM(useful_ms) OVER (ORDER BY hour),
+                       SUM(waste_ms) OVER (ORDER BY hour),
+                       0
+                FROM hourly
+             ), current_point AS (
+                SELECT bounds.current_ms AS timestamp_ms,
+                       CAST(strftime('%H', bounds.current_ms / 1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+                       COALESCE(SUM(CASE WHEN categories.kind = 'useful' THEN
+                           MAX(0, MIN(segments.ts_end, bounds.current_ms, bounds.day_end_ms) - MAX(segments.ts_start, bounds.day_start_ms))
+                       ELSE 0 END), 0) AS useful_ms,
+                       COALESCE(SUM(CASE WHEN categories.kind = 'waste' THEN
+                           MAX(0, MIN(segments.ts_end, bounds.current_ms, bounds.day_end_ms) - MAX(segments.ts_start, bounds.day_start_ms))
+                       ELSE 0 END), 0) AS waste_ms,
+                       1 AS is_current
+                FROM bounds
+                LEFT JOIN segments
+                  ON segments.status IN ('active', 'crashed')
+                 AND segments.ts_end > bounds.day_start_ms
+                 AND segments.ts_start < MIN(bounds.current_ms, bounds.day_end_ms)
+                LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
+             )
+             SELECT timestamp_ms, hour, useful_ms, waste_ms, is_current
+             FROM boundary_points
+             UNION ALL
+             SELECT timestamp_ms, hour, useful_ms, waste_ms, is_current
+             FROM current_point
+             ORDER BY timestamp_ms, is_current",
+        )
+        .map_err(|error| error.to_string())?;
+    let points = statement
+        .query_map([current_ms], |row| {
+            Ok(CumulativePointRecord {
+                timestamp_ms: row.get(0)?,
+                hour: row.get(1)?,
+                useful_ms: row.get(2)?,
+                waste_ms: row.get(3)?,
+                is_current: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let (useful_goal_min, waste_limit_min) = connection
+        .query_row(
+            "SELECT useful_goal_min, waste_limit_min
+             FROM goal_history
+             WHERE effective_local_date <= date(?1 / 1000, 'unixepoch', 'localtime')
+             ORDER BY effective_local_date DESC
+             LIMIT 1",
+            [current_ms],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(TodayCumulativeRecord {
+        points,
+        useful_goal_min,
+        waste_limit_min,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        progress_series, refresh_daily_stats, segment_local_dates, set_setting, upsert_exe_rule,
-        MIGRATION_001, MIGRATION_002,
+        progress_series, refresh_daily_stats, segment_local_dates, set_setting, today_cumulative,
+        upsert_exe_rule, MIGRATION_001, MIGRATION_002,
     };
     use rusqlite::{params, Connection};
 
@@ -567,6 +690,129 @@ mod tests {
             .execute_batch(MIGRATION_002)
             .expect("score schema");
         connection
+    }
+
+    fn local_ms(connection: &Connection, local_datetime: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT CAST(strftime('%s', ?1, 'utc') AS INTEGER) * 1000",
+                [local_datetime],
+                |row| row.get(0),
+            )
+            .expect("local timestamp")
+    }
+
+    #[test]
+    fn cumulative_today_splits_segments_across_local_hours() {
+        let connection = score_schema();
+        for (start, end, category_id, kind, status) in [
+            (
+                "2026-08-10 10:45:00",
+                "2026-08-10 12:15:00",
+                1,
+                "useful",
+                "active",
+            ),
+            (
+                "2026-08-10 11:30:00",
+                "2026-08-10 13:10:00",
+                2,
+                "waste",
+                "crashed",
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO categories (id, name, color, kind, created_at)
+                     VALUES (?1, ?2, '#000000', ?3, 0)",
+                    params![category_id, kind, kind],
+                )
+                .expect("category");
+            connection
+                .execute(
+                    "INSERT INTO segments (ts_start, ts_end, app, category_id, status)
+                     VALUES (?1, ?2, 'example.exe', ?3, ?4)",
+                    params![
+                        local_ms(&connection, start),
+                        local_ms(&connection, end),
+                        category_id,
+                        status,
+                    ],
+                )
+                .expect("segment");
+        }
+
+        let current_ms = local_ms(&connection, "2026-08-10 14:30:00");
+        let cumulative = today_cumulative(&connection, current_ms).expect("cumulative series");
+        let at_hour = |hour: i64| {
+            cumulative
+                .points
+                .iter()
+                .find(|point| point.hour == hour && !point.is_current)
+                .expect("hour boundary")
+        };
+
+        assert_eq!((at_hour(11).useful_ms, at_hour(11).waste_ms), (900_000, 0));
+        assert_eq!(
+            (at_hour(12).useful_ms, at_hour(12).waste_ms),
+            (4_500_000, 1_800_000)
+        );
+        assert_eq!(
+            (at_hour(13).useful_ms, at_hour(13).waste_ms),
+            (5_400_000, 5_400_000)
+        );
+        assert_eq!(
+            cumulative
+                .points
+                .iter()
+                .find(|point| point.is_current)
+                .map(|point| (point.useful_ms, point.waste_ms)),
+            Some((5_400_000, 6_000_000))
+        );
+        assert_eq!(cumulative.useful_goal_min, 120);
+        assert_eq!(cumulative.waste_limit_min, 60);
+    }
+
+    #[test]
+    fn cumulative_today_clips_midnight_and_ignores_non_observed_statuses() {
+        let connection = score_schema();
+        connection
+            .execute(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Work', '#000000', 'useful', 0)",
+                [],
+            )
+            .expect("category");
+        for (start, end, status) in [
+            ("2026-08-09 23:30:00", "2026-08-10 00:30:00", "crashed"),
+            ("2026-08-10 00:15:00", "2026-08-10 00:45:00", "away"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO segments (ts_start, ts_end, app, category_id, status)
+                     VALUES (?1, ?2, 'example.exe', 1, ?3)",
+                    params![
+                        local_ms(&connection, start),
+                        local_ms(&connection, end),
+                        status
+                    ],
+                )
+                .expect("segment");
+        }
+
+        let cumulative =
+            today_cumulative(&connection, local_ms(&connection, "2026-08-10 01:30:00"))
+                .expect("cumulative series");
+
+        assert_eq!(cumulative.points.len(), 26);
+        assert_eq!(
+            cumulative
+                .points
+                .iter()
+                .find(|point| point.hour == 1 && !point.is_current)
+                .map(|point| (point.useful_ms, point.waste_ms)),
+            Some((1_800_000, 0))
+        );
     }
 
     #[test]

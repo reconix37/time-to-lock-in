@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
+import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
 import { DayScorecard } from "./components/DayScorecard";
 import type { ProgressOverview } from "./progress";
 import "./styles/tokens.css";
@@ -148,6 +149,7 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
+  const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
   const [apps, setApps] = useState<AppToday[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +157,7 @@ function App() {
   const [dark, setDark] = useState(false);
   const [paused, setPaused] = useState(false);
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
+  const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
   const [classificationTarget, setClassificationTarget] = useState<ClassificationTarget | null>(null);
   const [classificationCategoryId, setClassificationCategoryId] = useState(0);
@@ -192,11 +195,12 @@ function App() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextProgress, nextApps, nextSettings, trackingPaused] =
+      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextApps, nextSettings, trackingPaused] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
           invoke<ProgressOverview>("get_progress_overview"),
+          invoke<TodayCumulative>("get_today_cumulative"),
           invoke<AppToday[]>("get_apps_today"),
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
@@ -204,6 +208,7 @@ function App() {
       setSegments(nextSegments);
       setCategories(nextCategories);
       setProgress(nextProgress);
+      setCumulative(nextCumulative);
       setStats(nextProgress.today);
       setApps(nextApps);
       setSettings(nextSettings);
@@ -230,6 +235,15 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "";
   }, [dark]);
+
+  useEffect(() => {
+    if (selectedApp === null) return;
+    const clearSelection = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedApp(null);
+    };
+    window.addEventListener("keydown", clearSelection);
+    return () => window.removeEventListener("keydown", clearSelection);
+  }, [selectedApp]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -726,11 +740,19 @@ function App() {
         <DayScorecard overview={progress} formatDuration={formatDuration} />
       )}
 
+      {loading || !cumulative ? (
+        <div className="card cumulative-skeleton skeleton" aria-label="Загрузка графика дня" />
+      ) : (
+        <CumulativeChart data={cumulative} formatDuration={formatDuration} />
+      )}
+
       <div className="dashboard-grid">
         <section className="card timeline-card">
           <div className="card-heading">
             <div><span className="eyebrow">Хронология</span><h1>Приложения за день</h1></div>
-            <span className="mono-meta">{appTimeline.length} приложений · {segments.length} сегментов</span>
+            <span className={`mono-meta ${selectedApp ? "is-selection" : ""}`}>
+              {selectedApp ? `Фокус: ${cleanAppName(selectedApp)} · Esc — сбросить` : `${appTimeline.length} приложений · ${segments.length} сегментов`}
+            </span>
           </div>
 
           {loading ? (
@@ -750,7 +772,7 @@ function App() {
                     return (
                       <button
                         key={segment.id}
-                        className={`track-segment ${segment.status === "away" ? "is-away" : ""}`}
+                        className={`track-segment ${segment.status === "away" ? "is-away" : ""} ${selectedApp && segment.app !== selectedApp ? "is-dimmed" : ""} ${selectedApp === segment.app ? "is-highlighted" : ""}`}
                         style={{
                           left: `${(startMinute / 1440) * 100}%`,
                           width: `${Math.max((duration / 86_400_000) * 100, 0.18)}%`,
@@ -770,7 +792,7 @@ function App() {
                   const groups = groupSegments(app.segments, live?.id, now);
                   const appCategory = categoryById.get(app.lastSegment.category_id);
                   return (
-                    <div className={`app-day-item ${app.isLive ? "is-current" : ""}`} key={app.app}>
+                    <div className={`app-day-item ${app.isLive ? "is-current" : ""} ${selectedApp && app.app !== selectedApp ? "is-dimmed" : ""} ${selectedApp === app.app ? "is-highlighted" : ""}`} key={app.app}>
                       <div className="app-day-main">
                         <button
                           type="button"
@@ -888,17 +910,23 @@ function App() {
             </div>
           </section>
 
-          <section className="card apps-card">
+          <section className={`card apps-card ${selectedApp ? "has-selection" : ""}`}>
             <div className="card-heading"><div><span className="eyebrow">Рейтинг</span><h2>Приложения</h2></div></div>
             {apps.length === 0 ? <p className="quiet-empty">Пока нет данных</p> : apps.slice(0, 6).map((app) => {
               const dominant: CategoryKind = app.useful_ms >= app.neutral_ms && app.useful_ms >= app.waste_ms ? "useful" : app.waste_ms >= app.neutral_ms ? "waste" : "neutral";
               return (
-                <div className="app-row" key={app.app}>
+                <button
+                  type="button"
+                  className={`app-row ${selectedApp === app.app ? "is-selected" : ""}`}
+                  key={app.app}
+                  aria-pressed={selectedApp === app.app}
+                  onClick={() => setSelectedApp((current) => current === app.app ? null : app.app)}
+                >
                   <span className="app-rank">{String(apps.indexOf(app) + 1).padStart(2, "0")}</span>
                   <span className="app-name">{cleanAppName(app.app)}</span>
                   <span className="app-bar"><i className={`kind-${dominant}`} style={{ width: `${(app.duration_ms / maxAppDuration) * 100}%` }} /></span>
                   <strong>{formatDuration(app.duration_ms)}</strong>
-                </div>
+                </button>
               );
             })}
           </section>
