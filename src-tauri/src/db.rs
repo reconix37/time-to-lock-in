@@ -51,6 +51,12 @@ pub struct DailySeriesRecord {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct AfkDayRecord {
+    pub local_date: String,
+    pub afk_ms: i64,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct CumulativePointRecord {
     pub timestamp_ms: i64,
     pub hour: i64,
@@ -867,6 +873,74 @@ pub fn daily_series(connection: &Connection, days: i64) -> Result<Vec<DailySerie
     Ok(records)
 }
 
+pub fn afk_series(connection: &Connection, days: i64) -> Result<Vec<AfkDayRecord>, String> {
+    if !(1..=366).contains(&days) {
+        return Err("days must be between 1 and 366".to_string());
+    }
+
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE calendar(local_date, position) AS (
+                SELECT date('now', 'localtime', '-' || (?1 - 1) || ' days'), 0
+                UNION ALL
+                SELECT date(local_date, '+1 day'), position + 1
+                FROM calendar WHERE position < ?1 - 1
+             ), bounds AS (
+                SELECT local_date,
+                       CAST(strftime('%s', local_date || ' 00:00:00', 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                       CAST(strftime('%s', local_date || ' 00:00:00', '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms
+                FROM calendar
+             )
+             SELECT bounds.local_date,
+                    COALESCE(SUM(MAX(
+                        0,
+                        MIN(segments.ts_end, bounds.day_end_ms)
+                            - MAX(segments.ts_start, bounds.day_start_ms)
+                    )), 0) AS afk_ms
+             FROM bounds
+             LEFT JOIN segments
+               ON segments.status = 'away'
+              AND segments.ts_end > bounds.day_start_ms
+              AND segments.ts_start < bounds.day_end_ms
+             GROUP BY bounds.local_date
+             ORDER BY bounds.local_date",
+        )
+        .map_err(|error| error.to_string())?;
+    statement
+        .query_map([days], |row| {
+            Ok(AfkDayRecord {
+                local_date: row.get(0)?,
+                afk_ms: row.get(1)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+pub fn afk_duration_for_day(connection: &Connection, local_date: &str) -> Result<i64, String> {
+    connection
+        .query_row(
+            "WITH bounds AS (
+                SELECT CAST(strftime('%s', ?1 || ' 00:00:00', 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                       CAST(strftime('%s', ?1 || ' 00:00:00', '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms
+             )
+             SELECT COALESCE(SUM(MAX(
+                        0,
+                        MIN(segments.ts_end, bounds.day_end_ms)
+                            - MAX(segments.ts_start, bounds.day_start_ms)
+                    )), 0)
+             FROM bounds
+             LEFT JOIN segments
+               ON segments.status = 'away'
+              AND segments.ts_end > bounds.day_start_ms
+              AND segments.ts_start < bounds.day_end_ms",
+            [local_date],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn today_cumulative(
     connection: &Connection,
     current_ms: i64,
@@ -977,9 +1051,9 @@ pub fn today_cumulative(
 #[cfg(test)]
 mod tests {
     use super::{
-        daily_series, import_challenge, progress_series, reclassify_history, refresh_daily_stats,
-        segment_local_dates, set_setting, today_cumulative, upsert_exe_rule, MIGRATION_001,
-        MIGRATION_002, MIGRATION_003, MIGRATION_004,
+        afk_series, daily_series, import_challenge, progress_series, reclassify_history,
+        refresh_daily_stats, segment_local_dates, set_setting, today_cumulative, upsert_exe_rule,
+        MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
     };
     use rusqlite::{params, Connection};
 
@@ -1453,6 +1527,37 @@ mod tests {
         assert_eq!(series[2].useful_xp, 180);
         assert_eq!(series[2].observed_ms, 10_800_000);
         assert!(series[2].passed);
+    }
+
+    #[test]
+    fn afk_series_zero_fills_dates_and_splits_local_midnight() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO segments (ts_start, ts_end, app, status)
+                 VALUES (
+                    strftime('%s', date('now', 'localtime', '-2 days') || ' 23:50:00', 'utc') * 1000,
+                    strftime('%s', date('now', 'localtime', '-1 day') || ' 00:20:00', 'utc') * 1000,
+                    'away.exe', 'away'
+                 );
+                 INSERT INTO segments (ts_start, ts_end, app, status)
+                 VALUES (
+                    strftime('%s', date('now', 'localtime', '-1 day') || ' 01:00:00', 'utc') * 1000,
+                    strftime('%s', date('now', 'localtime', '-1 day') || ' 01:30:00', 'utc') * 1000,
+                    'active.exe', 'active'
+                 );",
+            )
+            .expect("segments");
+
+        let series = afk_series(&connection, 4).expect("afk series");
+
+        assert_eq!(series.len(), 4);
+        assert_eq!(series[0].afk_ms, 0, "missing dates are zero-filled");
+        assert_eq!(series[1].afk_ms, 10 * 60_000);
+        assert_eq!(series[2].afk_ms, 20 * 60_000);
+        assert_eq!(series[3].afk_ms, 0);
+        assert!(afk_series(&connection, 0).is_err());
+        assert!(afk_series(&connection, 367).is_err());
     }
 
     #[test]

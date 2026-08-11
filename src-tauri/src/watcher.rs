@@ -77,6 +77,10 @@ fn normalize_title(title: &str) -> String {
     normalized
 }
 
+fn has_media_marker(title: &str) -> bool {
+    title.contains('▶') || title.to_lowercase().contains("(playing)")
+}
+
 pub fn spawn(
     receiver: Receiver<BrowserEvent>,
     stop: Arc<AtomicBool>,
@@ -262,7 +266,9 @@ fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, Strin
 
 #[cfg(windows)]
 mod platform {
-    use super::{normalize_title, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS};
+    use super::{
+        has_media_marker, normalize_title, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
+    };
     use crate::db;
     use rusqlite::Connection;
     use std::mem::size_of;
@@ -318,8 +324,7 @@ mod platform {
         } else {
             (String::new(), title.clone())
         };
-        let media_playing =
-            fused_title.contains('▶') || fused_title.to_lowercase().contains("(playing)");
+        let media_playing = has_media_marker(&fused_title) || has_media_marker(&title);
 
         Ok(Some(ActivityState {
             app,
@@ -406,7 +411,7 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_task_switcher, normalize_title, ActivityState};
+    use super::{has_media_marker, is_task_switcher, normalize_title, ActivityState};
 
     #[test]
     fn normalizes_volatile_title_suffixes_and_whitespace() {
@@ -426,6 +431,13 @@ mod tests {
     fn preserves_media_markers() {
         assert_eq!(normalize_title("Song (playing)"), "Song (playing)");
         assert_eq!(normalize_title("▶  Song"), "▶ Song");
+    }
+
+    #[test]
+    fn recognizes_media_markers_in_window_or_tab_titles() {
+        assert!(has_media_marker("▶ YouTube - Google Chrome"));
+        assert!(has_media_marker("Spotify (Playing)"));
+        assert!(!has_media_marker("YouTube - Google Chrome"));
     }
 
     #[test]

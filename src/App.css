@@ -350,6 +350,8 @@ button:focus-visible {
 .score-bullet.state-ok .score-status, .score-bullet.state-ok .score-status b { color: var(--ok); }
 .score-bullet.state-warn .score-status, .score-bullet.state-warn .score-status b { color: var(--warn); }
 .score-bullet.state-bad .score-status, .score-bullet.state-bad .score-status b { color: var(--bad); }
+.scorecard-afk { margin: 14px 0 -4px; color: var(--muted); font-size: 11px; }
+.scorecard-afk strong { color: var(--warn); font: 500 11px var(--font-mono); }
 .rank-panel { display: grid; grid-template-columns: minmax(190px, .5fr) minmax(260px, 1fr); gap: 24px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--hl-low); }
 .rank-copy { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; align-items: baseline; }
 .rank-copy .eyebrow { grid-column: 1 / -1; }
@@ -550,6 +552,16 @@ button:focus-visible {
 .trends-legend .kind-waste i { background: var(--cat-waste); }
 .trends-legend .is-goal i { height: 0; border-top: 2px dashed var(--cat-useful); border-radius: 0; background: transparent; }
 .trends-legend .is-average i { height: 0; border-top: 2px solid var(--iris); border-radius: 0; background: transparent; }
+.afk-strip-card { padding: 16px 20px; box-shadow: none; }
+.afk-strip { display: grid; height: 98px; grid-template-columns: repeat(7, minmax(34px, 1fr)); gap: 10px; padding-top: 4px; }
+.afk-strip button { display: grid; min-width: 0; grid-template-rows: 72px auto; gap: 7px; padding: 0; border: 0; background: transparent; color: var(--subtle); cursor: pointer; }
+.afk-strip button:focus { outline: none; }
+.afk-strip button:focus-visible { border-radius: var(--radius-sm); outline: 2px solid color-mix(in srgb, var(--iris) 35%, transparent); outline-offset: 2px; }
+.afk-bar-rail { display: flex; align-items: end; justify-content: center; border-bottom: 1px solid var(--hl-med); }
+.afk-bar-rail i { display: block; width: min(42px, 68%); border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--warn) 62%, var(--surface)); }
+.afk-strip button.is-active .afk-bar-rail i { background: var(--warn); }
+.afk-strip small { overflow: hidden; font: 10px var(--font-mono); text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
+.chart-tooltip .is-afk { color: var(--warn); }
 .trends-plot { min-width: 0; margin-top: 8px; overflow-x: auto; }
 .trends-plot svg { display: block; width: 100%; min-width: 720px; height: auto; }
 .trends-plot.is-dense svg { min-width: 940px; }

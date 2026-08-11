@@ -76,6 +76,7 @@ export function DayScorecard({ overview, formatDuration, kindLabels, observedLab
         <Bullet kind="waste" label={kindLabels.waste} valueMs={today.waste_ms} thresholdMin={today.waste_limit_min} passed={today.waste_passed} />
         <Bullet kind="observed" label={observedLabel} valueMs={today.observed_ms} thresholdMin={today.observed_min} passed={today.observed_passed} />
       </div>
+      <p className="scorecard-afk">AFK: <strong>{formatDuration(overview.today_afk_ms)}</strong></p>
       <div className="rank-panel">
         <div className="rank-copy">
           <span className="eyebrow">Public XP</span>

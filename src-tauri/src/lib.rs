@@ -79,6 +79,12 @@ struct DailySeriesDay {
     useful_ma_7d_ms: i64,
 }
 
+#[derive(Serialize)]
+struct AfkDay {
+    local_date: String,
+    afk_ms: i64,
+}
+
 #[derive(Clone, Serialize)]
 struct ProgressDay {
     local_date: String,
@@ -101,6 +107,7 @@ struct ProgressDay {
 #[derive(Serialize)]
 struct ProgressOverview {
     today: ProgressDay,
+    today_afk_ms: i64,
     lifetime_xp: i64,
     current_rank: &'static str,
     current_rank_threshold: i64,
@@ -147,6 +154,7 @@ struct DayPrint {
     useful_ms: i64,
     neutral_ms: i64,
     waste_ms: i64,
+    afk_ms: i64,
     observed_ms: i64,
     useful_goal_min: i64,
     waste_limit_min: i64,
@@ -172,6 +180,7 @@ struct WeekSummary {
     useful_ms: i64,
     neutral_ms: i64,
     waste_ms: i64,
+    afk_ms: i64,
     week_xp: i64,
     lifetime_xp: i64,
     rank: &'static str,
@@ -285,10 +294,12 @@ fn get_progress_overview() -> Result<ProgressOverview, String> {
         )
         .map_err(|error| error.to_string())?;
     let lifetime_xp = historical_xp + today.useful_ms / 60_000;
+    let today_afk_ms = db::afk_duration_for_day(&connection, &today_date)?;
     let (current_rank, current_rank_threshold, next) = rank_for_xp(lifetime_xp);
 
     Ok(ProgressOverview {
         today,
+        today_afk_ms,
         lifetime_xp,
         current_rank,
         current_rank_threshold,
@@ -316,6 +327,20 @@ fn get_daily_series(days: i64) -> Result<Vec<DailySeriesDay>, String> {
                 passed: day.passed,
                 useful_xp: day.useful_xp,
                 useful_ma_7d_ms: day.useful_ma_7d_ms,
+            })
+            .collect()
+    })
+}
+
+#[tauri::command]
+fn get_afk_series(days: i64) -> Result<Vec<AfkDay>, String> {
+    let connection = db::open()?;
+    db::afk_series(&connection, days).map(|series| {
+        series
+            .into_iter()
+            .map(|day| AfkDay {
+                local_date: day.local_date,
+                afk_ms: day.afk_ms,
             })
             .collect()
     })
@@ -396,6 +421,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
             },
         )
         .map_err(|error| error.to_string())?;
+    let afk_ms = db::afk_duration_for_day(connection, local_date)?;
     let observed_ms = useful_ms + neutral_ms + waste_ms;
     let useful_passed = useful_ms >= useful_goal_min.saturating_mul(60_000);
     let waste_passed = waste_ms <= waste_limit_min.saturating_mul(60_000);
@@ -483,6 +509,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
         useful_ms,
         neutral_ms,
         waste_ms,
+        afk_ms,
         observed_ms,
         useful_goal_min,
         waste_limit_min,
@@ -533,6 +560,7 @@ fn get_week_summary() -> Result<WeekSummary, String> {
     let useful_ms = days.iter().map(|day| day.useful_ms).sum();
     let neutral_ms = days.iter().map(|day| day.neutral_ms).sum();
     let waste_ms = days.iter().map(|day| day.waste_ms).sum();
+    let afk_ms = days.iter().map(|day| day.afk_ms).sum();
     let strongest_day = days
         .iter()
         .filter(|day| day.observed_ms > 0)
@@ -560,6 +588,7 @@ fn get_week_summary() -> Result<WeekSummary, String> {
         useful_ms,
         neutral_ms,
         waste_ms,
+        afk_ms,
         lifetime_xp,
         rank,
         strongest_day,
@@ -1180,6 +1209,7 @@ pub fn run() {
             get_today_cumulative,
             get_progress_overview,
             get_daily_series,
+            get_afk_series,
             get_day_print,
             get_week_summary,
             import_challenge,

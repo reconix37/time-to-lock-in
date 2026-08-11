@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
+import { AfkStrip } from "./components/AfkStrip";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
 import { DayPrint } from "./components/DayPrint";
 import { DayScorecard } from "./components/DayScorecard";
 import { TrendsStacked } from "./components/TrendsStacked";
 import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
-import type { DailySeriesDay } from "./trends";
+import type { AfkDay, DailySeriesDay } from "./trends";
 import {
   renderChallengePng,
   renderDayPrintPng,
@@ -171,6 +172,7 @@ function DashboardView() {
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
   const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
+  const [afkSeries, setAfkSeries] = useState<AfkDay[]>([]);
   const [dayPrint, setDayPrint] = useState<DayPrintData | null>(null);
   const [dayPrintDate, setDayPrintDate] = useState("");
   const [shareBusy, setShareBusy] = useState<"day" | "week" | "challenge" | null>(null);
@@ -228,13 +230,14 @@ function DashboardView() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextApps, nextSettings, trackingPaused] =
+      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextSettings, trackingPaused] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
           invoke<ProgressOverview>("get_progress_overview"),
           invoke<TodayCumulative>("get_today_cumulative"),
           invoke<DailySeriesDay[]>("get_daily_series", { days: 36 }),
+          invoke<AfkDay[]>("get_afk_series", { days: 30 }),
           invoke<AppToday[]>("get_apps_today"),
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
@@ -244,6 +247,7 @@ function DashboardView() {
       setProgress(nextProgress);
       setCumulative(nextCumulative);
       setDailySeries(nextDailySeries);
+      setAfkSeries(nextAfkSeries);
       setStats(nextProgress.today);
       setApps(nextApps);
       let targetDate = dayPrintDate;
@@ -934,11 +938,13 @@ function DashboardView() {
         <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} />
       )}
 
-      {dayPrint && dayPrint.observed_ms > 0 && (
+      {dayPrint && (dayPrint.observed_ms > 0 || dayPrint.afk_ms > 0) && (
         <DayPrint
           data={dayPrint}
           availableDates={dailySeries
-            .filter((day) => day.observed_ms > 0)
+            .filter((day) => day.observed_ms > 0 || afkSeries.some((afkDay) =>
+              afkDay.local_date === day.local_date && afkDay.afk_ms > 0,
+            ))
             .map((day) => day.local_date)
             .reverse()}
           selectedDate={dayPrintDate}
@@ -1171,6 +1177,7 @@ function DashboardView() {
                 formatDuration={formatDuration}
                 kindLabels={kindLabels}
               />
+              <AfkStrip days={afkSeries} formatDuration={formatDuration} />
               <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} kindLabels={kindLabels} />
             </>
           )}

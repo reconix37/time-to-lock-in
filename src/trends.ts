@@ -12,6 +12,11 @@ export interface DailySeriesDay {
   useful_ma_7d_ms: number;
 }
 
+export interface AfkDay {
+  local_date: string;
+  afk_ms: number;
+}
+
 export function formatLocalDate(localDate: string, options: Intl.DateTimeFormatOptions): string {
   return new Intl.DateTimeFormat("ru-RU", options).format(new Date(`${localDate}T12:00:00`));
 }

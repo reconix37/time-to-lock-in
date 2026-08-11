@@ -81,6 +81,7 @@ export function DayPrint({
           <span>{kindLabels.useful} {formatDuration(data.useful_ms)}</span>
           <span>{kindLabels.neutral} {formatDuration(data.neutral_ms)}</span>
           <span>{kindLabels.waste} {formatDuration(data.waste_ms)}</span>
+          {data.afk_ms > 0 && <span>AFK: {formatDuration(data.afk_ms)}</span>}
           {data.burned_rubles !== null && <strong>сожжено {data.currency} {data.burned_rubles.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong>}
         </div>
         <p className="day-print-privacy">Tracked locally. No screenshots.</p>

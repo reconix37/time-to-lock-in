@@ -21,6 +21,7 @@ export interface DayPrintData {
   useful_ms: number;
   neutral_ms: number;
   waste_ms: number;
+  afk_ms: number;
   observed_ms: number;
   useful_goal_min: number;
   waste_limit_min: number;
@@ -45,6 +46,7 @@ export interface WeekSummaryData {
   useful_ms: number;
   neutral_ms: number;
   waste_ms: number;
+  afk_ms: number;
   week_xp: number;
   lifetime_xp: number;
   rank: string;
@@ -243,6 +245,12 @@ export async function renderDayPrintPng(day: DayPrintData, kindLabels: KindLabel
   ], 582);
 
   let y = 828;
+  if (day.afk_ms > 0) {
+    context.fillStyle = colors.muted;
+    font(context, 22);
+    context.fillText(`AFK ${duration(day.afk_ms)}`, PADDING, 810);
+    y = 848;
+  }
   if (day.top_entries.length > 0) {
     context.fillStyle = colors.muted;
     font(context, 19);

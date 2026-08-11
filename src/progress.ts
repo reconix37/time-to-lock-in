@@ -18,6 +18,7 @@ export interface ProgressDay {
 
 export interface ProgressOverview {
   today: ProgressDay;
+  today_afk_ms: number;
   lifetime_xp: number;
   current_rank: string;
   current_rank_threshold: number;
