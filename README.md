@@ -1,47 +1,47 @@
 # 🐹 TTLI — Time To Lock In
 
-**Трекер времени, который не даёт тебе себя обманывать.**
+**A time tracker that won't let you fool yourself.**
 
-TTLI автоматически считает, сколько времени ты реально проводишь за компом, делит его на полезное / нейтральное / потери и превращает в игру: ранги от **Хомяка** до **Повелителя времени**, зачёты дней, дуэли с друзьями.
-
----
-
-## 🚀 Установка (Windows)
-
-**[⬇️ Скачать установщик](https://github.com/reconix37/time-to-lock-in/releases/latest/download/Time.To.Lock.In_0.2.0_x64-setup.exe)**
-
-1. Скачай и запусти установщик — два клика, ничего настраивать не надо
-2. TTLI появится в трее и начнёт трекать активность сразу
-3. Для точного трекинга вкладок браузера (опционально) — подключи расширение [TTLI Tracker](extension/)
-
-> Новые версии: **Настройки → «Проверить обновления»** — приложение скачает свежий установщик, данные сохранятся.
+TTLI automatically tracks how much time you actually spend at your computer, splits it into useful / neutral / wasted, and turns it into a game: ranks from **Hamster** to **Master of Time**, daily pass/fail verdicts, and duels with your friends.
 
 ---
 
-## 🎮 Что внутри
+## 🚀 Install (Windows)
+
+**[⬇️ Download installer](https://github.com/reconix37/time-to-lock-in/releases/latest/download/Time.To.Lock.In_0.2.0_x64-setup.exe)**
+
+1. Download and run the installer — two clicks, no setup required
+2. TTLI appears in the tray and starts tracking immediately
+3. For precise browser-tab tracking (optional) — add the [TTLI Tracker](extension/) extension
+
+> Updating: **Settings → "Check for updates"** — the app downloads the fresh installer, your data is preserved.
+
+---
+
+## 🎮 Features
 
 | | |
 |---|---|
-| 🏆 **Ранги** | Хомяк → Стажёр → Кодер → Фокусник → Тайм-ниндзя → Киберсамурай → Архитектор времени → Повелитель времени. EXP копится за зачтённые дни |
-| ✅ **Зачёт дня** | Три условия: цель по полезному, лимит по потерям, минимум наблюдения. Выполнил — «День зачтён» |
-| 📊 **Графики** | Кумулятивные линии дня, стековые тренды 7/30 дней, хитмап активности, MA7 |
-| 🪟 **Мини-окно** | Компактное окно поверх всего — видно прогресс дня, не отвлекаясь |
-| 🖨️ **Печать дня** | Терминальный вердикт + 3 PNG-карточки (день / неделя / челлендж) для шаринга |
-| ⚔️ **Дуэли** | Код «Побей мой день» — импортируй чужой челлендж и соревнуйся на тех же целях |
-| 🏷️ **Категории и правила** | Свои названия («Заебись» / «Нутакое» / «Пиздец»), ретро-классификация — правило создал, история перекрасилась |
-| 💤 **AFK** | Автоопределение бездействия, медиа-исключение (ютуб не уводит в AFK) |
-| 💰 **Часовая ставка** | Опционально: сколько «сожжено» денег за день |
-| 🌍 **Языки** | Русский / Українська / English — переключатель в шапке |
+| 🏆 **Ranks** | Hamster → Intern → Coder → Focus Maniac → Time Ninja → Cyber Samurai → Time Architect → Master of Time. Earn XP from passed days |
+| ✅ **Daily verdict** | Three conditions: useful-time goal, waste limit, observation minimum. Meet them all — "Day passed" |
+| 📊 **Charts** | Cumulative day lines, stacked 7/30-day trends, activity heatmap, MA7 |
+| 🪟 **Mini window** | Compact always-on-top window with your live day progress |
+| 🖨️ **Day print** | Terminal-style verdict + 3 shareable PNG cards (day / week / challenge) |
+| ⚔️ **Duels** | "Beat my day" code — import a friend's challenge and compete on the same goals |
+| 🏷️ **Categories & rules** | Custom labels, retro-classification — create a rule, the whole history re-colors |
+| 💤 **AFK** | Auto-detection of idle time, media exemption (YouTube doesn't count as AFK) |
+| 💰 **Hourly rate** | Optional: how much "burned" money per day |
+| 🌍 **Languages** | Русский / Українська / English — toggle in the header |
 
-## 🔒 Приватность
+## 🔒 Privacy
 
-**Всё локально.** Никаких облаков, телеметрии и внешних серверов. Данные живут в SQLite на твоём компе. Расширение передаёт приложению только hostname вкладки и её заголовок — полный URL не сохраняется и не передаётся.
+**Everything stays local.** No cloud, no telemetry, no external servers. Data lives in SQLite on your machine. The extension sends only the active tab's hostname and title to the app — full URLs are never stored or transmitted.
 
-## 🛠 Для разработчиков
+## 🛠 For developers
 
-- **Стек:** Tauri v2 (Rust + React/TypeScript), SQLite (rusqlite), Chrome/Edge MV3 расширение
-- **Сборка:** `npm run tauri build` (Windows), CI — GitHub Actions по тегу `v*` (строго `x.y.z`)
-- **Схема БД:** `src-tauri/migrations/`
+- **Stack:** Tauri v2 (Rust + React/TypeScript), SQLite (rusqlite), Chrome/Edge MV3 extension
+- **Build:** `npm run tauri build` (Windows), CI — GitHub Actions on `v*` tags (strict `x.y.z`)
+- **DB schema:** `src-tauri/migrations/`
 - **PRD:** `docs/prds/v1-activity-tracker.md`
 
-Сделано с 🐹 и любовью к фокусу.
+Made with 🐹 and love for focus.
