@@ -19,6 +19,22 @@
         "minWidth": 960,
         "minHeight": 640,
         "center": true
+      },
+      {
+        "title": "TTLI",
+        "label": "mini",
+        "width": 300,
+        "height": 210,
+        "minWidth": 300,
+        "minHeight": 210,
+        "maxWidth": 300,
+        "maxHeight": 210,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

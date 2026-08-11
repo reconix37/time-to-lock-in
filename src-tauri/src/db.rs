@@ -139,6 +139,8 @@ pub fn initialize() -> Result<(), String> {
         ("idle_timeout_min", "5".to_string()),
         ("theme", "dawn".to_string()),
         ("onboarding_done", "0".to_string()),
+        ("tray_only", "1".to_string()),
+        ("mini_pinned", "0".to_string()),
         ("extension_token", Uuid::new_v4().to_string()),
         ("extension_chrome_id", String::new()),
         ("extension_edge_id", String::new()),

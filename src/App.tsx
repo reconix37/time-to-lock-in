@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
 import { DayScorecard } from "./components/DayScorecard";
@@ -7,6 +8,7 @@ import { TrendsStacked } from "./components/TrendsStacked";
 import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
 import type { DailySeriesDay } from "./trends";
+import { MiniView } from "./MiniView";
 import "./styles/tokens.css";
 import "./App.css";
 
@@ -147,7 +149,7 @@ function groupSegments(segments: Segment[], liveSegmentId: number | undefined, n
   return groups;
 }
 
-function App() {
+function DashboardView() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
@@ -1331,6 +1333,10 @@ function App() {
       )}
     </main>
   );
+}
+
+function App() {
+  return getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />;
 }
 
 export default App;

@@ -2,6 +2,7 @@
 
 mod db;
 mod http;
+mod tray;
 mod watcher;
 
 use rusqlite::{params, OptionalExtension};
@@ -19,6 +20,7 @@ type ServiceHandles = Arc<
     Mutex<
         Option<(
             Arc<AtomicBool>,
+            std::thread::JoinHandle<()>,
             std::thread::JoinHandle<()>,
             std::thread::JoinHandle<()>,
         )>,
@@ -104,6 +106,19 @@ struct ProgressOverview {
     next_rank: Option<&'static str>,
     next_rank_threshold: Option<i64>,
     calendar: Vec<ProgressDay>,
+}
+
+#[derive(Serialize)]
+struct LiveSegment {
+    id: i64,
+    ts_start: i64,
+    ts_end: i64,
+    app: String,
+    window_title: String,
+    domain: String,
+    status: String,
+    category_name: String,
+    category_kind: String,
 }
 
 const RANKS: [(&str, i64); 8] = [
@@ -657,6 +672,59 @@ fn get_tracking_paused(state: tauri::State<'_, TrackingControl>) -> bool {
     state.paused.load(Ordering::Relaxed)
 }
 
+#[tauri::command]
+fn get_live_segment() -> Result<Option<LiveSegment>, String> {
+    let connection = db::open()?;
+    connection
+        .query_row(
+            "SELECT s.id, s.ts_start, s.ts_end, s.app, s.window_title, s.domain, s.status,
+                    COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral')
+             FROM segments s
+             LEFT JOIN categories c ON c.id = s.category_id
+             WHERE s.id = CAST((SELECT value FROM settings WHERE key = 'active_segment_id') AS INTEGER)
+               AND s.status IN ('active', 'away')",
+            [],
+            |row| {
+                Ok(LiveSegment {
+                    id: row.get(0)?,
+                    ts_start: row.get(1)?,
+                    ts_end: row.get(2)?,
+                    app: row.get(3)?,
+                    window_title: row.get(4)?,
+                    domain: row.get(5)?,
+                    status: row.get(6)?,
+                    category_name: row.get(7)?,
+                    category_kind: row.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn show_dashboard(app: tauri::AppHandle) {
+    tray::show_dashboard(&app);
+}
+
+#[tauri::command]
+fn set_mini_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::set_mini_pinned(&app, pinned)
+}
+
+#[tauri::command]
+fn fix_mini_window(app: tauri::AppHandle) -> Result<(), String> {
+    tray::fix_mini_window(&app)
+}
+
+#[tauri::command]
+fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "mini" {
+        return Err("dragging is only available for the mini-window".to_string());
+    }
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let paused = Arc::new(AtomicBool::new(false));
@@ -670,10 +738,7 @@ pub fn run() {
     {
         // Single-instance должен быть первым плагином: только primary запускает сервисы.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_dashboard(app);
         }));
     }
 
@@ -687,17 +752,36 @@ pub fn run() {
         .manage(TrackingControl {
             paused: Arc::clone(&paused),
         })
-        .setup(move |_app| {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                if window.label() == "mini" {
+                    let _ = tray::save_mini_position(window.app_handle());
+                } else if window.label() == "main" {
+                    let _ = tray::remember_tray_only();
+                }
+                let _ = window.hide();
+            }
+            tauri::WindowEvent::Focused(false) if window.label() == "mini" => {
+                let _ = tray::save_mini_position(window.app_handle());
+            }
+            _ => {}
+        })
+        .setup(move |app| {
             db::initialize().map_err(std::io::Error::other)?;
             let stop = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::channel();
             let watcher_handle =
                 watcher::spawn(receiver, Arc::clone(&stop), Arc::clone(&setup_paused));
             let http_handle = http::spawn(sender, Arc::clone(&stop));
+            let tray_handle =
+                tray::install(app.handle(), Arc::clone(&setup_paused), Arc::clone(&stop))
+                    .map_err(std::io::Error::other)?;
+            tray::restore_window_state(app.handle()).map_err(std::io::Error::other)?;
             let mut handles = setup_handles
                 .lock()
                 .map_err(|_| std::io::Error::other("service handles are poisoned"))?;
-            *handles = Some((stop, watcher_handle, http_handle));
+            *handles = Some((stop, watcher_handle, http_handle, tray_handle));
             Ok(())
         });
 
@@ -722,28 +806,35 @@ pub fn run() {
             get_apps_today,
             set_tracking_paused,
             get_tracking_paused,
+            get_live_segment,
+            show_dashboard,
+            set_mini_pinned,
+            fix_mini_window,
+            start_mini_drag,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
 
     let exit_handles = Arc::clone(&service_handles);
-    app.run(move |_, event| {
+    app.run(move |app, event| {
         if matches!(
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
+            let _ = tray::save_mini_position(app);
             if let Ok(handles) = exit_handles.lock() {
-                if let Some((stop, _, _)) = handles.as_ref() {
+                if let Some((stop, _, _, _)) = handles.as_ref() {
                     stop.store(true, Ordering::Relaxed);
                 }
             }
         }
     });
     if let Ok(mut handles) = service_handles.lock() {
-        if let Some((stop, watcher_handle, http_handle)) = handles.take() {
+        if let Some((stop, watcher_handle, http_handle, tray_handle)) = handles.take() {
             stop.store(true, Ordering::Relaxed);
             let _ = watcher_handle.join();
             let _ = http_handle.join();
+            let _ = tray_handle.join();
         }
     };
 }

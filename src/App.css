@@ -541,6 +541,84 @@ button:focus-visible {
 @keyframes pulse { 50% { opacity: .55; } }
 @keyframes skeleton { 50% { background: var(--hl-med); } }
 
+.mini-shell {
+  position: relative;
+  display: grid;
+  width: 300px;
+  height: 210px;
+  grid-template-rows: 26px 54px 1fr 36px;
+  overflow: hidden;
+  border: var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: default;
+}
+
+.mini-drag-strip {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hl-low);
+  color: var(--muted);
+  font: 500 10px var(--font-mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  user-select: none;
+  cursor: grab;
+}
+
+.mini-drag-strip:active { cursor: grabbing; }
+.mini-drag-strip > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-drag-strip i { color: var(--subtle); font-style: normal; letter-spacing: .12em; }
+.mini-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
+.mini-pulse.is-live { background: var(--cat-useful); animation: pulse 2s steps(2, end) infinite; }
+.mini-pulse.is-away { background: var(--warn); animation: pulse 1.2s steps(2, end) infinite; }
+
+.mini-session {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px 5px;
+}
+
+.mini-session strong {
+  flex: none;
+  font: 700 32px/1 var(--font-mono);
+  letter-spacing: -.06em;
+}
+
+.mini-session span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-metrics { display: grid; align-content: start; gap: 7px; padding: 3px 10px 5px; }
+.mini-bullet-copy { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted); font-size: 10px; }
+.mini-bullet-copy strong { color: var(--text); font: 500 10px var(--font-mono); }
+.mini-bullet-copy small { color: var(--subtle); font: inherit; }
+.mini-bullet-rail { position: relative; height: 4px; margin-top: 2px; border-radius: 3px; background: var(--hl-low); }
+.mini-bullet-rail i { display: block; height: 100%; border-radius: 3px; background: var(--cat-useful); }
+.mini-bullet.kind-waste .mini-bullet-rail i { background: var(--cat-waste); }
+.mini-bullet-rail span { position: absolute; top: -2px; width: 1px; height: 8px; background: var(--text); }
+
+.mini-rank { display: grid; grid-template-columns: auto minmax(36px, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.mini-rank > div { height: 3px; overflow: hidden; border-radius: 3px; background: var(--hl-low); }
+.mini-rank > div i { display: block; height: 100%; background: var(--iris); }
+.mini-rank strong { color: var(--text); font: 500 10px var(--font-mono); }
+
+.mini-actions { display: grid; grid-template-columns: 1fr 1fr 32px; gap: 5px; padding: 4px 10px 6px; border-top: 1px solid var(--hl-low); }
+.mini-actions button { min-width: 0; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font-size: 11px; cursor: pointer; }
+.mini-actions button:hover { background: var(--hl-low); }
+.mini-actions button.is-pinned { border-color: color-mix(in srgb, var(--iris) 45%, var(--hl-med)); background: color-mix(in srgb, var(--iris) 10%, var(--surface)); color: var(--iris); }
+.mini-loading { margin: 4px 10px; border-radius: var(--radius-sm); background: var(--hl-low); animation: skeleton 1.6s steps(2, end) infinite; }
+.mini-error { position: absolute; right: 8px; bottom: 38px; left: 8px; margin: 0; padding: 4px 7px; border: 1px solid var(--bad); border-radius: var(--radius-sm); background: var(--surface); color: var(--bad); font-size: 10px; }
+
 @media (max-width: 900px) {
   .dashboard-grid { grid-template-columns: 1fr; }
   .side-column { grid-template-columns: 1fr 1fr; }
@@ -585,5 +663,5 @@ button:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .is-live .live-pulse, .skeleton { animation: none; }
+  .is-live .live-pulse, .mini-pulse, .mini-loading, .skeleton { animation: none; }
 }
