@@ -224,3 +224,34 @@ timeforge/
 
 - Prior art: **WakaTime** (хитмап + отчёты), **ActivityWatch** (open-source вотчер), **RescueTime** (категории), **Habitica / Duolingo** (геймификация), **HabitForge** (квесты/арена — механики в v1.1+)
 - Дизайн: `/root/timeforge/DESIGN.md` (Rosé Pine Dawn, Linear-принципы)
+
+## v0.2.9 — Категории со скорингом (норма)
+
+- `kind` и `score` независимы. `kind` остаётся единственным источником целей,
+  лимитов, зачёта дня, Public XP и ранга. `score` используется только scoring-дашбордом.
+- Категории образуют дерево глубиной не более трёх уровней (`root + child + grandchild`).
+  Цвет и score могут наследоваться по отдельным флагам `inherit_color` и
+  `inherit_score`; `kind` и правила не наследуются. Циклы запрещены.
+- Effective color/score разрешаются по цепочке родителей. Для root наследование
+  выключено. Новый root получает score из `kind` (`useful=+10`, `neutral=0`,
+  `waste=-10`), новый child по умолчанию наследует цвет и score.
+- Правило сохраняет поле-мишень `match_type` (`exe|title|domain`) отдельно от
+  режима `match_mode` (`legacy|regex`). `case_insensitive` задаётся для каждого
+  правила. Legacy сохраняет прежнюю семантику: exe — prefix, domain — substring,
+  title — AND-поиск значимых токенов. Regex использует Rust crate `regex` без
+  backtracking; совпадение ищется по всему значению выбранного поля.
+- Приоритет правил: `priority DESC`, затем `domain > title > exe`, затем `id ASC`.
+  Live, исторический replay и preview обязаны использовать один скомпилированный
+  `RuleSet`. Изменение правил инвалидирует кэш через `rules_revision`.
+- Regex, который не компилируется или совпадает с пустой строкой, нельзя сохранить.
+  Универсальные формы (`.*`, `.+`, `^.*$`) и совпадение минимум с 25% уникальных
+  значений поля за последние 30 дней при выборке минимум 20 значений дают
+  неблокирующее предупреждение. Preview показывает `N из M` и суммарную длительность.
+- Score-hours аддитивны: `category_points = effective_score × duration_ms / 3_600_000`,
+  `total_score = Σ category_points`. Округление разрешено только при отображении.
+  `productive_percent = 100 × duration(score > 0) / observed_duration`; score=0 и
+  Uncategorized входят в denominator. Топ productive/distracting сортируется по
+  category points, Top Categories — по длительности; родительские rollup запрещены.
+- Исторический replay запускается только после отдельного подтверждения пользователя.
+  Он меняет классификацию сегментов через текущий `RuleSet` и затем использует
+  существующий пересчёт `daily_stats`; сам score никогда не изменяет `daily_stats`.

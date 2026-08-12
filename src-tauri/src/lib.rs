@@ -2,6 +2,7 @@
 
 mod db;
 mod http;
+mod rules;
 mod tray;
 mod watcher;
 
@@ -728,6 +729,13 @@ struct Category {
     kind: String,
     goal_multiplier: f64,
     sort_order: i64,
+    parent_id: Option<i64>,
+    score: f64,
+    inherit_color: bool,
+    inherit_score: bool,
+    effective_color: String,
+    effective_score: f64,
+    full_path: String,
 }
 
 impl From<db::CategoryRecord> for Category {
@@ -740,6 +748,13 @@ impl From<db::CategoryRecord> for Category {
             kind: category.kind,
             goal_multiplier: category.goal_multiplier,
             sort_order: category.sort_order,
+            parent_id: category.parent_id,
+            score: category.score,
+            inherit_color: category.inherit_color,
+            inherit_score: category.inherit_score,
+            effective_color: category.effective_color,
+            effective_score: category.effective_score,
+            full_path: category.full_path,
         }
     }
 }
@@ -751,6 +766,48 @@ struct Rule {
     pattern: String,
     category_id: i64,
     priority: i64,
+    match_mode: String,
+    case_insensitive: bool,
+}
+
+#[derive(Serialize)]
+struct RulePreview {
+    matched_values: i64,
+    total_values: i64,
+    matched_duration_ms: i64,
+    broad_warning: bool,
+}
+
+#[derive(Serialize)]
+struct ScoringCategory {
+    category_id: i64,
+    name: String,
+    full_path: String,
+    effective_color: String,
+    duration_ms: i64,
+    points: f64,
+}
+
+#[derive(Serialize)]
+struct TodayScoring {
+    total_score: f64,
+    productive_percent: f64,
+    top_productive: Vec<ScoringCategory>,
+    top_distracting: Vec<ScoringCategory>,
+    top_categories: Vec<ScoringCategory>,
+}
+
+impl From<db::ScoringCategoryRecord> for ScoringCategory {
+    fn from(record: db::ScoringCategoryRecord) -> Self {
+        Self {
+            category_id: record.category_id,
+            name: record.name,
+            full_path: record.full_path,
+            effective_color: record.effective_color,
+            duration_ms: record.duration_ms,
+            points: record.points,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -853,38 +910,58 @@ fn get_today_stats() -> Result<TodayStats, String> {
 #[tauri::command]
 fn get_categories() -> Result<Vec<Category>, String> {
     let connection = db::open()?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, name, color, icon, kind, goal_multiplier, sort_order
-             FROM categories ORDER BY sort_order ASC, name ASC",
-        )
-        .map_err(|error| error.to_string())?;
-    let categories = statement
-        .query_map([], |row| {
-            Ok(Category {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                icon: row.get(3)?,
-                kind: row.get(4)?,
-                goal_multiplier: row.get(5)?,
-                sort_order: row.get(6)?,
-            })
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(categories)
+    Ok(db::list_categories(&connection)?
+        .into_iter()
+        .map(Category::from)
+        .collect())
 }
 
 #[tauri::command]
-fn create_category(name: String, color: String, kind: String) -> Result<Category, String> {
-    db::create_category(&name, &color, &kind).map(Category::from)
+fn create_category(
+    name: String,
+    color: String,
+    kind: String,
+    parent_id: Option<i64>,
+    score: f64,
+    inherit_color: bool,
+    inherit_score: bool,
+) -> Result<Category, String> {
+    db::create_category(db::CategoryValues {
+        name: &name,
+        color: &color,
+        kind: &kind,
+        parent_id,
+        score,
+        inherit_color,
+        inherit_score,
+    })
+    .map(Category::from)
 }
 
 #[tauri::command]
-fn update_category(id: i64, name: String, kind: String) -> Result<Category, String> {
-    db::update_category(id, &name, &kind).map(Category::from)
+fn update_category(
+    id: i64,
+    name: String,
+    color: String,
+    kind: String,
+    parent_id: Option<i64>,
+    score: f64,
+    inherit_color: bool,
+    inherit_score: bool,
+) -> Result<Category, String> {
+    db::update_category(
+        id,
+        db::CategoryValues {
+            name: &name,
+            color: &color,
+            kind: &kind,
+            parent_id,
+            score,
+            inherit_color,
+            inherit_score,
+        },
+    )
+    .map(Category::from)
 }
 
 #[tauri::command]
@@ -897,7 +974,7 @@ fn get_rules() -> Result<Vec<Rule>, String> {
     let connection = db::open()?;
     let mut statement = connection
         .prepare(
-            "SELECT id, match_type, pattern, category_id, priority
+            "SELECT id, match_type, pattern, category_id, priority, match_mode, case_insensitive
              FROM rules
              ORDER BY priority DESC,
                       CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
@@ -912,6 +989,8 @@ fn get_rules() -> Result<Vec<Rule>, String> {
                 pattern: row.get(2)?,
                 category_id: row.get(3)?,
                 priority: row.get(4)?,
+                match_mode: row.get(5)?,
+                case_insensitive: row.get::<_, i64>(6)? == 1,
             })
         })
         .map_err(|error| error.to_string())?
@@ -926,6 +1005,8 @@ fn create_rule(
     pattern: String,
     category_id: i64,
     priority: i64,
+    match_mode: String,
+    case_insensitive: bool,
 ) -> Result<Rule, String> {
     if category_id == 0 {
         return Err("Без категории нельзя привязать".to_string());
@@ -933,10 +1014,16 @@ fn create_rule(
     if !matches!(match_type.as_str(), "exe" | "title" | "domain") {
         return Err("invalid match type".to_string());
     }
-    let normalized = pattern.trim().to_lowercase();
-    if normalized.is_empty() || normalized.chars().count() > 500 {
-        return Err("pattern must contain 1–500 characters".to_string());
-    }
+    let normalized = pattern.trim().to_string();
+    rules::RuleSet::compile(vec![rules::RuleDefinition {
+        id: 0,
+        match_type: match_type.clone(),
+        pattern: normalized.clone(),
+        category_id,
+        priority,
+        match_mode: match_mode.clone(),
+        case_insensitive,
+    }])?;
 
     let connection = db::open()?;
     let category_exists = connection
@@ -954,22 +1041,43 @@ fn create_rule(
 
     connection
         .execute(
-            "INSERT INTO rules (match_type, pattern, category_id, priority, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![match_type, normalized, category_id, priority, db::now_ms()],
+            "INSERT INTO rules (
+                match_type, pattern, category_id, priority, created_at, match_mode, case_insensitive
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                match_type,
+                normalized,
+                category_id,
+                priority,
+                db::now_ms(),
+                match_mode,
+                i64::from(case_insensitive),
+            ],
         )
         .map_err(|error| error.to_string())?;
+    let id = connection.last_insert_rowid();
+    db::bump_rules_revision(&connection)?;
     Ok(Rule {
-        id: connection.last_insert_rowid(),
+        id,
         match_type,
         pattern: normalized,
         category_id,
         priority,
+        match_mode,
+        case_insensitive,
     })
 }
 
 #[tauri::command]
-fn update_rule(id: i64, category_id: i64) -> Result<(), String> {
+fn update_rule(
+    id: i64,
+    match_type: String,
+    pattern: String,
+    category_id: i64,
+    priority: i64,
+    match_mode: String,
+    case_insensitive: bool,
+) -> Result<(), String> {
     if id <= 0 {
         return Err("invalid rule id".to_string());
     }
@@ -977,16 +1085,37 @@ fn update_rule(id: i64, category_id: i64) -> Result<(), String> {
         return Err("Без категории нельзя привязать".to_string());
     }
 
+    let normalized = pattern.trim().to_string();
+    rules::RuleSet::compile(vec![rules::RuleDefinition {
+        id,
+        match_type: match_type.clone(),
+        pattern: normalized.clone(),
+        category_id,
+        priority,
+        match_mode: match_mode.clone(),
+        case_insensitive,
+    }])?;
     let connection = db::open()?;
     let updated = connection
         .execute(
-            "UPDATE rules SET category_id = ?1 WHERE id = ?2",
-            params![category_id, id],
+            "UPDATE rules SET match_type = ?1, pattern = ?2, category_id = ?3,
+                              priority = ?4, match_mode = ?5, case_insensitive = ?6
+             WHERE id = ?7",
+            params![
+                match_type,
+                normalized,
+                category_id,
+                priority,
+                match_mode,
+                i64::from(case_insensitive),
+                id,
+            ],
         )
         .map_err(|error| error.to_string())?;
     if updated == 0 {
         return Err("rule does not exist".to_string());
     }
+    db::bump_rules_revision(&connection)?;
     Ok(())
 }
 
@@ -999,7 +1128,62 @@ fn delete_rule(id: i64) -> Result<(), String> {
     connection
         .execute("DELETE FROM rules WHERE id = ?1", [id])
         .map_err(|error| error.to_string())?;
+    db::bump_rules_revision(&connection)?;
     Ok(())
+}
+
+#[tauri::command]
+fn preview_rule(
+    match_type: String,
+    pattern: String,
+    match_mode: String,
+    case_insensitive: bool,
+) -> Result<RulePreview, String> {
+    let connection = db::open()?;
+    let preview = rules::RuleSet::preview(
+        &connection,
+        rules::RuleDefinition {
+            id: 0,
+            match_type,
+            pattern: pattern.trim().to_string(),
+            category_id: 1,
+            priority: 0,
+            match_mode,
+            case_insensitive,
+        },
+        db::now_ms(),
+    )?;
+    Ok(RulePreview {
+        matched_values: preview.matched_values,
+        total_values: preview.total_values,
+        matched_duration_ms: preview.matched_duration_ms,
+        broad_warning: preview.broad_warning,
+    })
+}
+
+#[tauri::command]
+fn get_today_scoring() -> Result<TodayScoring, String> {
+    let connection = db::open()?;
+    let scoring = db::today_scoring(&connection)?;
+    Ok(TodayScoring {
+        total_score: scoring.total_score,
+        productive_percent: scoring.productive_percent,
+        top_productive: scoring
+            .top_productive
+            .into_iter()
+            .map(ScoringCategory::from)
+            .collect(),
+        top_distracting: scoring
+            .top_distracting
+            .into_iter()
+            .map(ScoringCategory::from)
+            .collect(),
+        top_categories: scoring
+            .top_categories
+            .into_iter()
+            .map(ScoringCategory::from)
+            .collect(),
+    })
 }
 
 #[tauri::command]
@@ -1109,7 +1293,11 @@ fn reclassify_history(
     overwrite_manual: bool,
     manual_match_type: Option<String>,
     manual_pattern: Option<String>,
+    confirmed: bool,
 ) -> Result<ReclassificationSummary, String> {
+    if !confirmed {
+        return Err("historical replay requires explicit confirmation".to_string());
+    }
     let mut connection = db::open()?;
     let summary = db::reclassify_history(
         &mut connection,
@@ -1127,9 +1315,17 @@ fn reclassify_history(
 fn get_classification_match_stats(
     match_type: String,
     pattern: String,
+    match_mode: Option<String>,
+    case_insensitive: Option<bool>,
 ) -> Result<ClassificationMatchStats, String> {
     let connection = db::open()?;
-    let stats = db::classification_match_stats(&connection, &match_type, &pattern)?;
+    let stats = db::classification_match_stats_with_mode(
+        &connection,
+        &match_type,
+        &pattern,
+        match_mode.as_deref().unwrap_or("legacy"),
+        case_insensitive.unwrap_or(true),
+    )?;
     Ok(ClassificationMatchStats {
         match_count: stats.match_count,
         manual_count: stats.manual_count,
@@ -1411,6 +1607,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_today_segments,
             get_today_stats,
+            get_today_scoring,
             get_today_cumulative,
             get_progress_overview,
             get_daily_series,
@@ -1429,6 +1626,7 @@ pub fn run() {
             create_rule,
             update_rule,
             delete_rule,
+            preview_rule,
             get_settings,
             set_setting,
             set_segment_category,

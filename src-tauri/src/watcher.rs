@@ -1,4 +1,5 @@
 use crate::db;
+use crate::rules::{Activity, RuleSet};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +31,33 @@ struct ActiveSegment {
     id: i64,
     ts_start: i64,
     state: ActivityState,
+}
+
+struct RuleCache {
+    revision: i64,
+    rules: RuleSet,
+}
+
+impl RuleCache {
+    fn load(connection: &Connection) -> Result<Self, String> {
+        Ok(Self {
+            revision: db::rules_revision(connection)?,
+            rules: RuleSet::load(connection)?,
+        })
+    }
+
+    fn classify(&mut self, connection: &Connection, state: &ActivityState) -> Result<i64, String> {
+        let revision = db::rules_revision(connection)?;
+        if revision != self.revision {
+            self.rules = RuleSet::load(connection)?;
+            self.revision = revision;
+        }
+        Ok(self.rules.classify(&Activity {
+            app: &state.app,
+            title: &state.title,
+            domain: &state.domain,
+        }))
+    }
 }
 
 fn is_task_switcher(state: &ActivityState) -> bool {
@@ -124,6 +152,7 @@ fn run(
     let mut connection = db::open()?;
     let mut current: Option<ActiveSegment> = None;
     let mut browser_event: Option<BrowserEvent> = None;
+    let mut rule_cache = RuleCache::load(&connection)?;
 
     while !stop.load(Ordering::Relaxed) {
         for event in receiver.try_iter() {
@@ -164,9 +193,11 @@ fn run(
                 }
                 Some(segment) => {
                     finish_segment(&mut connection, segment.id, now)?;
-                    current = Some(start_segment(&mut connection, state, now)?);
+                    current = Some(start_segment(&mut connection, &mut rule_cache, state, now)?);
                 }
-                None => current = Some(start_segment(&mut connection, state, now)?),
+                None => {
+                    current = Some(start_segment(&mut connection, &mut rule_cache, state, now)?)
+                }
             }
         } else if let Some(segment) = current.take() {
             finish_segment(&mut connection, segment.id, now)?;
@@ -193,10 +224,11 @@ fn wait_for_next_tick(stop: &AtomicBool, paused: &AtomicBool, expected_pause: bo
 
 fn start_segment(
     connection: &mut Connection,
+    rule_cache: &mut RuleCache,
     state: ActivityState,
     timestamp: i64,
 ) -> Result<ActiveSegment, String> {
-    let category_id = classify(connection, &state)?;
+    let category_id = rule_cache.classify(connection, &state)?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -263,40 +295,6 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
             |row| row.get(0),
         )
         .unwrap_or(true)
-}
-
-fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, String> {
-    let domain = state.domain.to_lowercase();
-    let app = state.app.to_lowercase();
-    let mut statement = connection
-        .prepare(
-            "SELECT match_type, pattern, category_id FROM rules
-             ORDER BY priority DESC,
-                      CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
-                      id ASC",
-        )
-        .map_err(|error| error.to_string())?;
-    let rules = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?.to_lowercase(),
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-
-    Ok(rules
-        .iter()
-        .find(|(match_type, pattern, _)| match match_type.as_str() {
-            "domain" => domain.contains(pattern),
-            "title" => db::title_matches(pattern, &state.title),
-            "exe" => app.starts_with(pattern),
-            _ => false,
-        })
-        .map_or(0, |(_, _, category_id)| *category_id))
 }
 
 #[cfg(windows)]

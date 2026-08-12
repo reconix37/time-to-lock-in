@@ -1,12 +1,16 @@
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+use crate::rules::{Activity, RuleDefinition, RuleSet};
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_score_day.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.sql");
+const MIGRATION_005: &str = include_str!("../migrations/005_categories_scoring.sql");
 
 const TITLE_NOISE_WORDS: &[&str] = &[
     "смотреть",
@@ -38,9 +42,21 @@ const EPISODE_WORDS: &[&str] = &["серия", "серии", "серий", "эп
 const SEASON_WORDS: &[&str] = &["сезон", "season"];
 
 pub(crate) fn title_matches(pattern: &str, title: &str) -> bool {
-    let pattern_lower = pattern.to_lowercase();
-    let title_lower = title.to_lowercase();
-    let tokens = pattern_lower
+    title_matches_with_case(pattern, title, true)
+}
+
+pub(crate) fn title_matches_with_case(pattern: &str, title: &str, case_insensitive: bool) -> bool {
+    let normalized_pattern = if case_insensitive {
+        pattern.to_lowercase()
+    } else {
+        pattern.to_string()
+    };
+    let normalized_title = if case_insensitive {
+        title.to_lowercase()
+    } else {
+        title.to_string()
+    };
+    let tokens = normalized_pattern
         .split(|character: char| !character.is_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
@@ -68,13 +84,13 @@ pub(crate) fn title_matches(pattern: &str, title: &str) -> bool {
         .collect::<Vec<_>>();
 
     if significant_tokens.is_empty() {
-        return title_lower.contains(&pattern_lower);
+        return normalized_title.contains(&normalized_pattern);
     }
 
     // Ручные title-правила тоже получают AND-поиск: порядок слов и разделители не важны.
     significant_tokens
         .iter()
-        .all(|token| title_lower.contains(token))
+        .all(|token| normalized_title.contains(token))
 }
 
 pub struct CategoryRecord {
@@ -85,6 +101,32 @@ pub struct CategoryRecord {
     pub kind: String,
     pub goal_multiplier: f64,
     pub sort_order: i64,
+    pub parent_id: Option<i64>,
+    pub score: f64,
+    pub inherit_color: bool,
+    pub inherit_score: bool,
+    pub effective_color: String,
+    pub effective_score: f64,
+    pub full_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScoringCategoryRecord {
+    pub category_id: i64,
+    pub name: String,
+    pub full_path: String,
+    pub effective_color: String,
+    pub duration_ms: i64,
+    pub points: f64,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct TodayScoringRecord {
+    pub total_score: f64,
+    pub productive_percent: f64,
+    pub top_productive: Vec<ScoringCategoryRecord>,
+    pub top_distracting: Vec<ScoringCategoryRecord>,
+    pub top_categories: Vec<ScoringCategoryRecord>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -271,6 +313,11 @@ pub fn initialize() -> Result<(), String> {
             .execute_batch(MIGRATION_003)
             .map_err(|error| error.to_string())?;
     }
+    if previous_version < 5 {
+        transaction
+            .execute_batch(MIGRATION_005)
+            .map_err(|error| error.to_string())?;
+    }
     if previous_version < 4 {
         transaction
             .execute_batch(MIGRATION_004)
@@ -320,7 +367,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=4;")
+        .execute_batch("PRAGMA user_version=5;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -430,24 +477,160 @@ pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64
     Ok((useful_goal_min, waste_limit_min, observed_min))
 }
 
-pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRecord, String> {
-    let normalized_name = name.trim();
+#[derive(Clone, Copy)]
+pub struct CategoryValues<'a> {
+    pub name: &'a str,
+    pub color: &'a str,
+    pub kind: &'a str,
+    pub parent_id: Option<i64>,
+    pub score: f64,
+    pub inherit_color: bool,
+    pub inherit_score: bool,
+}
+
+fn validate_category_values(values: CategoryValues<'_>) -> Result<(), String> {
+    let normalized_name = values.name.trim();
     if normalized_name.is_empty() || normalized_name.chars().count() > 80 {
         return Err("Название должно содержать от 1 до 80 символов".to_string());
     }
-    if color.len() != 7
-        || !color.starts_with('#')
-        || !color[1..]
+    if values.color.len() != 7
+        || !values.color.starts_with('#')
+        || !values.color[1..]
             .chars()
             .all(|character| character.is_ascii_hexdigit())
     {
         return Err("Цвет должен быть в формате #RRGGBB".to_string());
     }
-    if !matches!(kind, "useful" | "neutral" | "waste") {
+    if !matches!(values.kind, "useful" | "neutral" | "waste") {
         return Err("Недопустимый тип категории".to_string());
     }
+    if !values.score.is_finite() || !(-10.0..=10.0).contains(&values.score) {
+        return Err("Score должен быть от -10 до 10".to_string());
+    }
+    if values.parent_id.is_none() && (values.inherit_color || values.inherit_score) {
+        return Err("Корневая категория не может наследовать цвет или score".to_string());
+    }
+    if values.parent_id.is_some_and(|parent_id| parent_id <= 0) {
+        return Err("Недопустимый родитель категории".to_string());
+    }
+    Ok(())
+}
+
+fn validate_category_tree(
+    connection: &Connection,
+    category_id: Option<i64>,
+    parent_id: Option<i64>,
+) -> Result<(), String> {
+    if category_id.is_some() && category_id == parent_id {
+        return Err("category cycle".to_string());
+    }
+    if let Some(parent_id) = parent_id {
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM categories WHERE id = ?1",
+                [parent_id],
+                |_| Ok(true),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(false);
+        if !exists {
+            return Err("parent category does not exist".to_string());
+        }
+    }
+    let mut parents = connection
+        .prepare("SELECT id, parent_id FROM categories WHERE id <> 0")
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|error| error.to_string())?;
+    let target_id = category_id.unwrap_or_else(|| parents.keys().max().copied().unwrap_or(0) + 1);
+    parents.insert(target_id, parent_id);
+    for start in parents.keys() {
+        let mut seen = Vec::new();
+        let mut current = Some(*start);
+        while let Some(id) = current {
+            if seen.contains(&id) {
+                return Err("category cycle".to_string());
+            }
+            seen.push(id);
+            if seen.len() > 3 {
+                return Err("category depth exceeds 3 levels".to_string());
+            }
+            current = parents.get(&id).copied().flatten();
+        }
+    }
+    Ok(())
+}
+
+pub fn list_categories(connection: &Connection) -> Result<Vec<CategoryRecord>, String> {
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE category_tree (
+                id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+                score, inherit_color, inherit_score, effective_color, effective_score,
+                full_path, depth
+             ) AS (
+                SELECT id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+                       score, inherit_color, inherit_score, color, score, name, 1
+                FROM categories WHERE parent_id IS NULL
+                UNION ALL
+                SELECT child.id, child.name, child.color, child.icon, child.kind,
+                       child.goal_multiplier, child.sort_order, child.parent_id, child.score,
+                       child.inherit_color, child.inherit_score,
+                       CASE WHEN child.inherit_color = 1 THEN parent.effective_color ELSE child.color END,
+                       CASE WHEN child.inherit_score = 1 THEN parent.effective_score ELSE child.score END,
+                       parent.full_path || ' > ' || child.name, parent.depth + 1
+                FROM categories child
+                JOIN category_tree parent ON child.parent_id = parent.id
+             )
+             SELECT id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+                    score, inherit_color, inherit_score, effective_color, effective_score,
+                    full_path
+             FROM category_tree ORDER BY full_path COLLATE NOCASE",
+        )
+        .map_err(|error| error.to_string())?;
+    let categories = statement
+        .query_map([], |row| {
+            Ok(CategoryRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                icon: row.get(3)?,
+                kind: row.get(4)?,
+                goal_multiplier: row.get(5)?,
+                sort_order: row.get(6)?,
+                parent_id: row.get(7)?,
+                score: row.get(8)?,
+                inherit_color: row.get::<_, i64>(9)? == 1,
+                inherit_score: row.get::<_, i64>(10)? == 1,
+                effective_color: row.get(11)?,
+                effective_score: row.get(12)?,
+                full_path: row.get(13)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(categories)
+}
+
+fn category_by_id(connection: &Connection, id: i64) -> Result<CategoryRecord, String> {
+    list_categories(connection)?
+        .into_iter()
+        .find(|category| category.id == id)
+        .ok_or_else(|| "Категория не найдена".to_string())
+}
+
+pub fn create_category(values: CategoryValues<'_>) -> Result<CategoryRecord, String> {
+    validate_category_values(values)?;
+    let normalized_name = values.name.trim();
 
     let connection = open()?;
+    validate_category_tree(&connection, None, values.parent_id)?;
     let duplicate = connection
         .query_row(
             "SELECT 1 FROM categories WHERE lower(name) = lower(?1)",
@@ -470,62 +653,55 @@ pub fn create_category(name: &str, color: &str, kind: &str) -> Result<CategoryRe
         .map_err(|error| error.to_string())?;
     connection
         .execute(
-            "INSERT INTO categories (name, color, icon, kind, goal_multiplier, created_at, sort_order)
-             VALUES (?1, ?2, '', ?3, 1.0, ?4, ?5)",
-            params![normalized_name, color.to_lowercase(), kind, now_ms(), sort_order],
+            "INSERT INTO categories (
+                name, color, icon, kind, goal_multiplier, created_at, sort_order,
+                parent_id, score, inherit_color, inherit_score
+             ) VALUES (?1, ?2, '', ?3, 1.0, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                normalized_name,
+                values.color.to_lowercase(),
+                values.kind,
+                now_ms(),
+                sort_order,
+                values.parent_id,
+                values.score,
+                i64::from(values.inherit_color),
+                i64::from(values.inherit_score),
+            ],
         )
         .map_err(|error| error.to_string())?;
-
-    Ok(CategoryRecord {
-        id: connection.last_insert_rowid(),
-        name: normalized_name.to_string(),
-        color: color.to_lowercase(),
-        icon: String::new(),
-        kind: kind.to_string(),
-        goal_multiplier: 1.0,
-        sort_order,
-    })
+    category_by_id(&connection, connection.last_insert_rowid())
 }
 
-pub fn update_category(id: i64, name: &str, kind: &str) -> Result<CategoryRecord, String> {
+pub fn update_category(id: i64, values: CategoryValues<'_>) -> Result<CategoryRecord, String> {
     if id <= 0 {
         return Err("Недопустимый идентификатор категории".to_string());
     }
-    let normalized_name = name.trim();
-    if normalized_name.is_empty() || normalized_name.chars().count() > 80 {
-        return Err("Название должно содержать от 1 до 80 символов".to_string());
-    }
-    if !matches!(kind, "useful" | "neutral" | "waste") {
-        return Err("Недопустимый тип категории".to_string());
-    }
+    validate_category_values(values)?;
+    let normalized_name = values.name.trim();
     let connection = open()?;
+    validate_category_tree(&connection, Some(id), values.parent_id)?;
     let updated = connection
         .execute(
-            "UPDATE categories SET name = ?1, kind = ?2 WHERE id = ?3",
-            params![normalized_name, kind, id],
+            "UPDATE categories SET name = ?1, color = ?2, kind = ?3, parent_id = ?4,
+                    score = ?5, inherit_color = ?6, inherit_score = ?7
+             WHERE id = ?8",
+            params![
+                normalized_name,
+                values.color.to_lowercase(),
+                values.kind,
+                values.parent_id,
+                values.score,
+                i64::from(values.inherit_color),
+                i64::from(values.inherit_score),
+                id,
+            ],
         )
         .map_err(|error| error.to_string())?;
     if updated == 0 {
         return Err("Категория не найдена".to_string());
     }
-    connection
-        .query_row(
-            "SELECT id, name, color, icon, kind, goal_multiplier, sort_order
-             FROM categories WHERE id = ?1",
-            [id],
-            |row| {
-                Ok(CategoryRecord {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                    icon: row.get(3)?,
-                    kind: row.get(4)?,
-                    goal_multiplier: row.get(5)?,
-                    sort_order: row.get(6)?,
-                })
-            },
-        )
-        .map_err(|error| error.to_string())
+    category_by_id(&connection, id)
 }
 
 pub fn delete_category(id: i64) -> Result<(), String> {
@@ -596,6 +772,7 @@ pub fn upsert_exe_rule(
                 params![category_id, priority, rule_id],
             )
             .map_err(|error| error.to_string())?;
+        bump_rules_revision(connection)?;
         return Ok(rule_id);
     }
 
@@ -606,7 +783,30 @@ pub fn upsert_exe_rule(
             params![normalized_app, category_id, priority, now_ms()],
         )
         .map_err(|error| error.to_string())?;
-    Ok(connection.last_insert_rowid())
+    let rule_id = connection.last_insert_rowid();
+    bump_rules_revision(connection)?;
+    Ok(rule_id)
+}
+
+pub fn bump_rules_revision(connection: &Connection) -> Result<i64, String> {
+    connection
+        .execute(
+            "INSERT INTO settings(key, value) VALUES ('rules_revision', '1')
+             ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    setting(connection, "rules_revision")?
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<i64>()
+        .map_err(|error| error.to_string())
+}
+
+pub fn rules_revision(connection: &Connection) -> Result<i64, String> {
+    Ok(setting(connection, "rules_revision")?
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<i64>()
+        .unwrap_or(0))
 }
 
 pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> Result<(), String> {
@@ -733,25 +933,20 @@ fn reclassify_history_in_transaction(
     overwrite_manual: bool,
     manual_rule_scope: Option<(&str, &str)>,
 ) -> Result<ReclassificationSummary, String> {
-    let rules = transaction
-        .prepare(
-            "SELECT match_type, pattern, category_id
-             FROM rules
-             ORDER BY priority DESC,
-                      CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
-                      id ASC",
-        )
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?.to_lowercase(),
-                row.get::<_, i64>(2)?,
-            ))
+    let rules = RuleSet::load(transaction)?;
+    let manual_scope = manual_rule_scope
+        .map(|(match_type, pattern)| {
+            RuleSet::compile(vec![RuleDefinition {
+                id: 0,
+                match_type: match_type.to_string(),
+                pattern: pattern.to_string(),
+                category_id: 1,
+                priority: 0,
+                match_mode: "legacy".to_string(),
+                case_insensitive: true,
+            }])
         })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+        .transpose()?;
     let changes = transaction
         .prepare(
             "SELECT id, app, window_title, domain, COALESCE(category_id, 0),
@@ -761,28 +956,22 @@ fn reclassify_history_in_transaction(
         .map_err(|error| error.to_string())?
         .query_map([overwrite_manual], |row| {
             let id = row.get::<_, i64>(0)?;
-            let app = row.get::<_, String>(1)?.to_lowercase();
+            let app = row.get::<_, String>(1)?;
             let title = row.get::<_, String>(2)?;
-            let domain = row.get::<_, String>(3)?.to_lowercase();
+            let domain = row.get::<_, String>(3)?;
             let current_category_id = row.get::<_, i64>(4)?;
             let duration_ms = row.get::<_, i64>(5)?;
             let manual_category = row.get::<_, i64>(6)?;
-            let rule_category_id = rules
-                .iter()
-                .find(|(match_type, pattern, _)| match match_type.as_str() {
-                    "domain" => domain.contains(pattern),
-                    "title" => title_matches(pattern, &title),
-                    "exe" => app.starts_with(pattern),
-                    _ => false,
-                })
-                .map(|(_, _, category_id)| *category_id);
-            let manual_in_scope =
-                manual_rule_scope.is_none_or(|(match_type, pattern)| match match_type {
-                    "domain" => domain.contains(pattern),
-                    "title" => title_matches(pattern, &title),
-                    "exe" => app.starts_with(pattern),
-                    _ => false,
-                });
+            let activity = Activity {
+                app: &app,
+                title: &title,
+                domain: &domain,
+            };
+            let classified = rules.classify(&activity);
+            let rule_category_id = (classified != 0).then_some(classified);
+            let manual_in_scope = manual_scope
+                .as_ref()
+                .is_none_or(|scope| scope.classify(&activity) != 0);
             Ok((
                 id,
                 current_category_id,
@@ -858,58 +1047,105 @@ pub fn classification_match_stats(
     match_type: &str,
     pattern: &str,
 ) -> Result<ClassificationMatchStats, String> {
-    if !matches!(match_type, "exe" | "title" | "domain") {
-        return Err("invalid rule match type".to_string());
-    }
-    let normalized_pattern = pattern.trim().to_lowercase();
-    if normalized_pattern.is_empty() {
-        return Err("rule pattern cannot be empty".to_string());
-    }
+    classification_match_stats_with_mode(connection, match_type, pattern, "legacy", true)
+}
 
-    if matches!(match_type, "exe" | "domain") {
-        let filter = if match_type == "exe" {
-            "substr(lower(app), 1, length(?1)) = ?1"
-        } else {
-            "instr(lower(domain), ?1) > 0"
-        };
-        return connection
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*), COALESCE(SUM(manual_category), 0)
-                     FROM segments WHERE {filter}"
-                ),
-                [&normalized_pattern],
-                |row| {
-                    Ok(ClassificationMatchStats {
-                        match_count: row.get(0)?,
-                        manual_count: row.get(1)?,
-                    })
-                },
-            )
-            .map_err(|error| error.to_string());
-    }
+pub fn classification_match_stats_with_mode(
+    connection: &Connection,
+    match_type: &str,
+    pattern: &str,
+    match_mode: &str,
+    case_insensitive: bool,
+) -> Result<ClassificationMatchStats, String> {
+    let rules = RuleSet::compile(vec![RuleDefinition {
+        id: 0,
+        match_type: match_type.to_string(),
+        pattern: pattern.trim().to_string(),
+        category_id: 1,
+        priority: 0,
+        match_mode: match_mode.to_string(),
+        case_insensitive,
+    }])?;
+    let stats = rules.match_stats(connection)?;
+    Ok(ClassificationMatchStats {
+        match_count: stats.match_count,
+        manual_count: stats.manual_count,
+    })
+}
 
+pub fn today_scoring(connection: &Connection) -> Result<TodayScoringRecord, String> {
+    let categories = list_categories(connection)?
+        .into_iter()
+        .map(|category| (category.id, category))
+        .collect::<HashMap<_, _>>();
     let mut statement = connection
-        .prepare("SELECT window_title, manual_category FROM segments")
+        .prepare(
+            "SELECT category_id, SUM(duration_ms)
+             FROM segment_day_overlaps
+             WHERE local_date = date('now', 'localtime')
+             GROUP BY category_id",
+        )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let mut stats = ClassificationMatchStats {
-        match_count: 0,
-        manual_count: 0,
-    };
-    for row in rows {
-        let (title, manual_category) = row.map_err(|error| error.to_string())?;
-        if title_matches(&normalized_pattern, &title) {
-            stats.match_count += 1;
-            stats.manual_count += i64::from(manual_category == 1);
-        }
-    }
-
-    Ok(stats)
+    let observed_ms = rows.iter().map(|(_, duration)| *duration).sum::<i64>();
+    let productive_ms = rows
+        .iter()
+        .filter(|(category_id, _)| {
+            categories
+                .get(category_id)
+                .is_some_and(|category| category.effective_score > 0.0)
+        })
+        .map(|(_, duration)| *duration)
+        .sum::<i64>();
+    let mut entries = rows
+        .into_iter()
+        .map(|(category_id, duration_ms)| {
+            let category = categories
+                .get(&category_id)
+                .or_else(|| categories.get(&0))
+                .ok_or_else(|| "Uncategorized category is missing".to_string())?;
+            Ok(ScoringCategoryRecord {
+                category_id,
+                name: category.name.clone(),
+                full_path: category.full_path.clone(),
+                effective_color: category.effective_color.clone(),
+                duration_ms,
+                points: category.effective_score * duration_ms as f64 / 3_600_000.0,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let total_score = entries.iter().map(|entry| entry.points).sum();
+    let mut top_productive = entries
+        .iter()
+        .filter(|entry| entry.points > 0.0)
+        .cloned()
+        .collect::<Vec<_>>();
+    top_productive.sort_by(|left, right| right.points.total_cmp(&left.points));
+    let mut top_distracting = entries
+        .iter()
+        .filter(|entry| entry.points < 0.0)
+        .cloned()
+        .collect::<Vec<_>>();
+    top_distracting.sort_by(|left, right| left.points.total_cmp(&right.points));
+    entries.sort_by(|left, right| right.duration_ms.cmp(&left.duration_ms));
+    top_productive.truncate(5);
+    top_distracting.truncate(5);
+    entries.truncate(8);
+    Ok(TodayScoringRecord {
+        total_score,
+        productive_percent: if observed_ms == 0 {
+            0.0
+        } else {
+            productive_ms as f64 * 100.0 / observed_ms as f64
+        },
+        top_productive,
+        top_distracting,
+        top_categories: entries,
+    })
 }
 
 pub fn progress_series(connection: &Connection) -> Result<Vec<DailyProgressRecord>, String> {
@@ -1309,8 +1545,8 @@ mod tests {
     use super::{
         afk_series, daily_series, import_challenge, mini_hourly, progress_series,
         reclassify_history, refresh_daily_stats, segment_local_dates, set_setting,
-        today_cumulative, upsert_exe_rule, MIGRATION_001, MIGRATION_002, MIGRATION_003,
-        MIGRATION_004,
+        today_cumulative, today_scoring, upsert_exe_rule, validate_category_tree, MIGRATION_001,
+        MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
     };
     use rusqlite::{params, Connection};
 
@@ -1444,6 +1680,170 @@ mod tests {
             .execute_batch(MIGRATION_004)
             .expect("history reclassification schema");
         connection
+            .execute_batch(MIGRATION_005)
+            .expect("category scoring schema");
+        connection
+    }
+
+    #[test]
+    fn migration_maps_existing_kind_to_independent_score() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(MIGRATION_001)
+            .expect("base schema");
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at) VALUES
+                    (1, 'Work', '#286983', 'useful', 0),
+                    (2, 'Break', '#ea9d34', 'neutral', 0),
+                    (3, 'Waste', '#b4637a', 'waste', 0);",
+            )
+            .expect("legacy categories");
+        connection.execute_batch(MIGRATION_005).expect("migration");
+        let scores = connection
+            .prepare("SELECT score FROM categories WHERE id IN (0, 1, 2, 3) ORDER BY id")
+            .expect("query")
+            .query_map([], |row| row.get::<_, f64>(0))
+            .expect("rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scores");
+        assert_eq!(scores, vec![0.0, 10.0, 0.0, -10.0]);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("version"),
+            5
+        );
+    }
+
+    #[test]
+    fn category_tree_rejects_cycles_and_depth_over_three() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at, parent_id) VALUES
+                    (1, 'Root', '#286983', 'useful', 0, NULL),
+                    (2, 'Child', '#286983', 'neutral', 0, 1),
+                    (3, 'Leaf', '#286983', 'neutral', 0, 2);",
+            )
+            .expect("categories");
+        assert_eq!(
+            validate_category_tree(&connection, Some(1), Some(3)),
+            Err("category cycle".to_string())
+        );
+        assert_eq!(
+            validate_category_tree(&connection, None, Some(3)),
+            Err("category depth exceeds 3 levels".to_string())
+        );
+    }
+
+    #[test]
+    fn category_effective_values_follow_the_parent_chain() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (
+                    id, name, color, kind, created_at, parent_id, score,
+                    inherit_color, inherit_score
+                 ) VALUES
+                    (1, 'Work', '#286983', 'useful', 0, NULL, 8, 0, 0),
+                    (2, 'Video', '#b4637a', 'neutral', 0, 1, -2, 1, 1),
+                    (3, 'Course', '#ea9d34', 'neutral', 0, 2, 4, 1, 1);",
+            )
+            .expect("categories");
+        let leaf = super::category_by_id(&connection, 3).expect("leaf");
+        assert_eq!(leaf.effective_color, "#286983");
+        assert_eq!(leaf.effective_score, 8.0);
+        assert_eq!(leaf.full_path, "Work > Video > Course");
+    }
+
+    #[test]
+    fn scoring_uses_score_hours_and_productive_time_without_parent_rollup() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (
+                    id, name, color, kind, created_at, parent_id, score,
+                    inherit_color, inherit_score
+                 ) VALUES
+                    (1, 'Work', '#286983', 'waste', 0, NULL, 8, 0, 0),
+                    (2, 'Video', '#b4637a', 'neutral', 0, 1, 5, 1, 0),
+                    (3, 'Social', '#b4637a', 'useful', 0, NULL, -10, 0, 0);
+                 INSERT INTO segments (
+                    ts_start, ts_end, app, category_id, status
+                 ) VALUES
+                    (strftime('%s', date('now', 'localtime') || ' 09:00:00', 'utc') * 1000,
+                     strftime('%s', date('now', 'localtime') || ' 11:00:00', 'utc') * 1000,
+                     'course.exe', 2, 'crashed'),
+                    (strftime('%s', date('now', 'localtime') || ' 11:00:00', 'utc') * 1000,
+                     strftime('%s', date('now', 'localtime') || ' 12:00:00', 'utc') * 1000,
+                     'social.exe', 3, 'crashed'),
+                    (strftime('%s', date('now', 'localtime') || ' 12:00:00', 'utc') * 1000,
+                     strftime('%s', date('now', 'localtime') || ' 13:00:00', 'utc') * 1000,
+                     'unknown.exe', 0, 'crashed');",
+            )
+            .expect("fixtures");
+        let scoring = today_scoring(&connection).expect("scoring");
+        assert!((scoring.total_score - 0.0).abs() < f64::EPSILON);
+        assert!((scoring.productive_percent - 50.0).abs() < 0.001);
+        assert_eq!(scoring.top_productive[0].full_path, "Work > Video");
+        assert_eq!(scoring.top_productive[0].points, 10.0);
+        assert_eq!(scoring.top_distracting[0].points, -10.0);
+        assert_eq!(scoring.top_categories[0].category_id, 2);
+    }
+
+    #[test]
+    fn score_does_not_change_daily_stats_xp() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at, score)
+                 VALUES (1, 'Useful but negative', '#286983', 'useful', 0, -10);
+                 INSERT INTO segments (ts_start, ts_end, app, category_id, status)
+                 VALUES (
+                    strftime('%s', date('now', 'localtime') || ' 09:00:00', 'utc') * 1000,
+                    strftime('%s', date('now', 'localtime') || ' 10:00:00', 'utc') * 1000,
+                    'work.exe', 1, 'crashed'
+                 );
+                 INSERT INTO goal_history (
+                    effective_local_date, useful_goal_min, waste_limit_min, observed_min
+                 ) VALUES (date('now', 'localtime'), 60, 0, 60);",
+            )
+            .expect("fixtures");
+        let transaction = connection.unchecked_transaction().expect("transaction");
+        let today = transaction
+            .query_row("SELECT date('now', 'localtime')", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .expect("today");
+        refresh_daily_stats(&transaction, &today).expect("daily stats");
+        transaction.commit().expect("commit");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT duration_ms, xp FROM daily_stats
+                     WHERE local_date = ?1 AND category_id = 1",
+                    [&today],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .expect("daily stats"),
+            (3_600_000, 60)
+        );
+        let today_progress = progress_series(&connection)
+            .expect("progress")
+            .into_iter()
+            .find(|day| day.local_date == today)
+            .expect("today progress");
+        assert_eq!(today_progress.useful_ms, 3_600_000);
+        assert_eq!(today_progress.observed_min, 60);
+        assert!(
+            daily_series(&connection, 7)
+                .expect("daily series")
+                .into_iter()
+                .find(|day| day.local_date == today)
+                .expect("today series")
+                .passed
+        );
     }
 
     #[test]

@@ -4321,6 +4321,7 @@ name = "time-to-lock-in"
 version = "0.1.12"
 dependencies = [
  "axum",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
