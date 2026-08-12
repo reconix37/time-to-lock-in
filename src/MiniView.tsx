@@ -139,6 +139,10 @@ export function MiniView() {
   const explanationNeedsPersistence = useRef(false);
   const explanationSaveInFlight = useRef(false);
   const explanationTimer = useRef<number | null>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const settingsPopoverRef = useRef<HTMLElement | null>(null);
+  const cornerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const cornerPopoverRef = useRef<HTMLElement | null>(null);
   const modeRef = useRef<MiniMode>(mode);
   modeRef.current = mode;
 
@@ -242,6 +246,41 @@ export function MiniView() {
   useEffect(() => {
     if (mode === "detailed") void invoke("resize_mini", { width: 420, height: 300 });
   }, [mode]);
+
+  useEffect(() => {
+    if (!settingsOpen && !cornerOpen) return;
+
+    const closeOutsidePopovers = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (
+        settingsOpen
+        && !settingsPopoverRef.current?.contains(event.target)
+        && !settingsButtonRef.current?.contains(event.target)
+      ) {
+        setSettingsOpen(false);
+      }
+      if (
+        cornerOpen
+        && !cornerPopoverRef.current?.contains(event.target)
+        && !cornerButtonRef.current?.contains(event.target)
+      ) {
+        setCornerOpen(false);
+      }
+    };
+    const closePopoversOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSettingsOpen(false);
+        setCornerOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", closeOutsidePopovers);
+    window.addEventListener("keydown", closePopoversOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutsidePopovers);
+      window.removeEventListener("keydown", closePopoversOnEscape);
+    };
+  }, [settingsOpen, cornerOpen]);
 
   async function toggleTracking(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -406,10 +445,12 @@ export function MiniView() {
         <span className="mini-brand">TTLI</span>
         <span className={`mini-pulse ${paused ? "" : away ? "is-away" : liveSegment ? "is-live" : ""}`} />
         <button
+          ref={settingsButtonRef}
           type="button"
           className="mini-settings-button"
           aria-label={t("mini.settings")}
           aria-expanded={settingsOpen}
+          onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();
@@ -471,16 +512,18 @@ export function MiniView() {
           {pinned ? "●" : "○"}
         </button>
         <button
+          ref={cornerButtonRef}
           type="button"
           className={corner ? "is-pinned" : ""}
           aria-pressed={corner !== null}
           aria-label={t("mini.cornerPin")}
           title={t("mini.cornerPin")}
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => void toggleCornerPopover(event)}
         >📎</button>
       </footer>
       {settingsOpen && (
-        <section className="mini-popover mini-settings-popover" onClick={(event) => event.stopPropagation()}>
+        <section ref={settingsPopoverRef} className="mini-popover mini-settings-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <strong>{t("mini.settings")}</strong>
           <label><span>{t("mini.settingsMode")}</span><select value={mode} onChange={(event) => void changeMode(event.target.value as MiniMode)}>
             <option value="auto">{t("mini.settingsModeAuto")}</option>
@@ -497,7 +540,7 @@ export function MiniView() {
         </section>
       )}
       {cornerOpen && (
-        <section className="mini-popover mini-corner-popover" aria-label={t("mini.cornerChoose")} onClick={(event) => event.stopPropagation()}>
+        <section ref={cornerPopoverRef} className="mini-popover mini-corner-popover" aria-label={t("mini.cornerChoose")} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           {(["tl", "tr", "bl", "br"] as const).map((option) => (
             <button type="button" key={option} className={corner === option ? "is-active" : ""} aria-pressed={corner === option} onClick={() => void selectCorner(option)}>{t(`mini.corner.${option}`)}</button>
           ))}

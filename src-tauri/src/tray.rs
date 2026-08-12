@@ -9,8 +9,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
 
-const MINI_MIN_WIDTH: f64 = 240.0;
-const MINI_MIN_HEIGHT: f64 = 170.0;
+const MINI_MIN_WIDTH: f64 = 300.0;
+const MINI_MIN_HEIGHT: f64 = 228.0;
 const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
