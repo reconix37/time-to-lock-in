@@ -605,11 +605,14 @@ fn get_day_print_dates() -> Result<Vec<String>, String> {
              LIMIT 36",
         )
         .map_err(|error| error.to_string())?;
-    statement
+    let records = statement
         .query_map([], |row| row.get(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    drop(connection);
+    Ok(records)
 }
 
 #[tauri::command]
