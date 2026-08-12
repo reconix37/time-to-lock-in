@@ -14,7 +14,7 @@ const MINI_MIN_HEIGHT: f64 = 228.0;
 const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
-const MINI_CORNER_MARGIN: i32 = 12;
+const MINI_CORNER_MARGIN: i32 = 4;
 
 struct TraySnapshot {
     useful_ms: i64,

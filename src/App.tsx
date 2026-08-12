@@ -824,6 +824,7 @@ function DashboardView() {
             <label className="classification-category">
               <span>{t("classification.category")}</span>
               <select
+                className="with-chevron"
                 autoFocus
                 value={classificationCategoryId}
                 onChange={(event) => {
@@ -1009,6 +1010,33 @@ function DashboardView() {
       )}
 
       <div className="dashboard-grid">
+        {loading || !cumulative ? (
+          <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
+        ) : (
+          <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
+        )}
+
+        <section className={`card apps-card ${selectedApp ? "has-selection" : ""}`}>
+          <div className="card-heading"><div><span className="eyebrow">{t("dashboard.rating")}</span><h2>{t("dashboard.apps")}</h2></div></div>
+          {apps.length === 0 ? <p className="quiet-empty">{t("dashboard.noData")}</p> : apps.slice(0, 6).map((app) => {
+            const dominant: CategoryKind = app.useful_ms >= app.neutral_ms && app.useful_ms >= app.waste_ms ? "useful" : app.waste_ms >= app.neutral_ms ? "waste" : "neutral";
+            return (
+              <button
+                type="button"
+                className={`app-row ${selectedApp === app.app ? "is-selected" : ""}`}
+                key={app.app}
+                aria-pressed={selectedApp === app.app}
+                onClick={() => setSelectedApp((current) => current === app.app ? null : app.app)}
+              >
+                <span className="app-rank">{String(apps.indexOf(app) + 1).padStart(2, "0")}</span>
+                <span className="app-name">{cleanAppName(app.app)}</span>
+                <span className="app-bar"><i className={`kind-${dominant}`} style={{ width: `${(app.duration_ms / maxAppDuration) * 100}%` }} /></span>
+                <strong>{formatDuration(app.duration_ms)}</strong>
+              </button>
+            );
+          })}
+        </section>
+
         <section className="card timeline-card">
           <div className="card-heading">
             <div><span className="eyebrow">{t("dashboard.timelineEyebrow")}</span><h1>{t("dashboard.timelineTitle")}</h1></div>
@@ -1136,7 +1164,7 @@ function DashboardView() {
           )}
         </section>
 
-        <aside className="side-column">
+        <aside className="dashboard-stack">
           {scoring && <ScorePanel data={scoring} />}
 
           {scoring && (
@@ -1189,34 +1217,8 @@ function DashboardView() {
             </div>
           </section>
 
-          <section className={`card apps-card ${selectedApp ? "has-selection" : ""}`}>
-            <div className="card-heading"><div><span className="eyebrow">{t("dashboard.rating")}</span><h2>{t("dashboard.apps")}</h2></div></div>
-            {apps.length === 0 ? <p className="quiet-empty">{t("dashboard.noData")}</p> : apps.slice(0, 6).map((app) => {
-              const dominant: CategoryKind = app.useful_ms >= app.neutral_ms && app.useful_ms >= app.waste_ms ? "useful" : app.waste_ms >= app.neutral_ms ? "waste" : "neutral";
-              return (
-                <button
-                  type="button"
-                  className={`app-row ${selectedApp === app.app ? "is-selected" : ""}`}
-                  key={app.app}
-                  aria-pressed={selectedApp === app.app}
-                  onClick={() => setSelectedApp((current) => current === app.app ? null : app.app)}
-                >
-                  <span className="app-rank">{String(apps.indexOf(app) + 1).padStart(2, "0")}</span>
-                  <span className="app-name">{cleanAppName(app.app)}</span>
-                  <span className="app-bar"><i className={`kind-${dominant}`} style={{ width: `${(app.duration_ms / maxAppDuration) * 100}%` }} /></span>
-                  <strong>{formatDuration(app.duration_ms)}</strong>
-                </button>
-              );
-            })}
-          </section>
         </aside>
       </div>
-
-      {loading || !cumulative ? (
-        <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
-      ) : (
-        <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
-      )}
 
       {progress && (
         <CalendarHeatmap
@@ -1305,7 +1307,7 @@ function DashboardView() {
                   </label>
                   <label className="settings-field">
                     <span>{t("settings.currency")}</span>
-                    <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                    <select className="with-chevron" value={currency} onChange={(event) => setCurrency(event.target.value)}>
                       {["₴", "$", "€", "₽"].map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
                     </select>
                   </label>
@@ -1320,13 +1322,13 @@ function DashboardView() {
                 <div className="money-settings-grid">
                   <label className="settings-field">
                     <span>{t("settings.language")}</span>
-                    <select value={lang} onChange={(event) => void changeLanguage(event.target.value as Lang)}>
+                    <select className="with-chevron" value={lang} onChange={(event) => void changeLanguage(event.target.value as Lang)}>
                       {(["ru", "ua", "en"] as const).map((option) => <option key={option} value={option}>{langNames[option]}</option>)}
                     </select>
                   </label>
                   <label className="settings-field">
                     <span>{t("settings.theme")}</span>
-                    <select value={dark ? "dark" : "dawn"} onChange={(event) => void setTheme(event.target.value === "dark")}>
+                    <select className="with-chevron" value={dark ? "dark" : "dawn"} onChange={(event) => void setTheme(event.target.value === "dark")}>
                       <option value="dawn">{t("settings.themeLight")}</option>
                       <option value="dark">{t("settings.themeDark")}</option>
                     </select>

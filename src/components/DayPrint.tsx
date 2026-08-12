@@ -62,7 +62,7 @@ export function DayPrint({
         </div>
         <label>
           <span>{t("print.day")}</span>
-          <select value={selectedDate} onChange={(event) => onDateChange(event.target.value)}>
+          <select className="with-chevron" value={selectedDate} onChange={(event) => onDateChange(event.target.value)}>
             {availableDates.map((date) => <option key={date} value={date}>{formatLocalDate(date, { day: "numeric", month: "long", year: "numeric" }, lang)}</option>)}
           </select>
         </label>

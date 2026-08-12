@@ -478,6 +478,7 @@ export function MiniView() {
       <section className={`mini-current tone-${currentTone}`} title={privacyNow ? currentCategory ?? t("mini.hiddenApp") : currentApp} aria-label={t("mini.currentContext")}>
         <span>{t("mini.nowLabel")}</span>
         <strong>{currentApp}</strong>
+        {privacyNow && <i className="mini-privacy-badge">{t("mini.nowHiddenBadge")}</i>}
         {currentCategory && !privacyNow && <i className={`kind-${liveSegment?.category_kind ?? "neutral"}`}>{currentCategory}</i>}
       </section>
 
