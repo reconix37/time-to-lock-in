@@ -5,6 +5,14 @@ export function formatObservedClock(milliseconds: number): string {
   return [hours, minutes].map((value) => value.toString().padStart(2, "0")).join(":");
 }
 
+export function formatCompactMinutes(minutes: number): string {
+  const totalMinutes = Math.max(0, Math.floor(minutes));
+  if (totalMinutes < 60) return `${totalMinutes}м`;
+  const hours = Math.floor(totalMinutes / 60);
+  const rest = totalMinutes % 60;
+  return rest === 0 ? `${hours}ч` : `${hours}ч ${rest}м`;
+}
+
 export interface MiniVerdictInput {
   usefulMs: number;
   wasteMs: number;
@@ -48,7 +56,7 @@ export function getMiniVerdict(input: MiniVerdictInput): MiniVerdict {
       key: "mini.verdictWasteExceeded",
       vars: {
         label: input.wasteLabel,
-        minutes: Math.max(1, Math.ceil((input.wasteMs - wasteLimitMs) / 60_000)),
+        duration: formatCompactMinutes(Math.max(1, Math.ceil((input.wasteMs - wasteLimitMs) / 60_000))),
       },
     };
   }
@@ -56,13 +64,13 @@ export function getMiniVerdict(input: MiniVerdictInput): MiniVerdict {
     return allConditionsMet
       ? {
           key: "mini.verdictPassedNearLimit",
-          vars: { minutes: remainingMinutes(input.wasteMs, input.wasteLimitMin) },
+          vars: { duration: formatCompactMinutes(remainingMinutes(input.wasteMs, input.wasteLimitMin)) },
         }
       : {
           key: "mini.verdictWasteRemaining",
           vars: {
             label: input.wasteLabel,
-            minutes: remainingMinutes(input.wasteMs, input.wasteLimitMin),
+            duration: formatCompactMinutes(remainingMinutes(input.wasteMs, input.wasteLimitMin)),
           },
         };
   }
@@ -72,7 +80,7 @@ export function getMiniVerdict(input: MiniVerdictInput): MiniVerdict {
       key: "mini.verdictUsefulRemaining",
       vars: {
         label: input.usefulLabel,
-        minutes: remainingMinutes(input.usefulMs, input.usefulGoalMin),
+        duration: formatCompactMinutes(remainingMinutes(input.usefulMs, input.usefulGoalMin)),
       },
     };
   }
@@ -80,8 +88,8 @@ export function getMiniVerdict(input: MiniVerdictInput): MiniVerdict {
     return {
       key: "mini.verdictObserved",
       vars: {
-        current: Math.floor(input.observedMs / 60_000),
-        goal: input.observedMin,
+        current: formatCompactMinutes(Math.floor(input.observedMs / 60_000)),
+        goal: formatCompactMinutes(input.observedMin),
       },
     };
   }

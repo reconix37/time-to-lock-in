@@ -575,6 +575,44 @@ fn get_day_print(local_date: String) -> Result<DayPrint, String> {
 }
 
 #[tauri::command]
+fn get_day_print_dates() -> Result<Vec<String>, String> {
+    let connection = db::open()?;
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE calendar(local_date, position) AS (
+                SELECT date('now', 'localtime', '-35 days'), 0
+                UNION ALL
+                SELECT date(local_date, '+1 day'), position + 1
+                FROM calendar WHERE position < 35
+             ), bounds AS (
+                SELECT local_date,
+                       CAST(strftime('%s', local_date || ' 00:00:00', 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                       CAST(strftime('%s', local_date || ' 00:00:00', '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms
+                FROM calendar
+             )
+             SELECT local_date
+             FROM bounds
+             WHERE EXISTS (
+                       SELECT 1 FROM segment_day_overlaps o WHERE o.local_date = bounds.local_date
+                   )
+                OR EXISTS (
+                       SELECT 1 FROM segments s
+                       WHERE s.status = 'away'
+                         AND s.ts_end > bounds.day_start_ms
+                         AND s.ts_start < bounds.day_end_ms
+                   )
+             ORDER BY local_date DESC
+             LIMIT 36",
+        )
+        .map_err(|error| error.to_string())?;
+    statement
+        .query_map([], |row| row.get(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_week_summary() -> Result<WeekSummary, String> {
     let connection = db::open()?;
     let mut statement = connection
@@ -987,9 +1025,11 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
         "language" => matches!(value.as_str(), "ru" | "ua" | "en"),
         "currency" => matches!(value.as_str(), "₴" | "$" | "€" | "₽"),
-        "onboarding_done" | "tray_only" | "mini_observed_explained_v1" => {
+        "onboarding_done" | "tray_only" | "mini_observed_explained_v1" | "mini_privacy_now" => {
             matches!(value.as_str(), "0" | "1")
         }
+        "mini_mode" => matches!(value.as_str(), "auto" | "compact" | "detailed"),
+        "mini_text_size" => matches!(value.as_str(), "normal" | "large"),
         "last_day_print_seen" => local_date_format_is_valid(&value),
         "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" | "kind_label_observed" => {
             !value.trim().is_empty() && value.chars().count() <= 80
@@ -1202,9 +1242,28 @@ fn save_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn resize_mini(width: f64, height: f64, app: tauri::AppHandle) -> Result<(), String> {
+    tray::resize_mini(&app, width, height)
+}
+
+#[tauri::command]
+fn reset_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
+    tray::reset_mini_geometry(&app)
+}
+
+#[tauri::command]
+fn pin_mini_corner(corner: String, app: tauri::AppHandle) -> Result<(), String> {
+    tray::pin_mini_corner(&app, &corner)
+}
+
+#[tauri::command]
 fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "mini" {
         return Err("dragging is only available for the mini-window".to_string());
+    }
+    let connection = db::open()?;
+    if db::setting(&connection, "mini_corner")?.is_some_and(|corner| !corner.is_empty()) {
+        return Ok(());
     }
     window.start_dragging().map_err(|error| error.to_string())
 }
@@ -1316,8 +1375,9 @@ pub fn run() {
                 api.prevent_close();
                 if window.label() == "mini" {
                     let _ = tray::save_mini_geometry(window.app_handle());
-                } else if window.label() == "main" {
-                    let _ = tray::remember_tray_only();
+                    if let Ok(connection) = db::open() {
+                        let _ = db::set_setting(&connection, "mini_visible", "0");
+                    }
                 }
                 let _ = window.hide();
             }
@@ -1354,6 +1414,7 @@ pub fn run() {
             get_afk_series,
             mini_hourly,
             get_day_print,
+            get_day_print_dates,
             get_week_summary,
             import_challenge,
             save_png,
@@ -1379,6 +1440,9 @@ pub fn run() {
             show_mini,
             set_mini_pinned,
             save_mini_geometry,
+            resize_mini,
+            reset_mini_geometry,
+            pin_mini_corner,
             start_mini_drag,
             get_autostart,
             set_autostart,

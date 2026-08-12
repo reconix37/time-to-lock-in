@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
-import { formatObservedClock, getMiniVerdict } from "./miniVerdict";
+import { formatCompactMinutes, formatObservedClock, getMiniVerdict } from "./miniVerdict";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
@@ -29,6 +29,9 @@ interface MiniHourlyBucket {
 }
 
 type ContextIdentity = Pick<LiveSegment, "app" | "window_title" | "domain">;
+type MiniMode = "auto" | "compact" | "detailed";
+type MiniTextSize = "normal" | "large";
+type MiniCorner = "tl" | "tr" | "bl" | "br";
 
 type BulletBarProps = {
   kind: "useful" | "neutral" | "waste";
@@ -47,13 +50,12 @@ function sameContext(previous: ContextIdentity, next: ContextIdentity): boolean 
 }
 
 function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
-  const { t } = useI18n();
   const thresholdMs = threshold === undefined ? null : threshold.minutes * 60_000;
   const scaleMs = thresholdMs === null ? Math.max(valueMs, 1) : Math.max(thresholdMs * 1.25, valueMs, 1);
   const overflowedWaste = kind === "waste" && thresholdMs !== null && valueMs > thresholdMs;
   const fill = overflowedWaste ? 100 : Math.min(100, valueMs / scaleMs * 100);
   const tick = thresholdMs === null ? null : Math.min(100, thresholdMs / scaleMs * 100);
-  const valueMin = Math.floor(valueMs / 60_000);
+  const value = formatCompactMinutes(Math.floor(valueMs / 60_000));
 
   return (
     <div className={`mini-bullet kind-${kind}`}>
@@ -61,8 +63,8 @@ function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
         <span>{label}</span>
         <strong>
           {threshold === undefined
-            ? t("mini.minutes", { minutes: valueMin })
-            : <>{valueMin} / {threshold.minutes} <small>· {threshold.label}</small></>}
+            ? value
+            : <>{value} / {formatCompactMinutes(threshold.minutes)} <small>· {threshold.label}</small></>}
         </strong>
       </div>
       <div className="mini-bullet-rail" aria-hidden="true">
@@ -121,6 +123,13 @@ export function MiniView() {
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
   const [pinned, setPinned] = useState(true);
+  const [mode, setMode] = useState<MiniMode>("auto");
+  const [textSize, setTextSize] = useState<MiniTextSize>("normal");
+  const [privacyNow, setPrivacyNow] = useState(false);
+  const [showMiniAtLaunch, setShowMiniAtLaunch] = useState(false);
+  const [corner, setCorner] = useState<MiniCorner | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cornerOpen, setCornerOpen] = useState(false);
   const [kindLabels, setKindLabels] = useState(defaultKindLabels);
   const [loaded, setLoaded] = useState(false);
   const [showSwitchExplanation, setShowSwitchExplanation] = useState(false);
@@ -130,6 +139,8 @@ export function MiniView() {
   const explanationNeedsPersistence = useRef(false);
   const explanationSaveInFlight = useRef(false);
   const explanationTimer = useRef<number | null>(null);
+  const modeRef = useRef<MiniMode>(mode);
+  modeRef.current = mode;
 
   const loadMini = useCallback(async () => {
     try {
@@ -144,6 +155,11 @@ export function MiniView() {
       setLiveSegment(nextLiveSegment);
       setPaused(trackingPaused);
       setPinned(settings.mini_pinned === "1");
+      setMode(settings.mini_mode === "compact" || settings.mini_mode === "detailed" ? settings.mini_mode : "auto");
+      setTextSize(settings.mini_text_size === "large" ? "large" : "normal");
+      setPrivacyNow(settings.mini_privacy_now === "1");
+      setShowMiniAtLaunch(settings.tray_only === "0");
+      setCorner(matchesMiniCorner(settings.mini_corner) ? settings.mini_corner : null);
       setHourly(nextHourly);
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
@@ -190,26 +206,42 @@ export function MiniView() {
   }, [t]);
 
   useEffect(() => {
+    document.body.classList.add("is-mini");
     void loadMini();
     let active = true;
-    let resizeTimer: number | null = null;
+    let geometryTimer: number | null = null;
     let stopResizeListener: (() => void) | null = null;
+    let stopMoveListener: (() => void) | null = null;
+    const saveGeometry = () => {
+      if (geometryTimer !== null) window.clearTimeout(geometryTimer);
+      geometryTimer = window.setTimeout(() => void invoke("save_mini_geometry"), 400);
+    };
     void getCurrentWindow().onResized(() => {
-      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => void invoke("save_mini_geometry"), 400);
+      saveGeometry();
+      if (modeRef.current === "detailed") void invoke("resize_mini", { width: 420, height: 300 });
     }).then((unlisten) => {
       if (active) stopResizeListener = unlisten;
+      else unlisten();
+    });
+    void getCurrentWindow().onMoved(saveGeometry).then((unlisten) => {
+      if (active) stopMoveListener = unlisten;
       else unlisten();
     });
     const refresh = window.setInterval(() => void loadMini(), 5_000);
     return () => {
       active = false;
+      document.body.classList.remove("is-mini");
       stopResizeListener?.();
-      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      stopMoveListener?.();
+      if (geometryTimer !== null) window.clearTimeout(geometryTimer);
       window.clearInterval(refresh);
       if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
     };
   }, [loadMini]);
+
+  useEffect(() => {
+    if (mode === "detailed") void invoke("resize_mini", { width: 420, height: 300 });
+  }, [mode]);
 
   async function toggleTracking(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -236,6 +268,88 @@ export function MiniView() {
     }
   }
 
+  async function saveSetting(key: string, value: string): Promise<void> {
+    try {
+      await invoke("set_setting", { key, value });
+      setError(null);
+    } catch (reason: unknown) {
+      setError(typeof reason === "string" ? reason : t("error.saveSettings"));
+      throw reason;
+    }
+  }
+
+  async function changeMode(nextMode: MiniMode) {
+    const previous = mode;
+    setMode(nextMode);
+    try {
+      if (nextMode === "detailed") await invoke("resize_mini", { width: 420, height: 300 });
+      await saveSetting("mini_mode", nextMode);
+    } catch {
+      setMode(previous);
+    }
+  }
+
+  async function changeTextSize(nextSize: MiniTextSize) {
+    const previous = textSize;
+    setTextSize(nextSize);
+    try {
+      await saveSetting("mini_text_size", nextSize);
+    } catch {
+      setTextSize(previous);
+    }
+  }
+
+  async function changePrivacy(nextPrivacy: boolean) {
+    setPrivacyNow(nextPrivacy);
+    try {
+      await saveSetting("mini_privacy_now", nextPrivacy ? "1" : "0");
+    } catch {
+      setPrivacyNow(!nextPrivacy);
+    }
+  }
+
+  async function changeLaunchVisibility(nextShow: boolean) {
+    setShowMiniAtLaunch(nextShow);
+    try {
+      await saveSetting("tray_only", nextShow ? "0" : "1");
+    } catch {
+      setShowMiniAtLaunch(!nextShow);
+    }
+  }
+
+  async function resetGeometry() {
+    try {
+      await invoke("reset_mini_geometry");
+      setCorner(null);
+      if (mode === "detailed") await invoke("resize_mini", { width: 420, height: 300 });
+      setSettingsOpen(false);
+    } catch (reason: unknown) {
+      setError(typeof reason === "string" ? reason : t("error.saveSettings"));
+    }
+  }
+
+  async function selectCorner(nextCorner: MiniCorner) {
+    const previous = corner;
+    setCorner(previous === nextCorner ? null : nextCorner);
+    try {
+      await invoke("pin_mini_corner", { corner: nextCorner });
+      setCornerOpen(false);
+    } catch (reason: unknown) {
+      setCorner(previous);
+      setError(typeof reason === "string" ? reason : t("error.miniPin"));
+    }
+  }
+
+  async function toggleCornerPopover(event: React.MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setSettingsOpen(false);
+    if (corner) {
+      await selectCorner(corner);
+    } else {
+      setCornerOpen((open) => !open);
+    }
+  }
+
   const away = liveSegment?.status === "away";
   const verdict = progress ? getMiniVerdict({
     usefulMs: progress.today.useful_ms,
@@ -250,7 +364,7 @@ export function MiniView() {
   const verdictText = showSwitchExplanation
     ? t("mini.switchExplanation")
     : verdict ? t(verdict.key, verdict.vars) : t("mini.verdictInProgress");
-  const currentApp = paused
+  const actualCurrentApp = paused
     ? t("mini.trackingPaused")
     : !loaded
       ? t("mini.determiningWindow")
@@ -267,6 +381,9 @@ export function MiniView() {
     : !loaded || !liveSegment
       ? "muted"
       : liveSegment.is_uncategorized ? "muted" : liveSegment.category_kind;
+  const currentApp = privacyNow && !paused && loaded && !away
+    ? currentCategory ?? t("mini.hiddenApp")
+    : actualCurrentApp;
   const nextRankNeeded = progress?.next_rank_threshold === null || progress?.next_rank_threshold === undefined
     ? null
     : Math.max(0, progress.next_rank_threshold - progress.lifetime_xp);
@@ -278,17 +395,28 @@ export function MiniView() {
     : Math.min(100, Math.max(0, (progress.lifetime_xp - progress.current_rank_threshold) / rankSpan * 100));
 
   return (
-    <main className="mini-shell">
+    <main className={`mini-shell mini-mode-${mode}${textSize === "large" ? " mini-text-large" : ""}${corner ? " is-corner-pinned" : ""}`}>
       <div
         className="mini-drag-strip"
         onMouseDown={(event) => {
           event.stopPropagation();
-          if (event.button === 0) void invoke("start_mini_drag");
+          if (event.button === 0 && !corner) void invoke("start_mini_drag");
         }}
       >
         <span className="mini-brand">TTLI</span>
         <span className={`mini-pulse ${paused ? "" : away ? "is-away" : liveSegment ? "is-live" : ""}`} />
-        <i aria-hidden="true">•••</i>
+        <button
+          type="button"
+          className="mini-settings-button"
+          aria-label={t("mini.settings")}
+          aria-expanded={settingsOpen}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            setCornerOpen(false);
+            setSettingsOpen((open) => !open);
+          }}
+        >⚙</button>
       </div>
 
       <section className="mini-hero" aria-label={t("mini.observedToday")}>
@@ -306,10 +434,10 @@ export function MiniView() {
         </section>
       ) : <div className="mini-loading" aria-label={t("common.loading")} />}
 
-      <section className={`mini-current tone-${currentTone}`} title={currentApp} aria-label={t("mini.currentContext")}>
+      <section className={`mini-current tone-${currentTone}`} title={privacyNow ? currentCategory ?? t("mini.hiddenApp") : currentApp} aria-label={t("mini.currentContext")}>
         <span>{t("mini.nowLabel")}</span>
         <strong>{currentApp}</strong>
-        {currentCategory && <i className={`kind-${liveSegment?.category_kind ?? "neutral"}`}>{currentCategory}</i>}
+        {currentCategory && !privacyNow && <i className={`kind-${liveSegment?.category_kind ?? "neutral"}`}>{currentCategory}</i>}
       </section>
 
       <div className="mini-expanded">
@@ -342,8 +470,44 @@ export function MiniView() {
         >
           {pinned ? "●" : "○"}
         </button>
+        <button
+          type="button"
+          className={corner ? "is-pinned" : ""}
+          aria-pressed={corner !== null}
+          aria-label={t("mini.cornerPin")}
+          title={t("mini.cornerPin")}
+          onClick={(event) => void toggleCornerPopover(event)}
+        >📎</button>
       </footer>
+      {settingsOpen && (
+        <section className="mini-popover mini-settings-popover" onClick={(event) => event.stopPropagation()}>
+          <strong>{t("mini.settings")}</strong>
+          <label><span>{t("mini.settingsMode")}</span><select value={mode} onChange={(event) => void changeMode(event.target.value as MiniMode)}>
+            <option value="auto">{t("mini.settingsModeAuto")}</option>
+            <option value="compact">{t("mini.settingsModeCompact")}</option>
+            <option value="detailed">{t("mini.settingsModeDetailed")}</option>
+          </select></label>
+          <label><span>{t("mini.settingsText")}</span><select value={textSize} onChange={(event) => void changeTextSize(event.target.value as MiniTextSize)}>
+            <option value="normal">{t("mini.settingsTextNormal")}</option>
+            <option value="large">{t("mini.settingsTextLarge")}</option>
+          </select></label>
+          <label className="mini-settings-check"><input type="checkbox" checked={privacyNow} onChange={(event) => void changePrivacy(event.target.checked)} /><span>{t("mini.settingsPrivacy")}</span></label>
+          <label className="mini-settings-check"><input type="checkbox" checked={showMiniAtLaunch} onChange={(event) => void changeLaunchVisibility(event.target.checked)} /><span>{t("mini.settingsLaunch")}</span></label>
+          <button type="button" onClick={() => void resetGeometry()}>{t("mini.settingsReset")}</button>
+        </section>
+      )}
+      {cornerOpen && (
+        <section className="mini-popover mini-corner-popover" aria-label={t("mini.cornerChoose")} onClick={(event) => event.stopPropagation()}>
+          {(["tl", "tr", "bl", "br"] as const).map((option) => (
+            <button type="button" key={option} className={corner === option ? "is-active" : ""} aria-pressed={corner === option} onClick={() => void selectCorner(option)}>{t(`mini.corner.${option}`)}</button>
+          ))}
+        </section>
+      )}
       <span className="mini-resize-grip" aria-hidden="true" />
     </main>
   );
+}
+
+function matchesMiniCorner(value: string | undefined): value is MiniCorner {
+  return value === "tl" || value === "tr" || value === "bl" || value === "br";
 }

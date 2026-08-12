@@ -15,6 +15,7 @@ pub struct BrowserEvent {
     pub ts: i64,
     pub domain: String,
     pub title: String,
+    pub media_playing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +81,27 @@ fn normalize_title(title: &str) -> String {
 
 fn has_media_marker(title: &str) -> bool {
     title.contains('▶') || title.to_lowercase().contains("(playing)")
+}
+
+fn is_chromium_browser(app: &str) -> bool {
+    [
+        "chrome.exe",
+        "msedge.exe",
+        "brave.exe",
+        "opera.exe",
+        "vivaldi.exe",
+        "chromium.exe",
+    ]
+    .iter()
+    .any(|browser| app.eq_ignore_ascii_case(browser))
+}
+
+fn activity_status(forced_away: bool, idle: bool, media_playing: bool) -> &'static str {
+    if forced_away || (idle && !media_playing) {
+        "away"
+    } else {
+        "active"
+    }
 }
 
 pub fn spawn(
@@ -280,7 +302,8 @@ fn classify(connection: &Connection, state: &ActivityState) -> Result<i64, Strin
 #[cfg(windows)]
 mod platform {
     use super::{
-        has_media_marker, normalize_title, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
+        activity_status, has_media_marker, is_chromium_browser, normalize_title, ActivityState,
+        BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
     };
     use crate::db;
     use rusqlite::Connection;
@@ -326,28 +349,29 @@ mod platform {
             return Ok(None);
         }
 
-        let (domain, fused_title) = if matches!(app_lower.as_str(), "chrome.exe" | "msedge.exe") {
+        let (domain, fused_title, media_playing) = if is_chromium_browser(&app_lower) {
             browser_event
                 .filter(|event| {
                     let age = now.saturating_sub(event.ts);
                     (0..=BROWSER_EVENT_MAX_AGE_MS).contains(&age)
                 })
-                .map(|event| (event.domain.clone(), normalize_title(&event.title)))
-                .unwrap_or_else(|| (String::new(), title.clone()))
+                .map(|event| {
+                    (
+                        event.domain.clone(),
+                        normalize_title(&event.title),
+                        event.media_playing,
+                    )
+                })
+                .unwrap_or_else(|| (String::new(), title.clone(), false))
         } else {
-            (String::new(), title.clone())
+            (String::new(), title.clone(), has_media_marker(&title))
         };
-        let media_playing = has_media_marker(&fused_title) || has_media_marker(&title);
 
         Ok(Some(ActivityState {
             app,
             title: fused_title,
             domain,
-            status: if forced_away || (idle && !media_playing) {
-                "away"
-            } else {
-                "active"
-            },
+            status: activity_status(forced_away, idle, media_playing),
         }))
     }
 
@@ -424,7 +448,33 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_media_marker, is_task_switcher, normalize_title, ActivityState};
+    use super::{
+        activity_status, has_media_marker, is_chromium_browser, is_task_switcher, normalize_title,
+        ActivityState,
+    };
+
+    #[test]
+    fn recognizes_supported_chromium_browsers() {
+        for app in [
+            "chrome.exe",
+            "msedge.exe",
+            "brave.exe",
+            "opera.exe",
+            "vivaldi.exe",
+            "chromium.exe",
+        ] {
+            assert!(is_chromium_browser(app));
+        }
+
+        assert!(!is_chromium_browser("firefox.exe"));
+    }
+
+    #[test]
+    fn playing_media_keeps_idle_activity_active() {
+        assert_eq!(activity_status(false, true, false), "away");
+        assert_eq!(activity_status(false, true, true), "active");
+        assert_eq!(activity_status(true, true, true), "away");
+    }
 
     #[test]
     fn normalizes_volatile_title_suffixes_and_whitespace() {

@@ -9,11 +9,12 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
 
-const MINI_MIN_WIDTH: f64 = 300.0;
-const MINI_MIN_HEIGHT: f64 = 228.0;
+const MINI_MIN_WIDTH: f64 = 240.0;
+const MINI_MIN_HEIGHT: f64 = 170.0;
 const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
+const MINI_CORNER_MARGIN: i32 = 12;
 
 struct TraySnapshot {
     useful_ms: i64,
@@ -122,15 +123,26 @@ pub fn install(
 pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
     let connection = db::open()?;
     let tray_only = db::setting(&connection, "tray_only")?.as_deref() != Some("0");
+    let onboarding_done = db::setting(&connection, "onboarding_done")?.as_deref() == Some("1");
     let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
+    let visible = db::setting(&connection, "mini_visible")?.as_deref() == Some("1");
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
     drop(connection);
 
     if let Some(mini) = app.get_webview_window("mini") {
         mini.set_always_on_top(pinned)
             .map_err(|error| error.to_string())?;
         clamp_mini_window(&mini)?;
+        if !corner.is_empty() {
+            move_mini_to_corner(&mini, &corner)?;
+            mini.set_resizable(false)
+                .map_err(|error| error.to_string())?;
+        }
+        if visible || (onboarding_done && !tray_only) {
+            mini.show().map_err(|error| error.to_string())?;
+        }
     }
-    if tray_only {
+    if onboarding_done {
         if let Some(main) = app.get_webview_window("main") {
             main.hide().map_err(|error| error.to_string())?;
         }
@@ -140,7 +152,7 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
 
 pub fn show_dashboard(app: &AppHandle) {
     if let Ok(connection) = db::open() {
-        let _ = db::set_setting(&connection, "tray_only", "0");
+        let _ = db::set_setting(&connection, "mini_visible", "0");
     }
     if let Some(mini) = app.get_webview_window("mini") {
         let _ = mini.hide();
@@ -152,17 +164,15 @@ pub fn show_dashboard(app: &AppHandle) {
     }
 }
 
-pub fn remember_tray_only() -> Result<(), String> {
-    let connection = db::open()?;
-    db::set_setting(&connection, "tray_only", "1")
-}
-
 pub fn toggle_mini(app: &AppHandle) {
     let Some(mini) = app.get_webview_window("mini") else {
         return;
     };
     if mini.is_visible().unwrap_or(false) {
         let _ = mini.hide();
+        if let Ok(connection) = db::open() {
+            let _ = db::set_setting(&connection, "mini_visible", "0");
+        }
     } else {
         let _ = show_mini(app);
     }
@@ -174,7 +184,9 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     clamp_mini_window(&mini)?;
     mini.show().map_err(|error| error.to_string())?;
-    mini.set_focus().map_err(|error| error.to_string())
+    mini.set_focus().map_err(|error| error.to_string())?;
+    let connection = db::open()?;
+    db::set_setting(&connection, "mini_visible", "1")
 }
 
 pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
@@ -208,6 +220,135 @@ pub fn save_mini_geometry(app: &AppHandle) -> Result<(), String> {
         "mini_window_size",
         &format!("{:.0},{:.0}", size.width, size.height),
     )
+}
+
+pub fn resize_mini(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if !width.is_finite() || !height.is_finite() {
+        return Err("invalid mini-window size".to_string());
+    }
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let current = mini
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(mini.scale_factor().map_err(|error| error.to_string())?);
+    if current.width >= width && current.height >= height {
+        return Ok(());
+    }
+    let size = LogicalSize::new(
+        current
+            .width
+            .max(width)
+            .clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH),
+        current
+            .height
+            .max(height)
+            .clamp(MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
+    );
+    mini.set_size(size).map_err(|error| error.to_string())?;
+    save_mini_geometry(app)?;
+    clamp_mini_window(&mini)?;
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if corner.is_empty() {
+        Ok(())
+    } else {
+        move_mini_to_corner(&mini, &corner)
+    }
+}
+
+pub fn reset_mini_geometry(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    connection
+        .execute(
+            "DELETE FROM settings WHERE key IN ('mini_window_pos', 'mini_window_size')",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    db::set_setting(&connection, "mini_corner", "")?;
+    drop(connection);
+    mini.set_resizable(true)
+        .map_err(|error| error.to_string())?;
+    mini.set_size(LogicalSize::new(300.0, 228.0))
+        .map_err(|error| error.to_string())?;
+    place_mini_at_default(&mini)?;
+    save_mini_geometry(app)
+}
+
+pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
+    if !matches!(corner, "tl" | "tr" | "bl" | "br") {
+        return Err("invalid mini-window corner".to_string());
+    }
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    let active_corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if active_corner == corner {
+        db::set_setting(&connection, "mini_corner", "")?;
+        mini.set_resizable(true)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    move_mini_to_corner(&mini, corner)?;
+    mini.set_resizable(false)
+        .map_err(|error| error.to_string())?;
+    db::set_setting(&connection, "mini_corner", corner)?;
+    save_mini_geometry(app)
+}
+
+fn place_mini_at_default(window: &WebviewWindow) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?);
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(
+            area.position.x + area.size.width.saturating_sub(size.width) as i32 - MINI_MARGIN,
+            area.position.y + area.size.height.saturating_sub(size.height) as i32 - MINI_MARGIN,
+        ))
+        .map_err(|error| error.to_string())
+}
+
+fn move_mini_to_corner(window: &WebviewWindow, corner: &str) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?);
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let left = area.position.x + MINI_CORNER_MARGIN;
+    let top = area.position.y + MINI_CORNER_MARGIN;
+    let right =
+        area.position.x + area.size.width.saturating_sub(size.width) as i32 - MINI_CORNER_MARGIN;
+    let bottom =
+        area.position.y + area.size.height.saturating_sub(size.height) as i32 - MINI_CORNER_MARGIN;
+    let position = match corner {
+        "tl" => PhysicalPosition::new(left, top),
+        "tr" => PhysicalPosition::new(right, top),
+        "bl" => PhysicalPosition::new(left, bottom),
+        "br" => PhysicalPosition::new(right, bottom),
+        _ => return Err("invalid mini-window corner".to_string()),
+    };
+    window
+        .set_position(position)
+        .map_err(|error| error.to_string())
 }
 
 fn clamp_mini_window(window: &WebviewWindow) -> Result<(), String> {

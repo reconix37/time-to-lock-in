@@ -35,6 +35,7 @@ function tabEvent(tab) {
       ts: Date.now(),
       domain: truncate(parsedUrl.hostname.toLowerCase(), 253),
       title: truncate(tab.title, 500),
+      media_playing: Boolean(tab.audible),
     };
   } catch {
     return null;
@@ -43,7 +44,7 @@ function tabEvent(tab) {
 
 function isDebounced(event) {
   const now = Date.now();
-  const key = `${event.domain}\u0000${event.title}`;
+  const key = `${event.domain}\u0000${event.title}\u0000${event.media_playing}`;
 
   for (const [storedKey, sentAt] of recentEvents) {
     if (now - sentAt >= DEBOUNCE_MS) {
@@ -152,7 +153,7 @@ async function postEvent(event, token) {
   }
 }
 
-async function captureActiveTab() {
+async function captureActiveTab(skipDebounce = false) {
   const token = await readToken();
   if (!token) {
     return;
@@ -168,15 +169,16 @@ async function captureActiveTab() {
   });
   const event = tabEvent(tab);
 
-  if (!event || isDebounced(event)) {
+  if (!event || (!skipDebounce && isDebounced(event))) {
     return;
   }
 
   await postEvent(event, token);
 }
 
-function queueCapture() {
-  captureQueue = captureQueue.then(captureActiveTab, captureActiveTab);
+function queueCapture(skipDebounce = false) {
+  const capture = () => captureActiveTab(skipDebounce);
+  captureQueue = captureQueue.then(capture, capture);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -192,21 +194,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return undefined;
 });
 
-chrome.tabs.onActivated.addListener(queueCapture);
+chrome.tabs.onActivated.addListener(() => queueCapture(true));
 
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-  if (
-    changeInfo.status === "complete" ||
-    Object.hasOwn(changeInfo, "url") ||
-    Object.hasOwn(changeInfo, "title")
-  ) {
-    queueCapture();
-  }
+chrome.tabs.onUpdated.addListener(() => {
+  queueCapture(true);
 });
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) {
-    queueCapture();
+    queueCapture(true);
   }
 });
 

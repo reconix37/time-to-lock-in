@@ -204,6 +204,7 @@ function DashboardView() {
   const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
   const [afkSeries, setAfkSeries] = useState<AfkDay[]>([]);
   const [dayPrint, setDayPrint] = useState<DayPrintData | null>(null);
+  const [dayPrintDates, setDayPrintDates] = useState<string[]>([]);
   const [dayPrintDate, setDayPrintDate] = useState("");
   const [shareBusy, setShareBusy] = useState<"day" | "week" | "challenge" | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
@@ -271,7 +272,7 @@ function DashboardView() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextSettings, trackingPaused, nextAutostart] =
+      const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextSettings, trackingPaused, nextAutostart, nextDayPrintDates] =
         await Promise.all([
           invoke<Segment[]>("get_today_segments"),
           invoke<Category[]>("get_categories"),
@@ -283,6 +284,7 @@ function DashboardView() {
           invoke<Record<string, string>>("get_settings"),
           invoke<boolean>("get_tracking_paused"),
           invoke<boolean>("get_autostart"),
+          invoke<string[]>("get_day_print_dates"),
         ]);
       setSegments(nextSegments);
       setCategories(nextCategories);
@@ -292,22 +294,8 @@ function DashboardView() {
       setAfkSeries(nextAfkSeries);
       setStats(nextProgress.today);
       setApps(nextApps);
-      let targetDate = dayPrintDate;
-      if (!targetDate) {
-        const yesterday = nextDailySeries[nextDailySeries.length - 2];
-        const newestObserved = [...nextDailySeries].reverse().find((day) => day.observed_ms > 0);
-        const unseenYesterday = yesterday?.observed_ms > 0
-          && nextSettings.last_day_print_seen !== yesterday.local_date;
-        targetDate = unseenYesterday
-          ? yesterday.local_date
-          : nextProgress.today.observed_ms > 0
-            ? nextProgress.today.local_date
-            : newestObserved?.local_date ?? nextProgress.today.local_date;
-        if (unseenYesterday) {
-          await invoke<void>("set_setting", { key: "last_day_print_seen", value: yesterday.local_date });
-          nextSettings.last_day_print_seen = yesterday.local_date;
-        }
-      }
+      setDayPrintDates(nextDayPrintDates);
+      const targetDate = dayPrintDate || nextProgress.today.local_date;
       setSettings(nextSettings);
       setDayPrintDate(targetDate);
       setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate: targetDate }));
@@ -1226,34 +1214,6 @@ function DashboardView() {
         <DayScorecard overview={progress} formatDuration={formatDuration} kindLabels={kindLabels} observedLabel={kindLabels.observed} />
       )}
 
-      {dayPrint && (dayPrint.observed_ms > 0 || dayPrint.afk_ms > 0) && (
-        <DayPrint
-          data={dayPrint}
-          availableDates={dailySeries
-            .filter((day) => day.observed_ms > 0 || afkSeries.some((afkDay) =>
-              afkDay.local_date === day.local_date && afkDay.afk_ms > 0,
-            ))
-            .map((day) => day.local_date)
-            .reverse()}
-          selectedDate={dayPrintDate}
-          busyAction={shareBusy}
-          message={shareMessage}
-          formatDuration={formatDuration}
-          kindLabels={kindLabels}
-          observedLabel={kindLabels.observed}
-          onDateChange={(localDate) => void selectDayPrint(localDate)}
-          onShareDay={() => void shareArtifact("day")}
-          onShareWeek={() => void shareArtifact("week")}
-          onShareChallenge={() => void shareArtifact("challenge")}
-        />
-      )}
-
-      {loading || !cumulative ? (
-        <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
-      ) : (
-        <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
-      )}
-
       <div className="dashboard-grid">
         <section className="card timeline-card">
           <div className="card-heading">
@@ -1441,12 +1401,38 @@ function DashboardView() {
         </aside>
       </div>
 
+      {loading || !cumulative ? (
+        <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
+      ) : (
+        <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
+      )}
+
       {progress && (
         <CalendarHeatmap
           days={progress.calendar}
           todayDate={progress.today.local_date}
           formatDuration={formatDuration}
           kindLabels={kindLabels}
+        />
+      )}
+
+      {dayPrint && (
+        <DayPrint
+          data={dayPrint}
+          availableDates={Array.from(new Set([
+            progress?.today.local_date ?? dayPrint.local_date,
+            ...dayPrintDates,
+          ]))}
+          selectedDate={dayPrintDate}
+          busyAction={shareBusy}
+          message={shareMessage}
+          formatDuration={formatDuration}
+          kindLabels={kindLabels}
+          observedLabel={kindLabels.observed}
+          onDateChange={(localDate) => void selectDayPrint(localDate)}
+          onShareDay={() => void shareArtifact("day")}
+          onShareWeek={() => void shareArtifact("week")}
+          onShareChallenge={() => void shareArtifact("challenge")}
         />
       )}
       </> : (
