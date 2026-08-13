@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Agentation } from "agentation";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { AfkStrip } from "./components/AfkStrip";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
@@ -1600,7 +1601,12 @@ function DashboardView() {
 }
 
 function App() {
-  return <I18nProvider>{getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />}</I18nProvider>;
+  return (
+    <I18nProvider>
+      {getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />}
+      {import.meta.env.DEV && <Agentation />}
+    </I18nProvider>
+  );
 }
 
 export default App;
