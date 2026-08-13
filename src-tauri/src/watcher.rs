@@ -1,5 +1,5 @@
 use crate::db;
-use crate::rules::{Activity, RuleSet};
+use crate::rules::{Activity, RuleCache};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,33 +31,7 @@ struct ActiveSegment {
     id: i64,
     ts_start: i64,
     state: ActivityState,
-}
-
-struct RuleCache {
-    revision: i64,
-    rules: RuleSet,
-}
-
-impl RuleCache {
-    fn load(connection: &Connection) -> Result<Self, String> {
-        Ok(Self {
-            revision: db::rules_revision(connection)?,
-            rules: RuleSet::load(connection)?,
-        })
-    }
-
-    fn classify(&mut self, connection: &Connection, state: &ActivityState) -> Result<i64, String> {
-        let revision = db::rules_revision(connection)?;
-        if revision != self.revision {
-            self.rules = RuleSet::load(connection)?;
-            self.revision = revision;
-        }
-        Ok(self.rules.classify(&Activity {
-            app: &state.app,
-            title: &state.title,
-            domain: &state.domain,
-        }))
-    }
+    category_id: i64,
 }
 
 fn is_task_switcher(state: &ActivityState) -> bool {
@@ -187,9 +161,26 @@ fn run(
                     finish_segment(&mut connection, segment.id, now)?;
                 }
             }
+            let rules_changed = rule_cache.refresh(&connection)?;
             match current.as_mut() {
                 Some(segment) if segment.state == state => {
-                    checkpoint(&connection, segment.id, now)?
+                    let category_id = rule_cache.classify_cached(&Activity {
+                        app: &state.app,
+                        title: &state.title,
+                        domain: &state.domain,
+                    });
+                    if rules_changed && category_id != segment.category_id {
+                        let segment = current.take().expect("active segment");
+                        finish_segment(&mut connection, segment.id, now)?;
+                        current = Some(start_segment_with_category(
+                            &mut connection,
+                            state,
+                            category_id,
+                            now,
+                        )?);
+                    } else {
+                        checkpoint(&connection, segment.id, now)?;
+                    }
                 }
                 Some(segment) => {
                     finish_segment(&mut connection, segment.id, now)?;
@@ -228,7 +219,23 @@ fn start_segment(
     state: ActivityState,
     timestamp: i64,
 ) -> Result<ActiveSegment, String> {
-    let category_id = rule_cache.classify(connection, &state)?;
+    let category_id = rule_cache.classify(
+        connection,
+        &Activity {
+            app: &state.app,
+            title: &state.title,
+            domain: &state.domain,
+        },
+    )?;
+    start_segment_with_category(connection, state, category_id, timestamp)
+}
+
+fn start_segment_with_category(
+    connection: &mut Connection,
+    state: ActivityState,
+    category_id: i64,
+    timestamp: i64,
+) -> Result<ActiveSegment, String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -252,6 +259,7 @@ fn start_segment(
         id,
         ts_start: timestamp,
         state,
+        category_id,
     })
 }
 

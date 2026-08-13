@@ -114,7 +114,6 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
                   if (event.key === "Enter" || event.key === " ") setActiveDate(day.local_date);
                 }}
               >
-                <title>{tooltip}</title>
                 <rect className="trends-hit-area" x={x(index) - slotWidth / 2} y={TOP} width={slotWidth} height={PLOT_HEIGHT} />
                 <rect className="trend-stack kind-useful" x={x(index) - barWidth / 2} y={usefulTop} width={barWidth} height={bottom - usefulTop} />
                 <rect className="trend-stack kind-neutral" x={x(index) - barWidth / 2} y={neutralTop} width={barWidth} height={usefulTop - neutralTop} />

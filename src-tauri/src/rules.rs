@@ -51,6 +51,43 @@ pub struct RuleSet {
     rules: Vec<CompiledRule>,
 }
 
+pub(crate) struct RuleCache {
+    revision: i64,
+    rules: RuleSet,
+}
+
+impl RuleCache {
+    pub(crate) fn load(connection: &Connection) -> Result<Self, String> {
+        Ok(Self {
+            revision: crate::db::rules_revision(connection)?,
+            rules: RuleSet::load(connection)?,
+        })
+    }
+
+    pub(crate) fn refresh(&mut self, connection: &Connection) -> Result<bool, String> {
+        let revision = crate::db::rules_revision(connection)?;
+        if revision == self.revision {
+            return Ok(false);
+        }
+        self.rules = RuleSet::load(connection)?;
+        self.revision = revision;
+        Ok(true)
+    }
+
+    pub(crate) fn classify(
+        &mut self,
+        connection: &Connection,
+        activity: &Activity<'_>,
+    ) -> Result<i64, String> {
+        self.refresh(connection)?;
+        Ok(self.classify_cached(activity))
+    }
+
+    pub(crate) fn classify_cached(&self, activity: &Activity<'_>) -> i64 {
+        self.rules.classify(activity)
+    }
+}
+
 impl RuleSet {
     pub fn load(connection: &Connection) -> Result<Self, String> {
         let mut statement = connection
@@ -286,7 +323,7 @@ fn universal_pattern(pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activity, RuleDefinition, RuleSet};
+    use super::{Activity, RuleCache, RuleDefinition, RuleSet};
     use rusqlite::Connection;
 
     fn rule(id: i64, target: &str, pattern: &str, category: i64) -> RuleDefinition {
@@ -299,6 +336,121 @@ mod tests {
             match_mode: "legacy".to_string(),
             case_insensitive: true,
         }
+    }
+
+    #[test]
+    fn legacy_blender_title_matches_case_insensitively() {
+        let rules = RuleSet::compile(vec![rule(1, "title", "Blender", 7)]).expect("rules");
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "browser.exe",
+                title: "Blender Course Animation",
+                domain: "courses.example",
+            }),
+            7
+        );
+    }
+
+    #[test]
+    fn regex_matches_only_the_selected_activity_field() {
+        for (target, activity) in [
+            (
+                "title",
+                Activity {
+                    app: "browser.exe",
+                    title: "Practical 3D modeling",
+                    domain: "courses.example",
+                },
+            ),
+            (
+                "exe",
+                Activity {
+                    app: "blender.exe",
+                    title: "Untitled",
+                    domain: "",
+                },
+            ),
+            (
+                "domain",
+                Activity {
+                    app: "browser.exe",
+                    title: "Home",
+                    domain: "blender.org",
+                },
+            ),
+        ] {
+            let mut definition = rule(1, target, r"\b3d\b|blender", 8);
+            definition.match_mode = "regex".to_string();
+            assert_eq!(
+                RuleSet::compile(vec![definition])
+                    .expect("rules")
+                    .classify(&activity),
+                8
+            );
+        }
+    }
+
+    #[test]
+    fn regex_does_not_match_the_wrong_field() {
+        let mut exe_rule = rule(2, "exe", "3d", 9);
+        exe_rule.match_mode = "regex".to_string();
+        assert_eq!(
+            RuleSet::compile(vec![exe_rule])
+                .expect("rules")
+                .classify(&Activity {
+                    app: "browser.exe",
+                    title: "3D course",
+                    domain: "courses.example",
+                }),
+            0
+        );
+    }
+
+    #[test]
+    fn higher_priority_rule_wins() {
+        let low = rule(1, "title", "Blender", 1);
+        let mut high = rule(2, "exe", "blender.exe", 2);
+        high.priority = 10;
+        let rules = RuleSet::compile(vec![low, high]).expect("rules");
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "Blender.exe",
+                title: "Blender Course Animation",
+                domain: "",
+            }),
+            2
+        );
+    }
+
+    #[test]
+    fn revision_change_reclassifies_unchanged_activity() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE rules (
+                    id INTEGER PRIMARY KEY, match_type TEXT NOT NULL, pattern TEXT NOT NULL,
+                    category_id INTEGER NOT NULL, priority INTEGER NOT NULL,
+                    match_mode TEXT NOT NULL, case_insensitive INTEGER NOT NULL
+                 );
+                 INSERT INTO settings VALUES ('rules_revision', '1');
+                 INSERT INTO rules VALUES (1, 'title', 'Blender', 4, 0, 'legacy', 1);",
+            )
+            .expect("schema");
+        let activity = Activity {
+            app: "blender.exe",
+            title: "Blender Course Animation",
+            domain: "",
+        };
+        let mut cache = RuleCache::load(&connection).expect("cache");
+        assert_eq!(cache.classify(&connection, &activity).expect("category"), 4);
+
+        connection
+            .execute("UPDATE rules SET category_id = 9 WHERE id = 1", [])
+            .expect("updated rule");
+        crate::db::bump_rules_revision(&connection).expect("revision");
+
+        assert_eq!(cache.classify(&connection, &activity).expect("category"), 9);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::db;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -15,6 +16,15 @@ const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
 const MINI_CORNER_MARGIN: i32 = 4;
+
+#[derive(Serialize)]
+pub struct MiniState {
+    pinned: bool,
+    corner: Option<String>,
+    resizable: bool,
+    position_x: i32,
+    position_y: i32,
+}
 
 struct TraySnapshot {
     useful_ms: i64,
@@ -193,10 +203,41 @@ pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let previous_pinned = mini.is_always_on_top().map_err(|error| error.to_string())?;
     mini.set_always_on_top(pinned)
         .map_err(|error| error.to_string())?;
+    let connection = match db::open() {
+        Ok(connection) => connection,
+        Err(error) => {
+            let _ = mini.set_always_on_top(previous_pinned);
+            return Err(error);
+        }
+    };
+    if let Err(error) = db::set_setting(&connection, "mini_pinned", if pinned { "1" } else { "0" })
+    {
+        let _ = mini.set_always_on_top(previous_pinned);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub fn get_mini_state(app: &AppHandle) -> Result<MiniState, String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let resizable = mini.is_resizable().map_err(|error| error.to_string())?;
+    let position = mini.inner_position().map_err(|error| error.to_string())?;
     let connection = db::open()?;
-    db::set_setting(&connection, "mini_pinned", if pinned { "1" } else { "0" })
+    let saved_corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let corner = (!resizable && matches!(saved_corner.as_str(), "tl" | "tr" | "bl" | "br"))
+        .then_some(saved_corner);
+    Ok(MiniState {
+        pinned: mini.is_always_on_top().map_err(|error| error.to_string())?,
+        corner,
+        resizable,
+        position_x: position.x,
+        position_y: position.y,
+    })
 }
 
 pub fn save_mini_geometry(app: &AppHandle) -> Result<(), String> {
@@ -286,19 +327,30 @@ pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let previous_position = mini.inner_position().map_err(|error| error.to_string())?;
+    let previous_resizable = mini.is_resizable().map_err(|error| error.to_string())?;
     let connection = db::open()?;
     let active_corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
     if active_corner == corner {
-        db::set_setting(&connection, "mini_corner", "")?;
         mini.set_resizable(true)
             .map_err(|error| error.to_string())?;
+        if let Err(error) = db::set_setting(&connection, "mini_corner", "") {
+            let _ = mini.set_resizable(previous_resizable);
+            return Err(error);
+        }
         return Ok(());
     }
     move_mini_to_corner(&mini, corner)?;
-    mini.set_resizable(false)
-        .map_err(|error| error.to_string())?;
-    db::set_setting(&connection, "mini_corner", corner)?;
-    save_mini_geometry(app)
+    if let Err(error) = mini.set_resizable(false) {
+        let _ = mini.set_position(previous_position);
+        return Err(error.to_string());
+    }
+    if let Err(error) = db::set_setting(&connection, "mini_corner", corner) {
+        let _ = mini.set_position(previous_position);
+        let _ = mini.set_resizable(previous_resizable);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn place_mini_at_default(window: &WebviewWindow) -> Result<(), String> {

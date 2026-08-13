@@ -1436,6 +1436,11 @@ fn set_mini_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_mini_state(app: tauri::AppHandle) -> Result<tray::MiniState, String> {
+    tray::get_mini_state(&app)
+}
+
+#[tauri::command]
 fn save_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
     tray::save_mini_geometry(&app)
 }
@@ -1640,6 +1645,7 @@ pub fn run() {
             show_dashboard,
             show_mini,
             set_mini_pinned,
+            get_mini_state,
             save_mini_geometry,
             resize_mini,
             reset_mini_geometry,

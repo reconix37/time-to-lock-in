@@ -95,7 +95,6 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
                   if (event.key === "Enter" || event.key === " ") setActiveDate(day.local_date);
                 }}
               >
-                <title>{tooltip}</title>
                 <rect className="trends-hit-area" x={LEFT + slotWidth * index} y={TOP} width={slotWidth} height={PLOT_HEIGHT} />
                 <rect
                   className="trend-useful-bar"

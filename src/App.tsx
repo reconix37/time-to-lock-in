@@ -63,13 +63,14 @@ interface AppToday {
 
 interface AppTimelineItem extends AppToday {
   segments: Segment[];
+  sessions: DisplaySession[];
   lastSegment: Segment;
   isLive: boolean;
 }
 
-interface SegmentGroup {
+interface DisplaySession {
   id: string;
-  isMicro: boolean;
+  segmentIds: number[];
   segments: Segment[];
 }
 
@@ -145,25 +146,44 @@ function segmentDuration(segment: Segment, liveSegmentId: number | undefined, no
   return Math.max(0, end - segment.ts_start);
 }
 
-function groupSegments(segments: Segment[], liveSegmentId: number | undefined, now: number): SegmentGroup[] {
-  const groups: SegmentGroup[] = [];
-  const microSegments = segments.filter((segment) =>
-    segment.id !== liveSegmentId && segmentDuration(segment, liveSegmentId, now) < 60_000,
-  );
-  const microGroupId = microSegments.length > 1
-    ? `micro-${Math.min(...microSegments.map((segment) => segment.id))}`
-    : null;
-  for (const segment of [...segments].reverse()) {
-    const isMicro = segment.id !== liveSegmentId && segmentDuration(segment, liveSegmentId, now) < 60_000;
-    if (isMicro && microGroupId) {
-      const existingMicroGroup = groups.find((group) => group.id === microGroupId);
-      if (existingMicroGroup) existingMicroGroup.segments.push(segment);
-      else groups.push({ id: microGroupId, isMicro: true, segments: [segment] });
-      continue;
+const POLLING_INTERVAL_MS = 5_000;
+
+function normalizeVisibleTitle(title: string): string {
+  return title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function canJoinDisplaySession(previous: Segment, next: Segment): boolean {
+  const gap = next.ts_start - previous.ts_end;
+  return previous.status === "active"
+    && next.status === "active"
+    && gap >= 0
+    && gap <= POLLING_INTERVAL_MS
+    && previous.app === next.app
+    && normalizeVisibleTitle(previous.window_title) === normalizeVisibleTitle(next.window_title)
+    && previous.domain === next.domain
+    && previous.category_id === next.category_id;
+}
+
+function groupSegments(segments: Segment[]): DisplaySession[] {
+  const sessions: DisplaySession[] = [];
+  const chronological = [...segments].sort((left, right) => left.ts_start - right.ts_start || left.id - right.id);
+
+  for (const segment of chronological) {
+    const current = sessions[sessions.length - 1];
+    const previous = current?.segments[current.segments.length - 1];
+    if (previous && canJoinDisplaySession(previous, segment)) {
+      current.segmentIds.push(segment.id);
+      current.segments.push(segment);
+    } else {
+      sessions.push({
+        id: `session-${segment.id}`,
+        segmentIds: [segment.id],
+        segments: [segment],
+      });
     }
-    groups.push({ id: `segment-${segment.id}`, isMicro, segments: [segment] });
   }
-  return groups;
+
+  return sessions.reverse();
 }
 
 function DashboardView() {
@@ -193,7 +213,7 @@ function DashboardView() {
   const [autostart, setAutostart] = useState(false);
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
-  const [expandedMicroGroups, setExpandedMicroGroups] = useState<Set<string>>(new Set());
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [classificationTarget, setClassificationTarget] = useState<ClassificationTarget | null>(null);
   const [classificationCategoryId, setClassificationCategoryId] = useState(0);
   const [classificationScope, setClassificationScope] = useState<ClassificationScope>("single");
@@ -227,7 +247,7 @@ function DashboardView() {
   const [challengeImported, setChallengeImported] = useState(false);
   const [dbSizeMb, setDbSizeMb] = useState<number | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
-  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [tokenRevealed, setTokenRevealed] = useState(false);
   const [managerNotice, setManagerNotice] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
@@ -329,6 +349,12 @@ function DashboardView() {
   }, [settings.extension_chrome_id, settings.extension_edge_id, settingsOpen]);
 
   useEffect(() => {
+    if (settingsOpen) return;
+    setTokenRevealed(false);
+    setTokenCopied(false);
+  }, [settingsOpen]);
+
+  useEffect(() => {
     if (!settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !settingsSaving && !updateDownloading) setSettingsOpen(false);
@@ -402,6 +428,7 @@ function DashboardView() {
   const live = !paused && latestSegment?.status === "active" && now - latestSegment.ts_end <= 10_000
     ? latestSegment
     : undefined;
+  const displaySessions = useMemo(() => groupSegments(segments), [segments]);
   const kindLabels = useMemo<KindLabels>(() => ({
     useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
     neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
@@ -420,13 +447,14 @@ function DashboardView() {
         ...app,
         duration_ms: app.duration_ms + (isLive ? Math.max(0, now - live.ts_end) : 0),
         segments: appSegments,
+        sessions: displaySessions.filter((session) => session.segments[0]?.app === app.app),
         lastSegment,
         isLive,
       };
     })
     .filter((app): app is AppTimelineItem => app !== null)
     .sort((left, right) => Number(right.isLive) - Number(left.isLive) || right.duration_ms - left.duration_ms),
-  [apps, live, now, segments]);
+  [apps, displaySessions, live, now, segments]);
   const totalRing = Math.max(stats.observed_ms, 1);
   const ringParts = [
     { kind: "useful" as const, value: stats.useful_ms },
@@ -589,6 +617,7 @@ function DashboardView() {
     setChallengeImported(false);
     setDbSizeMb(null);
     setTokenCopied(false);
+    setTokenRevealed(false);
     setSettingsError(null);
     setSettingsOpen(true);
     try {
@@ -596,10 +625,6 @@ function DashboardView() {
     } catch (reason: unknown) {
       setSettingsError(typeof reason === "string" ? reason : t("error.dbSize"));
     }
-  }
-
-  async function openCategoryManager() {
-    setCategoryManagerOpen(true);
   }
 
   async function copyExtensionToken() {
@@ -627,13 +652,10 @@ function DashboardView() {
     const segment = segments.find((item) => item.id === segmentId);
     if (!segment) return;
     setExpandedApps((current) => new Set(current).add(segment.app));
-    const groups = groupSegments(
-      segments.filter((item) => item.app === segment.app),
-      live?.id,
-      now,
-    );
-    const microGroup = groups.find((group) => group.isMicro && group.segments.some((item) => item.id === segmentId));
-    if (microGroup) setExpandedMicroGroups((current) => new Set(current).add(microGroup.id));
+    const session = displaySessions.find((item) => item.segmentIds.includes(segmentId));
+    if (session && session.segmentIds.length > 1) {
+      setExpandedSessions((current) => new Set(current).add(session.id));
+    }
     openClassification(segment, `segment-${segment.id}`);
   }
 
@@ -935,7 +957,7 @@ function DashboardView() {
     <main className="dashboard-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark" />TTLI</div>
-        <div className={`topbar-status ${paused ? "is-paused" : ""}`}><span className="status-dot" /> {paused ? t("dashboard.trackingPaused") : t("dashboard.trackingOn")}</div>
+        <div className={`topbar-status ${paused ? "is-paused" : ""}`}><span className="status-dot" /> {paused ? t("dashboard.trackingStopped") : t("dashboard.trackingOn")}</div>
         <div className="topbar-spacer" />
         <span className="date-label">
           {new Intl.DateTimeFormat(localeForLang(lang), {
@@ -944,32 +966,31 @@ function DashboardView() {
             month: "long",
           }).format(now)}
         </span>
-        <button className="pause-button" onClick={() => void toggleTracking()}>{paused ? t("dashboard.continue") : t("dashboard.pause")}</button>
-        <button className="mini-open-button" onClick={() => void invoke("show_mini")}>{t("dashboard.mini")}</button>
-        <button className="manager-open-button" onClick={() => void openCategoryManager()} aria-label={t("dashboard.openManager")}>
-          <span aria-hidden="true">🗂</span><span className="manager-open-label">{t("dashboard.categories")}</span>
+        <button
+          type="button"
+          className="pause-button"
+          title={t("dashboard.trackingStoppedHint")}
+          onClick={() => void toggleTracking()}
+        >
+          {paused ? (
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.75v10.5L13 8 4 2.75Z" /></svg>
+          ) : (
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg>
+          )}
+          <span>{paused ? t("dashboard.continue") : t("dashboard.pause")}</span>
         </button>
+        <button className="mini-open-button" onClick={() => void invoke("show_mini")}>{t("dashboard.mini")}</button>
         <button className="icon-button" onClick={() => void openSettings()} aria-label={t("dashboard.openSettings")}>
           ⚙
         </button>
-        <div className="segmented-control language-control" role="group" aria-label={t("language.control")}>
-          {(["ru", "ua", "en"] as const).map((option) => (
-            <button type="button" key={option} aria-pressed={lang === option} onClick={() => void changeLanguage(option)}>
-              {t(`language.${option}`)}
-            </button>
-          ))}
-        </div>
-        <button className="icon-button" onClick={() => void setTheme(!dark)} aria-label={t("dashboard.toggleTheme")}>
-          {dark ? "☀" : "☾"}
-        </button>
       </header>
 
-      <section className={`live-panel ${live ? "is-live" : ""}`}>
+      <section className={`live-panel ${live ? "is-live" : ""} ${paused ? "is-paused" : ""}`}>
         <div className="live-pulse" />
-        <div className="live-copy">
+        <div className={`live-copy ${live ? "is-live" : "is-empty"}`}>
           <span className="eyebrow">{t("dashboard.current")}</span>
-          <strong>{live ? cleanAppName(live.app) : t("dashboard.waitingWindow")}</strong>
-          <span>{live ? live.domain || live.window_title || t("common.noTitle") : t("dashboard.nextTick")}</span>
+          <strong title={live ? cleanAppName(live.app) : undefined}>{paused ? t("dashboard.trackingStopped") : live ? cleanAppName(live.app) : t("dashboard.waitingWindow")}</strong>
+          {!paused && <span title={live ? live.domain || live.window_title || t("common.noTitle") : undefined}>{live ? live.domain || live.window_title || t("common.noTitle") : t("dashboard.nextTick")}</span>}
         </div>
         {live && (
           <>
@@ -1041,7 +1062,7 @@ function DashboardView() {
           <div className="card-heading">
             <div><span className="eyebrow">{t("dashboard.timelineEyebrow")}</span><h1>{t("dashboard.timelineTitle")}</h1></div>
             <span className={`mono-meta ${selectedApp ? "is-selection" : ""}`}>
-              {selectedApp ? t("dashboard.focus", { app: cleanAppName(selectedApp) }) : t("dashboard.appSegmentCount", { apps: appTimeline.length, segments: segments.length })}
+              {selectedApp ? t("dashboard.focus", { app: cleanAppName(selectedApp) }) : t("dashboard.appSessionCount", { apps: appTimeline.length, sessions: displaySessions.length })}
             </span>
           </div>
 
@@ -1079,7 +1100,6 @@ function DashboardView() {
               <div className="app-day-list">
                 {appTimeline.map((app) => {
                   const isExpanded = expandedApps.has(app.app);
-                  const groups = groupSegments(app.segments, live?.id, now);
                   const appCategory = categoryById.get(app.lastSegment.category_id);
                   return (
                     <div className={`app-day-item ${app.isLive ? "is-current" : ""} ${selectedApp && app.app !== selectedApp ? "is-dimmed" : ""} ${selectedApp === app.app ? "is-highlighted" : ""}`} key={app.app}>
@@ -1093,7 +1113,7 @@ function DashboardView() {
                           <span className="app-chevron" aria-hidden="true">›</span>
                           <span className="app-day-name">
                             <strong>{cleanAppName(app.app)}</strong>
-                            <small>{app.isLive ? <span className="now-marker">{t("common.now")}</span> : t("dashboard.segmentCount", { count: app.segments.length })}</small>
+                            <small>{app.isLive ? <span className="now-marker">{t("common.now")}</span> : t("dashboard.sessionCount", { count: app.sessions.length })}</small>
                           </span>
                           <span className="app-day-bar"><i style={{ width: `${(app.duration_ms / maxTimelineAppDuration) * 100}%`, backgroundColor: appCategory?.effective_color ?? "var(--cat-muted)" }} /></span>
                         </button>
@@ -1102,35 +1122,38 @@ function DashboardView() {
                       </div>
                       {isExpanded && (
                         <div className="app-segment-list">
-                          {groups.map((group) => {
-                            const isMicroGroup = group.isMicro && group.segments.length > 1;
-                            const isMicroExpanded = expandedMicroGroups.has(group.id);
-                            const groupDuration = group.segments.reduce(
+                          {app.sessions.map((session) => {
+                            const isGroupedSession = session.segmentIds.length > 1;
+                            const isSessionExpanded = expandedSessions.has(session.id);
+                            const groupDuration = session.segments.reduce(
                               (total, segment) => total + segmentDuration(segment, live?.id, now),
                               0,
                             );
-                            if (isMicroGroup) {
+                            if (isGroupedSession) {
+                              const firstSegment = session.segments[0];
+                              const lastSegment = session.segments[session.segments.length - 1];
+                              const sessionEnd = lastSegment.id === live?.id ? now : lastSegment.ts_end;
                               return (
-                                <div className="micro-group" key={group.id}>
+                                <div className="micro-group" key={session.id}>
                                   <button
                                     type="button"
                                     className="micro-group-main"
-                                    aria-expanded={isMicroExpanded}
-                                    onClick={() => setExpandedMicroGroups((current) => {
+                                    aria-expanded={isSessionExpanded}
+                                    onClick={() => setExpandedSessions((current) => {
                                       const next = new Set(current);
-                                      if (next.has(group.id)) next.delete(group.id);
-                                      else next.add(group.id);
+                                      if (next.has(session.id)) next.delete(session.id);
+                                      else next.add(session.id);
                                       return next;
                                     })}
                                   >
-                                    <span className="segment-time">{t("dashboard.forDay")}</span>
-                                    <span className="segment-app"><strong>{t("dashboard.microTitle", { count: group.segments.length })}</strong><small>{t("dashboard.microHint")}</small></span>
+                                    <span className="segment-time">{formatTime(firstSegment.ts_start, lang)}–{formatTime(sessionEnd, lang)}</span>
+                                    <span className="segment-app"><strong>{firstSegment.domain || firstSegment.window_title || t("common.noTitle")}</strong><small>{isSessionExpanded ? t("dashboard.sessionDetails", { count: session.segmentIds.length }) : t("dashboard.sessionExpandHint")}</small></span>
                                     <span className="micro-cluster-mark" aria-label={t("dashboard.grouped")}>···</span>
                                     <span className="segment-duration">{formatDuration(groupDuration)}</span>
                                   </button>
-                                  {isMicroExpanded && (
+                                  {isSessionExpanded && (
                                     <div className="micro-segment-list">
-                                      {group.segments.map((segment) => (
+                                      {session.segments.map((segment) => (
                                         <div className="app-segment-row is-micro" key={segment.id}>
                                           <span className="segment-time">{formatTime(segment.ts_start, lang)}–{formatTime(segment.ts_end, lang)}</span>
                                           <span className="segment-app"><small>{segment.domain || segment.window_title || t("common.noTitle")}</small></span>
@@ -1143,10 +1166,10 @@ function DashboardView() {
                                 </div>
                               );
                             }
-                            const segment = group.segments[0];
+                            const segment = session.segments[0];
                             const segmentEnd = segment.id === live?.id ? now : segment.ts_end;
                             return (
-                              <div className="app-segment-row" key={group.id}>
+                              <div className="app-segment-row" key={session.id}>
                                 <span className="segment-time">{formatTime(segment.ts_start, lang)}–{formatTime(segmentEnd, lang)}</span>
                                 <span className="segment-app"><small>{segment.domain || segment.window_title || t("common.noTitle")}</small></span>
                                 {renderCategoryControl(segment, `segment-${segment.id}`)}
@@ -1272,16 +1295,6 @@ function DashboardView() {
         </section>
       )}
 
-      <CategoryManager
-        open={categoryManagerOpen}
-        categories={categories}
-        kindLabels={kindLabels}
-        formatDuration={formatDuration}
-        onCategoriesChange={setCategories}
-        onClose={() => setCategoryManagerOpen(false)}
-        onDashboardRefresh={loadDashboard}
-      />
-
       {settingsOpen && (
         <div className="settings-overlay">
           <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -1289,8 +1302,60 @@ function DashboardView() {
               <span className="eyebrow">{t("settings.eyebrow")}</span>
               <h2 id="settings-title">{t("settings.title")}</h2>
             </div>
-            <div className="settings-scroll">
-              <section className="settings-section" aria-labelledby="goal-settings-title">
+            <div className="settings-layout">
+              <nav className="settings-nav" aria-label={t("settings.sections")}>
+                <a href="#appearance-settings">{t("settings.appearance")}</a>
+                <a href="#classification-settings">{t("settings.categoriesRules")}</a>
+                <a href="#goal-settings">{t("settings.dayScore")}</a>
+                <a href="#mini-settings">{t("settings.miniWindow")}</a>
+                <a href="#browser-settings">{t("settings.browserExtension")}</a>
+                <a href="#challenge-settings">{t("settings.challenge")}</a>
+                <a href="#labels-settings">{t("settings.kindLabels")}</a>
+                <a href="#startup-settings">{t("settings.startup")}</a>
+                <a href="#updates-settings">{t("updates.title")}</a>
+              </nav>
+              <div className="settings-scroll">
+              <section id="appearance-settings" className="settings-section" aria-labelledby="appearance-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="appearance-settings-title">{t("settings.appearance")}</h3>
+                  <span>{t("settings.appearanceHint")}</span>
+                </div>
+                <div className="appearance-settings-grid">
+                  <label className="settings-field">
+                    <span>{t("settings.language")}</span>
+                    <select className="with-chevron" value={lang} onChange={(event) => void changeLanguage(event.target.value as Lang)}>
+                      {(["ru", "ua", "en"] as const).map((option) => <option key={option} value={option}>{langNames[option]}</option>)}
+                    </select>
+                  </label>
+                  <label className="settings-field">
+                    <span>{t("settings.theme")}</span>
+                    <select className="with-chevron" value={dark ? "dark" : "dawn"} onChange={(event) => void setTheme(event.target.value === "dark")}>
+                      <option value="dawn">{t("settings.themeLight")}</option>
+                      <option value="dark">{t("settings.themeDark")}</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              <section id="classification-settings" className="settings-section settings-classification-section" aria-labelledby="classification-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="classification-settings-title">{t("settings.categoriesRules")}</h3>
+                  <span>{t("settings.categoriesRulesHint")}</span>
+                </div>
+                <CategoryManager
+                  open={settingsOpen}
+                  categories={categories}
+                  kindLabels={kindLabels}
+                  formatDuration={formatDuration}
+                  observedMs={stats.observed_ms}
+                  appCount={apps.length}
+                  uncategorizedMs={segments.filter((segment) => segment.category_id === 0).reduce((total, segment) => total + Math.max(0, segment.ts_end - segment.ts_start), 0)}
+                  onCategoriesChange={setCategories}
+                  onDashboardRefresh={loadDashboard}
+                />
+              </section>
+
+              <section id="goal-settings" className="settings-section" aria-labelledby="goal-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="goal-settings-title">{t("settings.dayScore")}</h3>
                   <span>{t("settings.effectiveToday")}</span>
@@ -1314,29 +1379,15 @@ function DashboardView() {
                 </div>
               </section>
 
-              <section className="settings-section" aria-labelledby="appearance-settings-title">
+              <section id="mini-settings" className="settings-section" aria-labelledby="mini-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="appearance-settings-title">{t("settings.language")}</h3>
-                  <span>{t("settings.languageHint")}</span>
+                  <h3 id="mini-settings-title">{t("settings.miniWindow")}</h3>
+                  <span>{t("settings.miniWindowHint")}</span>
                 </div>
-                <div className="money-settings-grid">
-                  <label className="settings-field">
-                    <span>{t("settings.language")}</span>
-                    <select className="with-chevron" value={lang} onChange={(event) => void changeLanguage(event.target.value as Lang)}>
-                      {(["ru", "ua", "en"] as const).map((option) => <option key={option} value={option}>{langNames[option]}</option>)}
-                    </select>
-                  </label>
-                  <label className="settings-field">
-                    <span>{t("settings.theme")}</span>
-                    <select className="with-chevron" value={dark ? "dark" : "dawn"} onChange={(event) => void setTheme(event.target.value === "dark")}>
-                      <option value="dawn">{t("settings.themeLight")}</option>
-                      <option value="dark">{t("settings.themeDark")}</option>
-                    </select>
-                  </label>
-                </div>
+                <p className="settings-hint">{t("settings.miniHelp")}</p>
               </section>
 
-              <section className="settings-section" aria-labelledby="challenge-settings-title">
+              <section id="challenge-settings" className="settings-section" aria-labelledby="challenge-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="challenge-settings-title">{t("settings.challenge")}</h3>
                   <span>{t("settings.challengeEffect")}</span>
@@ -1364,7 +1415,7 @@ function DashboardView() {
                 {challengeImported && <p className="challenge-imported" role="status">{t("settings.challengeAccepted")}</p>}
               </section>
 
-              <section className="settings-section" aria-labelledby="kind-labels-title">
+              <section id="labels-settings" className="settings-section" aria-labelledby="kind-labels-title">
                 <div className="settings-section-heading">
                   <h3 id="kind-labels-title">{t("settings.kindLabels")}</h3>
                   <span>{t("settings.kindLabelsHint")}</span>
@@ -1389,7 +1440,7 @@ function DashboardView() {
                 </div>
               </section>
 
-              <section className="settings-section" aria-labelledby="browser-settings-title">
+              <section id="browser-settings" className="settings-section" aria-labelledby="browser-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="browser-settings-title">{t("settings.browser")}</h3>
                   <span>{t("settings.browserHint")}</span>
@@ -1419,23 +1470,45 @@ function DashboardView() {
                 <p className="settings-hint" id="settings-hint">
                   {t("settings.browserHelp")}
                 </p>
-                <p className="settings-hint">{t("settings.miniHelp")}</p>
-                <div className="settings-token">
-                  <span>{t("settings.extensionToken")}</span>
-                  <div>
-                    <code>{settings.extension_token || "—"}</code>
-                    <button
-                      disabled={!settings.extension_token}
-                      onClick={() => void copyExtensionToken()}
-                    >
-                      {tokenCopied ? t("common.copied") : t("common.copy")}
-                    </button>
+                <details
+                  className="settings-token"
+                  onToggle={(event) => {
+                    if (!event.currentTarget.open) setTokenRevealed(false);
+                  }}
+                >
+                  <summary>{t("settings.advanced")}</summary>
+                  <div className="settings-token-content">
+                    <span>{t("settings.extensionToken")}</span>
+                    <div className="settings-token-row">
+                      <code>
+                        {settings.extension_token
+                          ? tokenRevealed
+                            ? settings.extension_token
+                            : `••••••••${settings.extension_token.slice(-4)}`
+                          : "—"}
+                      </code>
+                      <button
+                        type="button"
+                        disabled={!settings.extension_token}
+                        onClick={() => setTokenRevealed((current) => !current)}
+                        onBlur={() => setTokenRevealed(false)}
+                      >
+                        {tokenRevealed ? t("settings.hideToken") : t("settings.revealToken")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!settings.extension_token}
+                        onClick={() => void copyExtensionToken()}
+                      >
+                        {tokenCopied ? t("common.copied") : t("settings.copyConnectionToken")}
+                      </button>
+                    </div>
+                    <p>{t("settings.tokenHelp")}</p>
                   </div>
-                  <p>{t("settings.tokenHelp")}</p>
-                </div>
+                </details>
               </section>
 
-              <section className="settings-section" aria-labelledby="startup-settings-title">
+              <section id="startup-settings" className="settings-section" aria-labelledby="startup-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="startup-settings-title">{t("settings.startup")}</h3>
                   <span>{t("settings.appliesNow")}</span>
@@ -1451,7 +1524,7 @@ function DashboardView() {
                 </label>
               </section>
 
-              <section className="settings-section" aria-labelledby="updates-settings-title">
+              <section id="updates-settings" className="settings-section" aria-labelledby="updates-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="updates-settings-title">{t("updates.title")}</h3>
                   <span>{t("updates.autoCheckNote")}</span>
@@ -1510,6 +1583,7 @@ function DashboardView() {
               <div className="database-size">
                 <span>{t("settings.databaseSize")}</span>
                 <strong>{dbSizeMb === null ? "…" : t("settings.megabytes", { size: dbSizeMb.toFixed(1) })}</strong>
+              </div>
               </div>
             </div>
             {settingsError && <p className="settings-error" id="settings-error">{settingsError}</p>}
