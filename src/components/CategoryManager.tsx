@@ -509,7 +509,7 @@ export function CategoryManager({
 
   return (
     <div className="category-manager">
-      <aside className="category-master">
+      <section className="category-overview">
         <div className="all-activity-row">
           <strong>{t("manager.allActivity")}</strong>
           <span>{t("manager.allActivityStats", { duration: formatDuration(observedMs), apps: appCount, percent: uncategorizedPercent })}</span>
@@ -520,6 +520,9 @@ export function CategoryManager({
           <button type="button" className="category-special-main" onClick={() => uncategorized && selectCategory(uncategorized)}><strong>{t("manager.needsSorting")}</strong><small>{t("common.uncategorized")}</small></button>
           <button type="button" className="category-special-cta" onClick={() => openRules(0)}>{t("manager.createRule")}</button>
         </div>
+      </section>
+
+      <section className="category-master">
         <div className="category-tree">
           {visibleCategories.map(({ category, depth }) => {
             const childCount = childrenByParent.get(category.id)?.length ?? 0;
@@ -543,7 +546,7 @@ export function CategoryManager({
           <button type="button" onClick={() => { setCreatingCategory(true); setEditing(null); setDetailMode("category"); }}>{t("manager.addCategory")}</button>
           <button type="button" className={detailMode === "all" ? "is-selected" : ""} onClick={() => { setDetailMode("all"); setCreatingCategory(false); setEditing(null); setCreatingRule(false); }}>{t("manager.allRules")}</button>
         </div>
-      </aside>
+      </section>
 
       <div className="category-detail">
         {detailMode === "all" ? (
