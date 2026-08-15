@@ -46,7 +46,7 @@ struct TrayLabels {
     loading: &'static str,
 }
 
-pub fn enforce_mini_topmost(mini: &WebviewWindow) -> Result<(), String> {
+pub fn enforce_mini_topmost(mini: &tauri::Window) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -258,7 +258,7 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
             mini.show().map_err(|error| error.to_string())?;
         }
         apply_mini_opacity(&mini, opacity)?;
-        enforce_mini_topmost(&mini)?;
+        enforce_mini_topmost(&mini.as_ref().window())?;
     }
     if onboarding_done {
         if let Some(main) = app.get_webview_window("main") {
@@ -303,7 +303,7 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
     let connection = db::open()?;
     let opacity = saved_mini_opacity(&connection)?;
     apply_mini_opacity(&mini, opacity)?;
-    enforce_mini_topmost(&mini)?;
+    enforce_mini_topmost(&mini.as_ref().window())?;
     db::set_setting(&connection, "mini_visible", "1")
 }
 
