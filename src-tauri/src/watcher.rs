@@ -106,6 +106,23 @@ fn activity_status(forced_away: bool, idle: bool, media_playing: bool) -> &'stat
     }
 }
 
+fn is_fresh_browser_event(event: &BrowserEvent, now: i64) -> bool {
+    let age = now.saturating_sub(event.ts);
+    (0..=BROWSER_EVENT_MAX_AGE_MS).contains(&age)
+}
+
+fn resolve_chromium_media_playing(
+    browser_event: Option<&BrowserEvent>,
+    window_title: &str,
+    now: i64,
+) -> bool {
+    browser_event
+        .filter(|event| is_fresh_browser_event(event, now))
+        .map(|event| event.media_playing || has_media_marker(&event.title))
+        .unwrap_or(false)
+        || has_media_marker(window_title)
+}
+
 pub fn spawn(
     receiver: Receiver<BrowserEvent>,
     stop: Arc<AtomicBool>,
@@ -308,8 +325,8 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
 #[cfg(windows)]
 mod platform {
     use super::{
-        activity_status, has_media_marker, is_chromium_browser, normalize_title, ActivityState,
-        BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
+        activity_status, has_media_marker, is_chromium_browser, is_fresh_browser_event,
+        normalize_title, resolve_chromium_media_playing, ActivityState, BrowserEvent,
     };
     use crate::db;
     use rusqlite::Connection;
@@ -357,18 +374,21 @@ mod platform {
 
         let (domain, fused_title, media_playing) = if is_chromium_browser(&app_lower) {
             browser_event
-                .filter(|event| {
-                    let age = now.saturating_sub(event.ts);
-                    (0..=BROWSER_EVENT_MAX_AGE_MS).contains(&age)
-                })
+                .filter(|event| is_fresh_browser_event(event, now))
                 .map(|event| {
                     (
                         event.domain.clone(),
                         normalize_title(&event.title),
-                        event.media_playing,
+                        resolve_chromium_media_playing(Some(event), &title, now),
                     )
                 })
-                .unwrap_or_else(|| (String::new(), title.clone(), false))
+                .unwrap_or_else(|| {
+                    (
+                        String::new(),
+                        title.clone(),
+                        resolve_chromium_media_playing(None, &title, now),
+                    )
+                })
         } else {
             (String::new(), title.clone(), has_media_marker(&title))
         };
@@ -456,8 +476,71 @@ mod platform {
 mod tests {
     use super::{
         activity_status, has_media_marker, is_chromium_browser, is_task_switcher, normalize_title,
-        ActivityState,
+        resolve_chromium_media_playing, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
     };
+
+    fn browser_event(ts: i64, title: &str, media_playing: bool) -> BrowserEvent {
+        BrowserEvent {
+            ts,
+            domain: "youtube.com".to_string(),
+            title: title.to_string(),
+            media_playing,
+        }
+    }
+
+    #[test]
+    fn fresh_browser_event_uses_media_marker_from_tab_title() {
+        let event = browser_event(1_000, "▶ Video", false);
+
+        let media_playing =
+            resolve_chromium_media_playing(Some(&event), "Video - Google Chrome", 1_001);
+
+        assert_eq!(activity_status(false, true, media_playing), "active");
+    }
+
+    #[test]
+    fn fresh_browser_event_uses_media_marker_from_window_title() {
+        let event = browser_event(1_000, "Video", false);
+
+        let media_playing =
+            resolve_chromium_media_playing(Some(&event), "▶ Video - Google Chrome", 1_001);
+
+        assert_eq!(activity_status(false, true, media_playing), "active");
+    }
+
+    #[test]
+    fn stale_or_missing_browser_event_uses_window_title_marker() {
+        let stale_event = browser_event(1_000, "Video", false);
+        let now = 1_000 + BROWSER_EVENT_MAX_AGE_MS + 1;
+
+        let stale_media_playing = resolve_chromium_media_playing(
+            Some(&stale_event),
+            "Video (playing) - Google Chrome",
+            now,
+        );
+        let missing_media_playing =
+            resolve_chromium_media_playing(None, "▶ Video - Google Chrome", now);
+
+        assert_eq!(activity_status(false, true, stale_media_playing), "active");
+        assert_eq!(
+            activity_status(false, true, missing_media_playing),
+            "active"
+        );
+    }
+
+    #[test]
+    fn idle_chromium_without_event_or_marker_is_away() {
+        let media_playing = resolve_chromium_media_playing(None, "Video - Google Chrome", 1_000);
+
+        assert_eq!(activity_status(false, true, media_playing), "away");
+    }
+
+    #[test]
+    fn forced_away_overrides_chromium_media_marker() {
+        let media_playing = resolve_chromium_media_playing(None, "▶ Video", 1_000);
+
+        assert_eq!(activity_status(true, true, media_playing), "away");
+    }
 
     #[test]
     fn recognizes_supported_chromium_browsers() {

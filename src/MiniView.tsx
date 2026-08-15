@@ -2,10 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { TodayScoring } from "./components/ScorePanel";
+import { localizedDuration } from "./duration";
 import type { ProgressOverview } from "./progress";
-import { localeForLang, type Translate } from "./i18n";
+import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
-import { formatCompactMinutes, formatObservedClock, getMiniVerdict } from "./miniVerdict";
+import { parseMiniSettings, type MiniMode, type MiniTextSize } from "./miniSettings";
+import { formatCompactMinutes } from "./miniVerdict";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
@@ -22,9 +24,6 @@ interface LiveSegment {
   is_uncategorized: boolean;
 }
 
-type ContextIdentity = Pick<LiveSegment, "app" | "window_title" | "domain">;
-type MiniMode = "auto" | "compact" | "detailed";
-type MiniTextSize = "normal" | "large";
 type MiniCorner = "tl" | "tr" | "bl" | "br";
 
 interface MiniState {
@@ -45,24 +44,9 @@ function cleanAppName(app: string): string {
   return app.replace(/\.exe$/i, "");
 }
 
-function sameContext(previous: ContextIdentity, next: ContextIdentity): boolean {
-  return previous.app === next.app
-    && previous.window_title === next.window_title
-    && previous.domain === next.domain;
-}
-
 function formatScore(value: number): string {
   const formatted = value.toFixed(1);
   return value > 0 ? `+${formatted}` : formatted;
-}
-
-function localizedDuration(milliseconds: number, t: Translate): string {
-  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
-  if (milliseconds > 0 && totalMinutes === 0) return t("duration.lessMinute");
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return t("duration.minutes", { minutes });
-  return minutes === 0 ? t("duration.hours", { hours }) : t("duration.hoursMinutes", { hours, minutes });
 }
 
 function EllipsizedText({ className, text }: { className?: string; text: string }) {
@@ -82,12 +66,18 @@ function EllipsizedText({ className, text }: { className?: string; text: string 
   return <span ref={ref} className={className} aria-label={text} title={truncated ? text : undefined}>{text}</span>;
 }
 
-function MiniIcon({ name }: { name: "corner" | "pin" | "settings" }) {
+function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "minimize" | "hide" }) {
   if (name === "corner") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 8.3 9.7 3.8a2.1 2.1 0 0 1 3 3l-5.9 5.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4" /></svg>;
   }
   if (name === "pin") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 2 6 6-2 .7-1.6 2.5-.7 2.3-1.2-1.2 1.1-3L3 5.7 5 5zM3 13l3-3" /></svg>;
+  }
+  if (name === "minimize") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11.5h10" /></svg>;
+  }
+  if (name === "hide") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" /></svg>;
   }
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.9 2.2h2.2l.4 1.5 1.2.7 1.5-.5 1.1 1.9-1.1 1.1v1.4l1.1 1.1-1.1 1.9-1.5-.5-1.2.7-.4 1.5H6.9l-.4-1.5-1.2-.7-1.5.5-1.1-1.9 1.1-1.1V6.9L2.7 5.8l1.1-1.9 1.5.5 1.2-.7z" /><circle cx="8" cy="7.6" r="1.7" /></svg>;
 }
@@ -118,31 +108,35 @@ function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
   );
 }
 
-function MiniScorePanel({ scoring }: { scoring: TodayScoring | null }) {
+function MiniScoreHero({ scoring }: { scoring: TodayScoring | null }) {
   const { t } = useI18n();
   const tone = !scoring ? "" : scoring.total_score > 0 ? "is-positive" : scoring.total_score < 0 ? "is-negative" : "";
-  const categories = scoring?.top_categories.slice(0, 3) ?? [];
 
   return (
-    <section className="mini-score-panel" aria-label={t("mini.scorePanel")}>
-      <div className="mini-score-summary">
-        <span>{t("mini.totalScore")}</span>
-        <strong className={tone}>{scoring ? formatScore(scoring.total_score) : "—"}</strong>
+    <section className="mini-score-hero" aria-label={t("mini.scoreToday")}>
+      <span>{t("mini.scoreToday")}</span>
+      <div className="mini-score-values">
+        <strong className={tone}>{scoring ? formatScore(scoring.total_score) : "0.0"}</strong>
         <small>{t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })}</small>
       </div>
-      <div className="mini-score-categories">
-        <span className="mini-score-heading">{t("mini.topCategories")}</span>
-        {categories.length === 0 ? <span className="mini-score-empty">—</span> : categories.map((category) => (
-          <div className="mini-score-category" key={category.category_id}>
-            <span className="mini-score-dot" style={{ backgroundColor: category.effective_color }} />
-            <span aria-hidden="true">·</span>
-            <EllipsizedText text={category.full_path} />
-            <span aria-hidden="true">·</span>
-            <strong>{localizedDuration(category.duration_ms, t)}</strong>
-          </div>
-        ))}
-        <button type="button" onClick={() => void invoke("show_dashboard")}>{t("mini.more")}</button>
-      </div>
+    </section>
+  );
+}
+
+function MiniTopCategories({ scoring }: { scoring: TodayScoring | null }) {
+  const { t } = useI18n();
+  const categories = scoring?.top_categories.slice(0, 4) ?? [];
+
+  return (
+    <section className="mini-top-categories" aria-label={t("mini.topCategories")}>
+      <span className="mini-top-heading mini-top-heading-expanded">{t("mini.topFourCategories")}</span>
+      {categories.length === 0 ? <span className="mini-score-empty">{t("mini.noData")}</span> : categories.map((category) => (
+        <div className="mini-top-category" key={category.category_id} title={category.full_path}>
+          <span className="mini-score-dot" style={{ backgroundColor: category.effective_color }} />
+          <EllipsizedText text={category.full_path} />
+          <strong className={category.points > 0 ? "is-positive" : category.points < 0 ? "is-negative" : ""}>{formatScore(category.points)}</strong>
+        </div>
+      ))}
     </section>
   );
 }
@@ -169,18 +163,13 @@ export function MiniView() {
   const [textSize, setTextSize] = useState<MiniTextSize>("normal");
   const [privacyNow, setPrivacyNow] = useState(false);
   const [showMiniAtLaunch, setShowMiniAtLaunch] = useState(false);
+  const [opacity, setOpacity] = useState(100);
   const [corner, setCorner] = useState<MiniCorner | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cornerOpen, setCornerOpen] = useState(false);
   const [kindLabels, setKindLabels] = useState(defaultKindLabels);
   const [loaded, setLoaded] = useState(false);
-  const [showSwitchExplanation, setShowSwitchExplanation] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const previousContext = useRef<ContextIdentity | null>(null);
-  const explanationHandled = useRef(false);
-  const explanationNeedsPersistence = useRef(false);
-  const explanationSaveInFlight = useRef(false);
-  const explanationTimer = useRef<number | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsPopoverRef = useRef<HTMLElement | null>(null);
   const cornerButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -215,44 +204,17 @@ export function MiniView() {
       setLiveSegment(nextLiveSegment);
       setPaused(trackingPaused);
       applyMiniState(miniState);
-      setMode(settings.mini_mode === "compact" || settings.mini_mode === "detailed" ? settings.mini_mode : "auto");
-      setTextSize(settings.mini_text_size === "large" ? "large" : "normal");
-      setPrivacyNow(settings.mini_privacy_now === "1");
-      setShowMiniAtLaunch(settings.tray_only === "0");
+      const miniSettings = parseMiniSettings(settings);
+      setMode(miniSettings.mode);
+      setTextSize(miniSettings.textSize);
+      setPrivacyNow(miniSettings.privacyNow);
+      setShowMiniAtLaunch(miniSettings.showAtLaunch);
+      setOpacity(miniSettings.opacity);
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
         waste: settings.kind_label_waste ?? defaultKindLabels.waste,
       });
-      if (settings.mini_observed_explained_v1 === "1") {
-        explanationHandled.current = true;
-        explanationNeedsPersistence.current = false;
-      } else if (
-        !explanationHandled.current
-        && previousContext.current !== null
-        && nextLiveSegment !== null
-        && !sameContext(previousContext.current, nextLiveSegment)
-      ) {
-        explanationHandled.current = true;
-        explanationNeedsPersistence.current = true;
-        setShowSwitchExplanation(true);
-        if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
-        explanationTimer.current = window.setTimeout(() => setShowSwitchExplanation(false), 4_500);
-      }
-      if (nextLiveSegment !== null) previousContext.current = nextLiveSegment;
-      if (explanationNeedsPersistence.current && !explanationSaveInFlight.current) {
-        explanationSaveInFlight.current = true;
-        void invoke("set_setting", { key: "mini_observed_explained_v1", value: "1" })
-          .then(() => {
-            explanationNeedsPersistence.current = false;
-          })
-          .catch((reason: unknown) => {
-            setError(typeof reason === "string" ? reason : t("error.saveSettings"));
-          })
-          .finally(() => {
-            explanationSaveInFlight.current = false;
-          });
-      }
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
@@ -294,7 +256,6 @@ export function MiniView() {
       stopMoveListener?.();
       if (geometryTimer !== null) window.clearTimeout(geometryTimer);
       window.clearInterval(refresh);
-      if (explanationTimer.current !== null) window.clearTimeout(explanationTimer.current);
     };
   }, [loadMini]);
 
@@ -323,19 +284,6 @@ export function MiniView() {
       window.removeEventListener("keydown", closePopoversOnEscape);
     };
   }, [settingsOpen, cornerOpen]);
-
-  async function toggleTracking(event: React.MouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    const nextPaused = !paused;
-    setPaused(nextPaused);
-    try {
-      await invoke("set_tracking_paused", { paused: nextPaused });
-      await loadMini();
-    } catch (reason: unknown) {
-      setPaused(!nextPaused);
-      setError(typeof reason === "string" ? reason : t("error.changeTracking"));
-    }
-  }
 
   async function togglePin(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -411,6 +359,16 @@ export function MiniView() {
     }
   }
 
+  async function changeOpacity(nextOpacity: number) {
+    const previous = opacity;
+    setOpacity(nextOpacity);
+    try {
+      await saveSetting("mini_opacity", String(nextOpacity));
+    } catch {
+      setOpacity(previous);
+    }
+  }
+
   async function resetGeometry() {
     try {
       await invoke("reset_mini_geometry");
@@ -455,21 +413,8 @@ export function MiniView() {
   }
 
   const away = liveSegment?.status === "away";
-  const trackingTone = paused || (!liveSegment && loaded) ? "off" : away ? "away" : liveSegment ? "live" : "off";
+  const trackingTone = paused ? "off" : away ? "away" : "live";
   const trackingLabel = trackingTone === "live" ? t("mini.trackingLive") : trackingTone === "away" ? t("mini.trackingAway") : t("mini.trackingOff");
-  const verdict = progress ? getMiniVerdict({
-    usefulMs: progress.today.useful_ms,
-    wasteMs: progress.today.waste_ms,
-    observedMs: progress.today.observed_ms,
-    usefulGoalMin: progress.today.useful_goal_min,
-    wasteLimitMin: progress.today.waste_limit_min,
-    observedMin: progress.today.observed_min,
-    usefulLabel: kindLabels.useful,
-    wasteLabel: kindLabels.waste,
-  }) : null;
-  const verdictText = showSwitchExplanation
-    ? t("mini.switchExplanation")
-    : verdict ? t(verdict.key, verdict.vars) : t("mini.verdictInProgress");
   const actualCurrentApp = paused
     ? t("mini.trackingOff")
     : !loaded
@@ -484,11 +429,10 @@ export function MiniView() {
     : null;
   const currentTone = paused ? "muted" : away ? "warning" : !loaded || !liveSegment ? "muted" : liveSegment.is_uncategorized ? "muted" : liveSegment.category_kind;
   const currentApp = privacyNow && !paused && loaded && !away ? currentCategory ?? t("mini.hiddenApp") : actualCurrentApp;
-  const rankText = progress ? `${progress.current_rank} · ${progress.lifetime_xp.toLocaleString(localeForLang(lang))} XP` : "—";
-  const scoreText = scoring
-    ? t("mini.scoreCompact", { score: formatScore(scoring.total_score), percent: scoring.productive_percent.toFixed(1) })
-    : t("mini.scoreCompact", { score: "—", percent: "0.0" });
-  const scoreTone = !scoring ? "" : scoring.total_score > 0 ? "is-positive" : scoring.total_score < 0 ? "is-negative" : "";
+  const accountedText = t("mini.accountedToday", { duration: localizedDuration(progress?.today.observed_ms ?? 0, t) });
+  const rankText = progress
+    ? t("mini.rank", { rank: progress.current_rank, xp: progress.lifetime_xp.toLocaleString(localeForLang(lang)) })
+    : t("mini.rank", { rank: "—", xp: "0" });
 
   return (
     <main className={`mini-shell mini-mode-${mode}${textSize === "large" ? " mini-text-large" : ""}${corner ? " is-corner-pinned" : ""}`}>
@@ -500,7 +444,7 @@ export function MiniView() {
         }}
       >
         <div className="mini-header-status">
-          <span className={`mini-pulse is-${trackingTone}`} role="img" aria-label={trackingLabel} />
+          <span className={`mini-pulse is-${trackingTone}`} role="img" aria-label={trackingLabel} title={trackingLabel} />
           <span className="mini-brand">TTLI</span>
         </div>
         <div className="mini-header-controls">
@@ -510,6 +454,7 @@ export function MiniView() {
             className={`mini-icon-button${corner ? " is-active" : ""}`}
             aria-pressed={corner !== null}
             aria-label={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")}
+            title={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => void toggleCornerPopover(event)}
@@ -519,6 +464,7 @@ export function MiniView() {
             className={`mini-icon-button${pinned ? " is-active" : ""}`}
             aria-pressed={pinned}
             aria-label={pinned ? t("mini.unpin") : t("mini.pin")}
+            title={pinned ? t("mini.unpin") : t("mini.pin")}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => void togglePin(event)}
@@ -528,6 +474,7 @@ export function MiniView() {
             type="button"
             className="mini-icon-button"
             aria-label={t("mini.settings")}
+            title={t("mini.settings")}
             aria-expanded={settingsOpen}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
@@ -537,17 +484,36 @@ export function MiniView() {
               setSettingsOpen((open) => !open);
             }}
           ><MiniIcon name="settings" /></button>
+          <button
+            type="button"
+            className="mini-icon-button"
+            aria-label={t("mini.minimize")}
+            title={t("mini.minimize")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void invoke("minimize_mini");
+            }}
+          ><MiniIcon name="minimize" /></button>
+          <button
+            type="button"
+            className="mini-icon-button"
+            aria-label={t("mini.hideToTray")}
+            title={t("mini.hideToTray")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void invoke("hide_mini");
+            }}
+          ><MiniIcon name="hide" /></button>
         </div>
       </header>
 
       <section className="mini-body">
-        <div className="mini-summary">
-          <section className="mini-hero" aria-label={t("mini.observedToday")}>
-            <span>{t("mini.observedToday")}</span>
-            <strong>{formatObservedClock(progress?.today.observed_ms ?? 0)}</strong>
-          </section>
-          <p className={`mini-verdict${showSwitchExplanation ? " is-explanation" : ""}`}><EllipsizedText text={verdictText} /></p>
-        </div>
+        <MiniScoreHero scoring={scoring} />
+        <MiniTopCategories scoring={scoring} />
 
         {progress ? (
           <section className="mini-metrics" aria-label={t("mini.dayProgress")}>
@@ -563,26 +529,16 @@ export function MiniView() {
           {privacyNow && <span className="mini-privacy-badge">{t("mini.nowHiddenBadge")}</span>}
           {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
         </section>
-
-        <div className="mini-expanded"><MiniScorePanel scoring={scoring} /></div>
       </section>
 
       {error && <p className="mini-error">{error}</p>}
 
       <footer className="mini-actions">
         <div className="mini-footer-stats">
-          <EllipsizedText className={`mini-score-compact ${scoreTone}`} text={scoreText} />
+          <EllipsizedText className="mini-accounted" text={accountedText} />
           <EllipsizedText className="mini-rank" text={rankText} />
         </div>
         <div className="mini-footer-buttons">
-          <button type="button" onClick={(event) => void toggleTracking(event)}>
-            {paused ? (
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.75v10.5L13 8 4 2.75Z" /></svg>
-            ) : (
-              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg>
-            )}
-            <span>{paused ? t("mini.resume") : t("mini.stop")}</span>
-          </button>
           <button type="button" onClick={() => void invoke("show_dashboard")}>{t("mini.dashboard")}</button>
         </div>
       </footer>
@@ -601,7 +557,12 @@ export function MiniView() {
               <option value="large">{t("mini.settingsTextLargeGrows")}</option>
             </select></label>
             <label className="mini-settings-check"><input type="checkbox" checked={privacyNow} onChange={(event) => void changePrivacy(event.target.checked)} /><span>{t("mini.settingsPrivacy")}</span></label>
-            <label className="mini-settings-check"><input type="checkbox" checked={showMiniAtLaunch} onChange={(event) => void changeLaunchVisibility(event.target.checked)} /><span>{t("mini.settingsLaunch")}</span></label>
+            <label className="mini-settings-check"><input type="checkbox" checked={showMiniAtLaunch || corner !== null} disabled={corner !== null} onChange={(event) => void changeLaunchVisibility(event.target.checked)} /><span>{corner ? t("mini.settingsLaunchCorner") : t("mini.settingsLaunch")}</span></label>
+            <label className="mini-settings-opacity"><span>{t("mini.settingsOpacity")}</span><output>{opacity}%</output><input type="range" min="60" max="100" step="5" value={opacity} onChange={(event) => void changeOpacity(Number(event.target.value))} /></label>
+            <div className="mini-settings-window-actions">
+              <button type="button" onClick={() => void invoke("minimize_mini")}>{t("mini.minimize")}</button>
+              <button type="button" onClick={() => void invoke("hide_mini")}>{t("mini.hideToTray")}</button>
+            </div>
           </div>
           <button className="mini-settings-reset" type="button" onClick={() => void resetGeometry()}>{t("mini.settingsReset")}</button>
         </section>

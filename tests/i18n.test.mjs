@@ -34,6 +34,12 @@ test("all dictionaries expose the same message keys", () => {
   assert.deepEqual(Object.keys(messages.en).sort(), russianKeys);
 });
 
+test("all translated messages are populated", () => {
+  for (const dictionary of Object.values(messages)) {
+    assert.equal(Object.values(dictionary).every((message) => message.trim().length > 0), true);
+  }
+});
+
 test("maps application languages to Intl locales", () => {
   assert.equal(localeForLang("ru"), "ru-RU");
   assert.equal(localeForLang("ua"), "uk-UA");

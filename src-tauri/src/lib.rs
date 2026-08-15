@@ -999,6 +999,66 @@ fn get_rules() -> Result<Vec<Rule>, String> {
     Ok(rules)
 }
 
+fn rule_duplicate_error(connection: &rusqlite::Connection) -> String {
+    match db::setting(connection, "language")
+        .ok()
+        .flatten()
+        .as_deref()
+    {
+        Some("ua") => "Таке правило вже існує для цієї категорії".to_string(),
+        Some("en") => "This rule already exists for this category".to_string(),
+        _ => "Такое правило уже существует для этой категории".to_string(),
+    }
+}
+
+fn ensure_rule_unique(
+    connection: &rusqlite::Connection,
+    excluded_rule_id: Option<i64>,
+    category_id: i64,
+    match_type: &str,
+    match_mode: &str,
+    pattern: &str,
+    case_insensitive: bool,
+) -> Result<(), String> {
+    let duplicate_exists = connection
+        .query_row(
+            "SELECT 1 FROM rules
+             WHERE category_id = ?1
+               AND match_type = ?2
+               AND match_mode = ?3
+               AND pattern = ?4
+               AND case_insensitive = ?5
+               AND (?6 IS NULL OR id <> ?6)
+             LIMIT 1",
+            params![
+                category_id,
+                match_type,
+                match_mode,
+                pattern,
+                i64::from(case_insensitive),
+                excluded_rule_id,
+            ],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(false);
+    if duplicate_exists {
+        Err(rule_duplicate_error(connection))
+    } else {
+        Ok(())
+    }
+}
+
+fn rule_write_error(connection: &rusqlite::Connection, error: rusqlite::Error) -> String {
+    let message = error.to_string();
+    if message.contains("UNIQUE constraint failed: rules.category_id") {
+        rule_duplicate_error(connection)
+    } else {
+        message
+    }
+}
+
 #[tauri::command]
 fn create_rule(
     match_type: String,
@@ -1038,6 +1098,15 @@ fn create_rule(
     if !category_exists {
         return Err("category does not exist".to_string());
     }
+    ensure_rule_unique(
+        &connection,
+        None,
+        category_id,
+        &match_type,
+        &match_mode,
+        &normalized,
+        case_insensitive,
+    )?;
 
     connection
         .execute(
@@ -1054,7 +1123,7 @@ fn create_rule(
                 i64::from(case_insensitive),
             ],
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| rule_write_error(&connection, error))?;
     let id = connection.last_insert_rowid();
     db::bump_rules_revision(&connection)?;
     Ok(Rule {
@@ -1096,6 +1165,15 @@ fn update_rule(
         case_insensitive,
     }])?;
     let connection = db::open()?;
+    ensure_rule_unique(
+        &connection,
+        Some(id),
+        category_id,
+        &match_type,
+        &match_mode,
+        &normalized,
+        case_insensitive,
+    )?;
     let updated = connection
         .execute(
             "UPDATE rules SET match_type = ?1, pattern = ?2, category_id = ?3,
@@ -1111,7 +1189,7 @@ fn update_rule(
                 id,
             ],
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| rule_write_error(&connection, error))?;
     if updated == 0 {
         return Err("rule does not exist".to_string());
     }
@@ -1203,7 +1281,7 @@ fn get_settings() -> Result<HashMap<String, String>, String> {
 }
 
 #[tauri::command]
-fn set_setting(key: String, value: String) -> Result<(), String> {
+fn set_setting(key: String, value: String, app: tauri::AppHandle) -> Result<(), String> {
     let valid = match key.as_str() {
         "useful_goal_min" | "waste_limit_min" | "observed_min" | "idle_timeout_min" => {
             value.parse::<u32>().is_ok_and(|number| number <= 1440)
@@ -1217,6 +1295,9 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
         }
         "mini_mode" => matches!(value.as_str(), "auto" | "compact" | "detailed"),
         "mini_text_size" => matches!(value.as_str(), "normal" | "large"),
+        "mini_opacity" => value
+            .parse::<u8>()
+            .is_ok_and(|opacity| (60..=100).contains(&opacity)),
         "last_day_print_seen" => local_date_format_is_valid(&value),
         "kind_label_useful" | "kind_label_neutral" | "kind_label_waste" | "kind_label_observed" => {
             !value.trim().is_empty() && value.chars().count() <= 80
@@ -1232,6 +1313,24 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
     };
     if !valid {
         return Err("invalid setting or value".to_string());
+    }
+
+    if key == "mini_opacity" {
+        let opacity = value.parse::<u8>().map_err(|error| error.to_string())?;
+        let mini = app
+            .get_webview_window("mini")
+            .ok_or_else(|| "mini-window is unavailable".to_string())?;
+        let connection = db::open()?;
+        let previous_opacity = db::setting(&connection, "mini_opacity")?
+            .and_then(|saved| saved.parse::<u8>().ok())
+            .filter(|saved| (60..=100).contains(saved))
+            .unwrap_or(100);
+        tray::apply_mini_opacity(&mini, opacity)?;
+        if let Err(error) = db::set_setting(&connection, &key, &value) {
+            let _ = tray::apply_mini_opacity(&mini, previous_opacity);
+            return Err(error);
+        }
+        return Ok(());
     }
 
     let connection = db::open()?;
@@ -1305,6 +1404,16 @@ fn reclassify_history(
         manual_match_type.as_deref(),
         manual_pattern.as_deref(),
     )?;
+    Ok(ReclassificationSummary {
+        changed_segments: summary.changed_segments,
+        changed_duration_ms: summary.changed_duration_ms,
+    })
+}
+
+#[tauri::command]
+fn preview_reclassify_history(overwrite_manual: bool) -> Result<ReclassificationSummary, String> {
+    let mut connection = db::open()?;
+    let summary = db::preview_reclassify_history(&mut connection, overwrite_manual)?;
     Ok(ReclassificationSummary {
         changed_segments: summary.changed_segments,
         changed_duration_ms: summary.changed_duration_ms,
@@ -1428,6 +1537,16 @@ fn show_dashboard(app: tauri::AppHandle) {
 #[tauri::command]
 fn show_mini(app: tauri::AppHandle) -> Result<(), String> {
     tray::show_mini(&app)
+}
+
+#[tauri::command]
+fn minimize_mini(app: tauri::AppHandle) -> Result<(), String> {
+    tray::minimize_mini(&app)
+}
+
+#[tauri::command]
+fn hide_mini(app: tauri::AppHandle) -> Result<(), String> {
+    tray::hide_mini(&app)
 }
 
 #[tauri::command]
@@ -1586,7 +1705,10 @@ pub fn run() {
                 let _ = window.hide();
             }
             tauri::WindowEvent::Focused(false) if window.label() == "mini" => {
-                let _ = tray::save_mini_geometry(window.app_handle());
+                if !window.is_minimized().unwrap_or(false) {
+                    let _ = tray::save_mini_geometry(window.app_handle());
+                    let _ = tray::enforce_mini_topmost(window);
+                }
             }
             _ => {}
         })
@@ -1636,6 +1758,7 @@ pub fn run() {
             set_setting,
             set_segment_category,
             reclassify_history,
+            preview_reclassify_history,
             get_classification_match_stats,
             get_db_size_mb,
             get_apps_today,
@@ -1644,6 +1767,8 @@ pub fn run() {
             get_live_segment,
             show_dashboard,
             show_mini,
+            minimize_mini,
+            hide_mini,
             set_mini_pinned,
             get_mini_state,
             save_mini_geometry,

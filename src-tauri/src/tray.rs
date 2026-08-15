@@ -46,26 +46,127 @@ struct TrayLabels {
     loading: &'static str,
 }
 
+pub fn enforce_mini_topmost(mini: &WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+
+        let connection = db::open()?;
+        let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
+        drop(connection);
+        if !pinned {
+            return Ok(());
+        }
+
+        let raw_handle = mini.window_handle().map_err(|error| error.to_string())?;
+        let RawWindowHandle::Win32(win32_handle) = raw_handle.as_raw() else {
+            return Err("mini-window does not expose a Win32 handle".to_string());
+        };
+        let hwnd = HWND(win32_handle.hwnd.get() as *mut std::ffi::c_void);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = mini;
+
+    Ok(())
+}
+
+pub fn apply_mini_opacity(mini: &WebviewWindow, opacity: u8) -> Result<(), String> {
+    if !(60..=100).contains(&opacity) {
+        return Err("invalid mini-window opacity".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows::Win32::Foundation::{COLORREF, HWND};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE,
+            LWA_ALPHA, WS_EX_LAYERED,
+        };
+
+        let raw_handle = mini.window_handle().map_err(|error| error.to_string())?;
+        let RawWindowHandle::Win32(win32_handle) = raw_handle.as_raw() else {
+            return Err("mini-window does not expose a Win32 handle".to_string());
+        };
+        let hwnd = HWND(win32_handle.hwnd.get() as *mut std::ffi::c_void);
+        let alpha = ((u16::from(opacity) * 255) / 100) as u8;
+        unsafe {
+            let extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, extended_style | WS_EX_LAYERED.0 as isize);
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
+        }
+        .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = mini;
+
+    Ok(())
+}
+
+fn saved_mini_opacity(connection: &rusqlite::Connection) -> Result<u8, String> {
+    Ok(parse_mini_opacity(
+        db::setting(connection, "mini_opacity")?.as_deref(),
+    ))
+}
+
+fn parse_mini_opacity(value: Option<&str>) -> u8 {
+    value
+        .and_then(|opacity| opacity.parse::<u8>().ok())
+        .filter(|opacity| (60..=100).contains(opacity))
+        .unwrap_or(100)
+}
+
+fn valid_mini_corner(corner: &str) -> bool {
+    matches!(corner, "tl" | "tr" | "bl" | "br")
+}
+
+fn should_restore_mini(
+    visible: bool,
+    onboarding_done: bool,
+    tray_only: bool,
+    corner_pinned: bool,
+) -> bool {
+    visible || (onboarding_done && (!tray_only || corner_pinned))
+}
+
 fn tray_labels(language: &str) -> TrayLabels {
     match language {
         "ua" => TrayLabels {
             open: "Відкрити дашборд",
-            pause: "Пауза",
-            resume: "Продовжити",
+            pause: "Зупинити відстеження",
+            resume: "Відновити відстеження",
             exit: "Вихід",
             loading: "TTLI — статистика завантажується",
         },
         "en" => TrayLabels {
             open: "Open dashboard",
-            pause: "Pause",
-            resume: "Resume",
+            pause: "Stop tracking",
+            resume: "Resume tracking",
             exit: "Exit",
             loading: "TTLI — loading statistics",
         },
         _ => TrayLabels {
             open: "Открыть дашборд",
-            pause: "Пауза",
-            resume: "Продолжить",
+            pause: "Остановить отслеживание",
+            resume: "Возобновить отслеживание",
             exit: "Выход",
             loading: "TTLI — статистика загружается",
         },
@@ -137,20 +238,27 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
     let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
     let visible = db::setting(&connection, "mini_visible")?.as_deref() == Some("1");
     let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let opacity = saved_mini_opacity(&connection)?;
     drop(connection);
 
     if let Some(mini) = app.get_webview_window("mini") {
-        mini.set_always_on_top(pinned)
-            .map_err(|error| error.to_string())?;
+        if !pinned {
+            mini.set_always_on_top(false)
+                .map_err(|error| error.to_string())?;
+        }
         clamp_mini_window(&mini)?;
-        if !corner.is_empty() {
+        let corner_pinned = valid_mini_corner(&corner);
+        if corner_pinned {
             move_mini_to_corner(&mini, &corner)?;
             mini.set_resizable(false)
                 .map_err(|error| error.to_string())?;
         }
-        if visible || (onboarding_done && !tray_only) {
+        if should_restore_mini(visible, onboarding_done, tray_only, corner_pinned) {
+            mini.unminimize().map_err(|error| error.to_string())?;
             mini.show().map_err(|error| error.to_string())?;
         }
+        apply_mini_opacity(&mini, opacity)?;
+        enforce_mini_topmost(&mini)?;
     }
     if onboarding_done {
         if let Some(main) = app.get_webview_window("main") {
@@ -161,12 +269,6 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn show_dashboard(app: &AppHandle) {
-    if let Ok(connection) = db::open() {
-        let _ = db::set_setting(&connection, "mini_visible", "0");
-    }
-    if let Some(mini) = app.get_webview_window("mini") {
-        let _ = mini.hide();
-    }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.unminimize();
         let _ = main.show();
@@ -178,7 +280,9 @@ pub fn toggle_mini(app: &AppHandle) {
     let Some(mini) = app.get_webview_window("mini") else {
         return;
     };
-    if mini.is_visible().unwrap_or(false) {
+    if mini.is_minimized().unwrap_or(false) {
+        let _ = show_mini(app);
+    } else if mini.is_visible().unwrap_or(false) {
         let _ = mini.hide();
         if let Ok(connection) = db::open() {
             let _ = db::set_setting(&connection, "mini_visible", "0");
@@ -192,11 +296,33 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    mini.unminimize().map_err(|error| error.to_string())?;
     clamp_mini_window(&mini)?;
     mini.show().map_err(|error| error.to_string())?;
     mini.set_focus().map_err(|error| error.to_string())?;
     let connection = db::open()?;
+    let opacity = saved_mini_opacity(&connection)?;
+    apply_mini_opacity(&mini, opacity)?;
+    enforce_mini_topmost(&mini)?;
     db::set_setting(&connection, "mini_visible", "1")
+}
+
+pub fn minimize_mini(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let _ = save_mini_geometry(app);
+    mini.minimize().map_err(|error| error.to_string())
+}
+
+pub fn hide_mini(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let _ = save_mini_geometry(app);
+    mini.hide().map_err(|error| error.to_string())?;
+    let connection = db::open()?;
+    db::set_setting(&connection, "mini_visible", "0")
 }
 
 pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
@@ -321,7 +447,7 @@ pub fn reset_mini_geometry(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
-    if !matches!(corner, "tl" | "tr" | "bl" | "br") {
+    if !valid_mini_corner(corner) {
         return Err("invalid mini-window corner".to_string());
     }
     let mini = app
@@ -591,6 +717,28 @@ fn tray_snapshot() -> Result<TraySnapshot, String> {
         waste_label,
         observed_label,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_mini_opacity, should_restore_mini, valid_mini_corner};
+
+    #[test]
+    fn opacity_defaults_to_fully_opaque_outside_supported_range() {
+        assert_eq!(parse_mini_opacity(None), 100);
+        assert_eq!(parse_mini_opacity(Some("59")), 100);
+        assert_eq!(parse_mini_opacity(Some("101")), 100);
+        assert_eq!(parse_mini_opacity(Some("80")), 80);
+    }
+
+    #[test]
+    fn a_valid_corner_restores_mini_even_in_tray_only_mode() {
+        assert!(should_restore_mini(false, true, true, true));
+        assert!(!should_restore_mini(false, true, true, false));
+        assert!(!should_restore_mini(false, false, true, true));
+        assert!(valid_mini_corner("br"));
+        assert!(!valid_mini_corner("bottom-right"));
+    }
 }
 
 fn counter_icon(minutes: i64, live_kind: &str, away: bool) -> Image<'static> {

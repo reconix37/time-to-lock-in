@@ -11,6 +11,7 @@ const MIGRATION_002: &str = include_str!("../migrations/002_score_day.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.sql");
 const MIGRATION_005: &str = include_str!("../migrations/005_categories_scoring.sql");
+const MIGRATION_006: &str = include_str!("../migrations/006_rule_uniqueness.sql");
 
 const TITLE_NOISE_WORDS: &[&str] = &[
     "смотреть",
@@ -285,6 +286,7 @@ pub fn initialize() -> Result<(), String> {
         ("mini_mode", "auto".to_string()),
         ("mini_text_size", "normal".to_string()),
         ("mini_privacy_now", "0".to_string()),
+        ("mini_opacity", "100".to_string()),
         ("mini_corner", String::new()),
         ("currency", "₴".to_string()),
         ("extension_token", Uuid::new_v4().to_string()),
@@ -316,6 +318,11 @@ pub fn initialize() -> Result<(), String> {
     if previous_version < 5 {
         transaction
             .execute_batch(MIGRATION_005)
+            .map_err(|error| error.to_string())?;
+    }
+    if previous_version < 6 {
+        transaction
+            .execute_batch(MIGRATION_006)
             .map_err(|error| error.to_string())?;
     }
     if previous_version < 4 {
@@ -367,7 +374,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=5;")
+        .execute_batch("PRAGMA user_version=6;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -928,12 +935,12 @@ fn preserve_legacy_manual_categories(transaction: &Transaction<'_>) -> Result<()
     Ok(())
 }
 
-fn reclassify_history_in_transaction(
-    transaction: &Transaction<'_>,
+fn reclassification_changes(
+    connection: &Connection,
     overwrite_manual: bool,
     manual_rule_scope: Option<(&str, &str)>,
-) -> Result<ReclassificationSummary, String> {
-    let rules = RuleSet::load(transaction)?;
+) -> Result<Vec<(i64, i64, i64)>, String> {
+    let rules = RuleSet::load(connection)?;
     let manual_scope = manual_rule_scope
         .map(|(match_type, pattern)| {
             RuleSet::compile(vec![RuleDefinition {
@@ -947,7 +954,7 @@ fn reclassify_history_in_transaction(
             }])
         })
         .transpose()?;
-    let changes = transaction
+    let changes = connection
         .prepare(
             "SELECT id, app, window_title, domain, COALESCE(category_id, 0),
                     MAX(0, ts_end - ts_start), manual_category
@@ -990,15 +997,24 @@ fn reclassify_history_in_transaction(
                 {
                     None
                 } else {
-                    Some(Ok((id, current, category_id, duration)))
+                    Some(Ok((id, category_id, duration)))
                 }
             }
             Err(error) => Some(Err(error)),
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let changed_duration_ms = changes.iter().map(|(_, _, _, duration)| duration).sum();
-    for (segment_id, _, category_id, _) in &changes {
+    Ok(changes)
+}
+
+fn reclassify_history_in_transaction(
+    transaction: &Transaction<'_>,
+    overwrite_manual: bool,
+    manual_rule_scope: Option<(&str, &str)>,
+) -> Result<ReclassificationSummary, String> {
+    let changes = reclassification_changes(transaction, overwrite_manual, manual_rule_scope)?;
+    let changed_duration_ms = changes.iter().map(|(_, _, duration)| duration).sum();
+    for (segment_id, category_id, _) in &changes {
         transaction
             .execute(
                 "UPDATE segments SET category_id = ?1, manual_category = 0 WHERE id = ?2",
@@ -1040,6 +1056,17 @@ pub fn reclassify_history(
     )?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(summary)
+}
+
+pub fn preview_reclassify_history(
+    connection: &Connection,
+    overwrite_manual: bool,
+) -> Result<ReclassificationSummary, String> {
+    let changes = reclassification_changes(connection, overwrite_manual, None)?;
+    Ok(ReclassificationSummary {
+        changed_segments: changes.len() as i64,
+        changed_duration_ms: changes.iter().map(|(_, _, duration)| duration).sum(),
+    })
 }
 
 pub fn classification_match_stats(
@@ -1543,10 +1570,10 @@ pub fn mini_hourly(
 #[cfg(test)]
 mod tests {
     use super::{
-        afk_series, daily_series, import_challenge, mini_hourly, progress_series,
-        reclassify_history, refresh_daily_stats, segment_local_dates, set_setting,
+        afk_series, daily_series, import_challenge, mini_hourly, preview_reclassify_history,
+        progress_series, reclassify_history, refresh_daily_stats, segment_local_dates, set_setting,
         today_cumulative, today_scoring, upsert_exe_rule, validate_category_tree, MIGRATION_001,
-        MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
+        MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006,
     };
     use rusqlite::{params, Connection};
 
@@ -1714,6 +1741,102 @@ mod tests {
                 .expect("version"),
             5
         );
+    }
+
+    fn rule_uniqueness_schema() -> Connection {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(MIGRATION_001)
+            .expect("base schema");
+        connection
+            .execute_batch(MIGRATION_005)
+            .expect("rule schema");
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at) VALUES
+                    (1, 'Video', '#286983', 'neutral', 0),
+                    (2, 'Learning', '#56949f', 'useful', 0);",
+            )
+            .expect("categories");
+        connection
+    }
+
+    #[test]
+    fn migration_006_collapses_same_category_duplicates_by_priority_then_id() {
+        let connection = rule_uniqueness_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO rules (
+                    id, match_type, pattern, category_id, priority, created_at,
+                    match_mode, case_insensitive
+                 ) VALUES
+                    (10, 'title', 'youtube', 1, 5, 0, 'legacy', 1),
+                    (11, 'title', 'youtube', 1, 9, 0, 'legacy', 1),
+                    (12, 'title', 'youtube', 1, 9, 0, 'legacy', 1);",
+            )
+            .expect("duplicate rules");
+
+        connection.execute_batch(MIGRATION_006).expect("migration");
+
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT id, priority FROM rules WHERE category_id = 1",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .expect("kept rule"),
+            (10, 9),
+        );
+    }
+
+    #[test]
+    fn migration_006_keeps_same_pattern_in_different_categories() {
+        let connection = rule_uniqueness_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO rules (
+                    match_type, pattern, category_id, priority, created_at,
+                    match_mode, case_insensitive
+                 ) VALUES
+                    ('title', 'youtube', 1, 5, 0, 'legacy', 1),
+                    ('title', 'youtube', 2, 5, 0, 'legacy', 1);",
+            )
+            .expect("rules");
+
+        connection.execute_batch(MIGRATION_006).expect("migration");
+
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM rules", [], |row| row.get::<_, i64>(0))
+                .expect("rule count"),
+            2,
+        );
+    }
+
+    #[test]
+    fn migration_006_unique_index_rejects_exact_duplicate() {
+        let connection = rule_uniqueness_schema();
+        connection.execute_batch(MIGRATION_006).expect("migration");
+        connection
+            .execute(
+                "INSERT INTO rules (
+                    match_type, pattern, category_id, priority, created_at,
+                    match_mode, case_insensitive
+                 ) VALUES ('title', 'youtube', 1, 5, 0, 'legacy', 1)",
+                [],
+            )
+            .expect("first rule");
+
+        assert!(connection
+            .execute(
+                "INSERT INTO rules (
+                    match_type, pattern, category_id, priority, created_at,
+                    match_mode, case_insensitive
+                 ) VALUES ('title', 'youtube', 1, 9, 0, 'legacy', 1)",
+                [],
+            )
+            .is_err());
     }
 
     #[test]
@@ -1896,6 +2019,18 @@ mod tests {
                 )
                 .expect("segment");
         }
+
+        let preview = preview_reclassify_history(&mut connection, false).expect("preview");
+        assert_eq!(preview.changed_segments, 4);
+        assert_eq!(preview.changed_duration_ms, 2_400_000);
+        let unchanged = connection
+            .prepare("SELECT category_id FROM segments ORDER BY id")
+            .expect("preview query")
+            .query_map([], |row| row.get::<_, i64>(0))
+            .expect("preview rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("preview categories");
+        assert_eq!(unchanged, vec![0, 0, 0, 0, 1]);
 
         let summary =
             reclassify_history(&mut connection, false, None, None).expect("reclassification");

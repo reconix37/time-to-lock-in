@@ -2,6 +2,12 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import type { KindLabels } from "../share";
 import { useI18n } from "../i18nContext";
+import {
+  nextSelectionAfterDelete,
+  rulesActionView,
+  sameRuleSignature,
+  type ManagerView,
+} from "../categoryManagerModel";
 
 export type CategoryKind = "useful" | "neutral" | "waste";
 export type RuleMatchType = "exe" | "title" | "domain";
@@ -41,6 +47,11 @@ interface RulePreview {
   broad_warning: boolean;
 }
 
+interface ReclassificationSummary {
+  changed_segments: number;
+  changed_duration_ms: number;
+}
+
 interface Props {
   open: boolean;
   categories: Category[];
@@ -49,16 +60,15 @@ interface Props {
   observedMs: number;
   appCount: number;
   uncategorizedMs: number;
+  onClose: () => void;
   onCategoriesChange: (categories: Category[]) => void;
   onDashboardRefresh: () => Promise<void>;
 }
 
 type CategoryDraft = Omit<Category, "id" | "effective_color" | "effective_score" | "full_path">;
-type RuleDraft = Omit<Rule, "id" | "priority">;
-type DetailMode = "category" | "rules" | "all";
+type RuleDraft = Omit<Rule, "id" | "priority"> & { id?: number; priority?: number };
 
 const COLORS = ["#286983", "#ea9d34", "#b4637a", "#56949f", "#907aa9", "#9893a5"];
-
 const EMPTY_CATEGORY: CategoryDraft = {
   name: "",
   color: COLORS[3],
@@ -87,16 +97,9 @@ function scoreText(score: number): string {
   return score > 0 ? `+${value}` : value;
 }
 
-function sameSignature(left: Pick<Rule, "match_type" | "match_mode" | "pattern">, right: Pick<Rule, "match_type" | "match_mode" | "pattern">): boolean {
-  return left.match_type === right.match_type
-    && left.match_mode === right.match_mode
-    && left.pattern.trim() === right.pattern.trim();
-}
-
-function sourceShort(type: RuleMatchType): string {
-  if (type === "domain") return "WEB";
-  if (type === "title") return "TITLE";
-  return "APP";
+function viewCategoryId(view: ManagerView): number | null {
+  if (view.type === "category" || view.type === "rules" || view.type === "newRule") return view.categoryId;
+  return null;
 }
 
 export function CategoryManager({
@@ -107,44 +110,44 @@ export function CategoryManager({
   observedMs,
   appCount,
   uncategorizedMs,
+  onClose,
   onCategoriesChange,
   onDashboardRefresh,
 }: Props) {
   const { t } = useI18n();
   const [rules, setRules] = useState<Rule[]>([]);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
-  const [detailMode, setDetailMode] = useState<DetailMode>("category");
-  const [editing, setEditing] = useState<Category | null>(null);
-  const [creatingCategory, setCreatingCategory] = useState(false);
-  const [newCategory, setNewCategory] = useState<CategoryDraft>({ ...EMPTY_CATEGORY });
-  const [creatingRule, setCreatingRule] = useState(false);
-  const [newRule, setNewRule] = useState<RuleDraft>(emptyRule(0));
+  const [view, setView] = useState<ManagerView>({ type: "category", categoryId: 0 });
+  const [categoryDraft, setCategoryDraft] = useState<CategoryDraft>({ ...EMPTY_CATEGORY });
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRule(0));
   const [preview, setPreview] = useState<RulePreview | null>(null);
+  const [historyPreview, setHistoryPreview] = useState<ReclassificationSummary | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
   const [patternError, setPatternError] = useState<string | null>(null);
-  const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
-  const [expandedRules, setExpandedRules] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const rulesSectionRef = useRef<HTMLDivElement>(null);
+  const [repaintEnabled, setRepaintEnabled] = useState(false);
+  const [overwriteManual, setOverwriteManual] = useState(false);
+  const previewRequest = useRef(0);
+  const historyPreviewRequest = useRef(0);
 
   const manageable = useMemo(() => categories.filter((category) => category.id !== 0), [categories]);
-  const uncategorized = useMemo(() => categories.find((category) => category.id === 0) ?? null, [categories]);
+  const selectedCategoryId = viewCategoryId(view);
   const selectedCategory = useMemo(
     () => categories.find((category) => category.id === selectedCategoryId) ?? null,
     [categories, selectedCategoryId],
   );
   const nextPriority = useMemo(() => Math.max(0, ...rules.map((rule) => rule.priority)) + 1, [rules]);
   const duplicate = useMemo(
-    () => rules.find((rule) => sameSignature(rule, newRule)) ?? null,
-    [newRule, rules],
+    () => rules.find((rule) => rule.id !== ruleDraft.id && sameRuleSignature(rule, ruleDraft)) ?? null,
+    [ruleDraft, rules],
   );
-  const visibleRules = useMemo(
-    () => detailMode === "all" ? rules : rules.filter((rule) => rule.category_id === selectedCategoryId),
-    [detailMode, rules, selectedCategoryId],
-  );
+  const visibleRules = useMemo(() => {
+    if (view.type === "allRules") return rules;
+    const categoryId = viewCategoryId(view);
+    return categoryId === null ? [] : rules.filter((rule) => rule.category_id === categoryId);
+  }, [rules, view]);
   const childrenByParent = useMemo(() => {
     const result = new Map<number | null, Category[]>();
     for (const category of manageable) {
@@ -178,21 +181,19 @@ export function CategoryManager({
     return categories.find((category) => category.id === categoryId)?.full_path ?? t("common.uncategorized");
   }
 
-  async function reload() {
+  async function reload(preferredView?: ManagerView) {
     const [nextCategories, nextRules] = await Promise.all([
       invoke<Category[]>("get_categories"),
       invoke<Rule[]>("get_rules"),
     ]);
     onCategoriesChange(nextCategories);
     setRules(nextRules);
-    setSelectedCategoryId((current) => {
-      if (current !== null && nextCategories.some((category) => category.id === current)) return current;
-      return nextCategories.find((category) => category.id !== 0)?.id ?? 0;
+    setView((current) => {
+      const candidate = preferredView ?? current;
+      const categoryId = viewCategoryId(candidate);
+      if (categoryId === null || categoryId === 0 || nextCategories.some((category) => category.id === categoryId)) return candidate;
+      return { type: "category", categoryId: 0 };
     });
-    setNewRule((current) => ({
-      ...current,
-      category_id: current.category_id || nextCategories.find((category) => category.id !== 0)?.id || 0,
-    }));
   }
 
   useEffect(() => {
@@ -205,42 +206,76 @@ export function CategoryManager({
   }, [open]);
 
   useEffect(() => {
-    if (!creatingRule || !newRule.pattern.trim()) {
+    if (view.type !== "category" || view.categoryId === 0) return;
+    const category = categories.find((item) => item.id === view.categoryId);
+    if (category) setCategoryDraft({ ...category });
+  }, [categories, view]);
+
+  useEffect(() => {
+    if (view.type !== "newRule" || !ruleDraft.pattern.trim()) {
       setPreview(null);
       setPreviewPending(false);
-      if (!newRule.pattern.trim()) setPatternError(null);
+      if (!ruleDraft.pattern.trim()) setPatternError(null);
       return;
     }
     setPreviewPending(true);
+    const requestId = ++previewRequest.current;
     const timeout = window.setTimeout(() => {
       void invoke<RulePreview>("preview_rule", {
-        matchType: newRule.match_type,
-        pattern: newRule.pattern,
-        matchMode: newRule.match_mode,
-        caseInsensitive: newRule.case_insensitive,
+        matchType: ruleDraft.match_type,
+        pattern: ruleDraft.pattern,
+        matchMode: ruleDraft.match_mode,
+        caseInsensitive: ruleDraft.case_insensitive,
       }).then((result) => {
+        if (previewRequest.current !== requestId) return;
         setPreview(result);
         setPatternError(null);
       }).catch((reason: unknown) => {
+        if (previewRequest.current !== requestId) return;
         setPreview(null);
         setPatternError(errorText(reason, "validation.regex"));
-      }).finally(() => setPreviewPending(false));
+      }).finally(() => {
+        if (previewRequest.current === requestId) setPreviewPending(false);
+      });
     }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [creatingRule, newRule.case_insensitive, newRule.match_mode, newRule.match_type, newRule.pattern]);
+    return () => {
+      previewRequest.current += 1;
+      window.clearTimeout(timeout);
+    };
+  }, [ruleDraft.case_insensitive, ruleDraft.match_mode, ruleDraft.match_type, ruleDraft.pattern, view.type]);
 
   useEffect(() => {
-    if (detailMode !== "rules") return;
-    window.setTimeout(() => rulesSectionRef.current?.scrollIntoView({ block: "start" }), 0);
-  }, [detailMode, selectedCategoryId]);
+    if (view.type !== "allRules") return;
+    setHistoryPreview(null);
+    const requestId = ++historyPreviewRequest.current;
+    void invoke<ReclassificationSummary>("preview_reclassify_history", { overwriteManual })
+      .then((result) => {
+        if (historyPreviewRequest.current === requestId) setHistoryPreview(result);
+      })
+      .catch((reason: unknown) => {
+        if (historyPreviewRequest.current === requestId) setError(errorText(reason, "error.repaintHistory"));
+      });
+    return () => {
+      historyPreviewRequest.current += 1;
+    };
+  }, [overwriteManual, rules, view.type]);
 
-  async function saveCategory(category: CategoryDraft | Category, id?: number) {
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open, saving]);
+
+  async function saveCategory(category: CategoryDraft, id?: number) {
     setSaving(true);
     setError(null);
     try {
-      await invoke(id === undefined ? "create_category" : "update_category", {
+      const saved = await invoke<Category>(id === undefined ? "create_category" : "update_category", {
         ...(id === undefined ? {} : { id }),
-        name: category.name,
+        name: category.name.trim(),
         color: category.color,
         kind: category.kind,
         parentId: category.parent_id,
@@ -248,10 +283,7 @@ export function CategoryManager({
         inheritColor: category.parent_id !== null && category.inherit_color,
         inheritScore: category.parent_id !== null && category.inherit_score,
       });
-      await reload();
-      setCreatingCategory(false);
-      setEditing(null);
-      setNewCategory({ ...EMPTY_CATEGORY });
+      await reload({ type: "category", categoryId: saved.id });
       await onDashboardRefresh();
     } catch (reason: unknown) {
       setError(errorText(reason, id === undefined ? "error.createCategory" : "error.changeCategory"));
@@ -266,7 +298,8 @@ export function CategoryManager({
     setError(null);
     try {
       await invoke("delete_category", { id: category.id });
-      await reload();
+      const nextId = nextSelectionAfterDelete(category, manageable.filter((item) => item.id !== category.id));
+      await reload({ type: "category", categoryId: nextId });
       await onDashboardRefresh();
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : t("error.deleteCategory"));
@@ -275,84 +308,58 @@ export function CategoryManager({
     }
   }
 
-  async function createRule() {
-    const normalizedPattern = newRule.pattern.trim();
+  async function saveRule() {
+    const normalizedPattern = ruleDraft.pattern.trim();
     if (!normalizedPattern) {
       setPatternError(t("validation.patternRequired"));
       return;
     }
+    if (ruleDraft.category_id === 0) {
+      setPatternError(t("validation.categoryRequired"));
+      return;
+    }
     if (duplicate) {
-      setPatternError(t("validation.ruleDuplicate", {
-        category: categoryName(duplicate.category_id),
-        priority: duplicate.priority,
-      }));
+      setPatternError(t("validation.ruleDuplicate", { category: categoryName(duplicate.category_id) }));
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await invoke("create_rule", {
-        matchType: newRule.match_type,
+      const editing = ruleDraft.id !== undefined;
+      await invoke(editing ? "update_rule" : "create_rule", {
+        ...(editing ? { id: ruleDraft.id } : {}),
+        matchType: ruleDraft.match_type,
         pattern: normalizedPattern,
-        categoryId: newRule.category_id,
-        priority: nextPriority,
-        matchMode: newRule.match_mode,
-        caseInsensitive: newRule.case_insensitive,
+        categoryId: ruleDraft.category_id,
+        priority: ruleDraft.priority ?? nextPriority,
+        matchMode: ruleDraft.match_mode,
+        caseInsensitive: ruleDraft.case_insensitive,
       });
-      await reload();
-      setNewRule(emptyRule(newRule.category_id));
-      setCreatingRule(false);
-      setPreview(null);
+      const targetView: ManagerView = view.type === "newRule" && view.returnTo === "allRules"
+        ? { type: "allRules" }
+        : view.type === "newRule" && view.categoryId !== 0
+          ? { type: "rules", categoryId: ruleDraft.category_id }
+          : { type: "rules", categoryId: ruleDraft.category_id };
+      await reload(targetView);
       setPatternError(null);
+      setPreview(null);
     } catch (reason: unknown) {
-      setPatternError(errorText(reason, "error.createRule"));
+      setPatternError(errorText(reason, editingRuleFallback(ruleDraft.id)));
     } finally {
       setSaving(false);
     }
   }
 
-  async function updateRule(rule: Rule) {
-    const normalizedPattern = rule.pattern.trim();
-    const conflict = rules.find((item) => item.id !== rule.id && sameSignature(item, rule));
-    if (!normalizedPattern || conflict) {
-      const message = conflict
-        ? t("validation.ruleDuplicate", { category: categoryName(conflict.category_id), priority: conflict.priority })
-        : t("validation.patternRequired");
-      setRowErrors((current) => ({ ...current, [rule.id]: message }));
-      await reload();
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await invoke("update_rule", {
-        id: rule.id,
-        matchType: rule.match_type,
-        pattern: normalizedPattern,
-        categoryId: rule.category_id,
-        priority: rule.priority,
-        matchMode: rule.match_mode,
-        caseInsensitive: rule.case_insensitive,
-      });
-      await reload();
-      setRowErrors((current) => {
-        const next = { ...current };
-        delete next[rule.id];
-        return next;
-      });
-    } catch (reason: unknown) {
-      setRowErrors((current) => ({ ...current, [rule.id]: errorText(reason, "error.changeRule") }));
-      await reload();
-    } finally {
-      setSaving(false);
-    }
+  function editingRuleFallback(id: number | undefined): string {
+    return id === undefined ? "error.createRule" : "error.changeRule";
   }
 
-  async function removeRule(id: number) {
+  async function removeRule(rule: Rule) {
+    if (!window.confirm(t("manager.confirmDeleteRule", { pattern: rule.pattern }))) return;
     setSaving(true);
     setError(null);
     try {
-      await invoke("delete_rule", { id });
+      await invoke("delete_rule", { id: rule.id });
       await reload();
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : t("error.deleteRule"));
@@ -392,17 +399,20 @@ export function CategoryManager({
   }
 
   async function replayHistory() {
-    if (!window.confirm(t("manager.confirmRepaintAll"))) return;
+    if (!repaintEnabled || !window.confirm(t("manager.confirmRepaintAll"))) return;
     setSaving(true);
     setError(null);
     try {
       await invoke("reclassify_history", {
-        overwriteManual: true,
+        overwriteManual,
         manualMatchType: null,
         manualPattern: null,
         confirmed: true,
       });
+      setRepaintEnabled(false);
+      setOverwriteManual(false);
       await onDashboardRefresh();
+      setHistoryPreview(await invoke<ReclassificationSummary>("preview_reclassify_history", { overwriteManual: false }));
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : t("error.repaintHistory"));
     } finally {
@@ -410,68 +420,70 @@ export function CategoryManager({
     }
   }
 
+  function selectCategory(categoryId: number) {
+    setView({ type: "category", categoryId });
+    setPatternError(null);
+  }
+
   function openRules(categoryId: number) {
-    const targetCategoryId = categoryId === 0 ? manageable[0]?.id ?? 0 : categoryId;
-    setSelectedCategoryId(categoryId);
-    setDetailMode("rules");
-    setEditing(null);
-    setCreatingCategory(false);
-    setCreatingRule(true);
-    setNewRule(emptyRule(targetCategoryId));
+    if (categoryId === 0) setRuleDraft(emptyRule(0));
+    setView(rulesActionView(categoryId));
     setPatternError(null);
   }
 
-  function selectCategory(category: Category) {
-    setSelectedCategoryId(category.id);
-    setDetailMode("category");
-    setEditing(category.id === 0 ? null : category);
-    setCreatingCategory(false);
-    setCreatingRule(false);
+  function startRule(categoryId: number, rule?: Rule, returnTo: "rules" | "allRules" = "rules") {
+    setRuleDraft(rule ? { ...rule } : emptyRule(categoryId));
     setPatternError(null);
+    setPreview(null);
+    setView({ type: "newRule", categoryId, returnTo });
   }
 
-  function renderCategoryForm(category: CategoryDraft | Category, id?: number) {
-    const setCategory = (next: CategoryDraft | Category) => {
-      if (id === undefined) setNewCategory(next as CategoryDraft);
-      else setEditing(next as Category);
-    };
+  function renderCategoryForm(category: CategoryDraft, id?: number) {
+    const colorValid = /^#[0-9a-f]{6}$/i.test(category.color);
     return (
       <form className="manager-form category-edit-form" noValidate onSubmit={(event) => { event.preventDefault(); void saveCategory(category, id); }}>
-        <label className="manager-field"><span>{t("manager.name")}</span><input required maxLength={80} value={category.name} onChange={(event) => setCategory({ ...category, name: event.target.value })} /></label>
-        <label className="manager-field"><span>{t("manager.parent")}</span><select className="with-chevron" value={category.parent_id ?? ""} onChange={(event) => { const parentId = event.target.value ? Number(event.target.value) : null; setCategory({ ...category, parent_id: parentId, inherit_color: parentId !== null && (id !== undefined ? category.inherit_color : true), inherit_score: parentId !== null && (id !== undefined ? category.inherit_score : true) }); }}><option value="">{t("manager.noParent")}</option>{manageable.filter((item) => item.id !== id && !("full_path" in category && item.full_path.startsWith(`${category.full_path} > `))).map((item) => <option key={item.id} value={item.id}>{item.full_path}</option>)}</select></label>
-        <label className="manager-field"><span>{t("manager.type")}</span><select className="with-chevron" value={category.kind} onChange={(event) => { const kind = event.target.value as CategoryKind; setCategory({ ...category, kind, score: id === undefined && category.parent_id === null ? (kind === "useful" ? 10 : kind === "waste" ? -10 : 0) : category.score }); }}><option value="useful">{kindLabels.useful}</option><option value="neutral">{kindLabels.neutral}</option><option value="waste">{kindLabels.waste}</option></select></label>
-        <label className="manager-field"><span>{t("manager.score")}</span><input type="number" min={-10} max={10} step="0.1" disabled={category.inherit_score} value={category.score} onChange={(event) => setCategory({ ...category, score: Number(event.target.value) })} /></label>
-        <label className="manager-toggle"><input type="checkbox" disabled={category.parent_id === null} checked={category.inherit_color} onChange={(event) => setCategory({ ...category, inherit_color: event.target.checked })} />{t("manager.inheritColor")}</label>
-        <label className="manager-toggle"><input type="checkbox" disabled={category.parent_id === null} checked={category.inherit_score} onChange={(event) => setCategory({ ...category, inherit_score: event.target.checked })} />{t("manager.inheritScore")}</label>
-        <div className="manager-color-field"><span>{t("manager.color")}</span><div className="color-presets">{COLORS.map((color) => <button key={color} type="button" disabled={category.inherit_color} aria-label={t("manager.chooseColor", { color })} className={category.color === color ? "is-selected" : ""} style={{ backgroundColor: color }} onClick={() => setCategory({ ...category, color })} />)}</div></div>
-        <div className="manager-form-actions"><button type="button" className="manager-cancel-button" onClick={() => { setCreatingCategory(false); setEditing(null); }}>{t("common.cancel")}</button><button type="submit" className="manager-submit-button" disabled={saving || !category.name.trim()}>{t("common.save")}</button></div>
+        <label className="manager-field"><span>{t("manager.name")}</span><input autoComplete="off" spellCheck={false} required maxLength={80} placeholder={t("manager.exampleStudy")} value={category.name} onChange={(event) => setCategoryDraft({ ...category, name: event.target.value })} /></label>
+        <label className="manager-field"><span>{t("manager.parent")}</span><select className="with-chevron" value={category.parent_id ?? ""} onChange={(event) => { const parentId = event.target.value ? Number(event.target.value) : null; setCategoryDraft({ ...category, parent_id: parentId, inherit_color: parentId !== null && (id !== undefined ? category.inherit_color : true), inherit_score: parentId !== null && (id !== undefined ? category.inherit_score : true) }); }}><option value="">{t("manager.noParent")}</option>{manageable.filter((item) => item.id !== id && !(selectedCategory && item.full_path.startsWith(`${selectedCategory.full_path} > `))).map((item) => <option key={item.id} value={item.id}>{item.full_path}</option>)}</select></label>
+        <label className="manager-field"><span>{t("manager.type")}</span><select className="with-chevron" value={category.kind} onChange={(event) => { const kind = event.target.value as CategoryKind; setCategoryDraft({ ...category, kind, score: id === undefined && category.parent_id === null ? (kind === "useful" ? 10 : kind === "waste" ? -10 : 0) : category.score }); }}><option value="useful">{kindLabels.useful}</option><option value="neutral">{kindLabels.neutral}</option><option value="waste">{kindLabels.waste}</option></select></label>
+        <label className="manager-field"><span>{t("manager.score")}</span><input type="number" min={-10} max={10} step="0.1" disabled={category.inherit_score} value={category.score} onChange={(event) => setCategoryDraft({ ...category, score: Number(event.target.value) })} /></label>
+        <p className="category-model-hint">{t("manager.kindScoreHint")}</p>
+        <div className="manager-toggle-list">
+          <label className="manager-toggle"><input type="checkbox" disabled={category.parent_id === null} checked={category.inherit_color} onChange={(event) => setCategoryDraft({ ...category, inherit_color: event.target.checked })} /><span><strong>{t("manager.inheritColor")}</strong><small>{t("manager.inheritColorHint")}</small></span></label>
+          <label className="manager-toggle"><input type="checkbox" disabled={category.parent_id === null} checked={category.inherit_score} onChange={(event) => setCategoryDraft({ ...category, inherit_score: event.target.checked })} /><span><strong>{t("manager.inheritScore")}</strong><small>{t("manager.inheritScoreHint")}</small></span></label>
+        </div>
+        <div className="manager-color-field"><span>{t("manager.color")}</span><div className="manager-color-controls"><div className="color-presets">{COLORS.map((color) => <button key={color} type="button" disabled={category.inherit_color} aria-label={t("manager.chooseColor", { color })} className={category.color === color ? "is-selected" : ""} style={{ backgroundColor: color }} onClick={() => setCategoryDraft({ ...category, color })} />)}</div><label className="manager-field manager-custom-color"><span>{t("manager.customColor")}</span><input type="text" autoComplete="off" spellCheck={false} disabled={category.inherit_color} maxLength={7} value={category.color} aria-invalid={!colorValid} onChange={(event) => setCategoryDraft({ ...category, color: event.target.value })} /></label></div></div>
+        <div className="manager-form-actions"><button type="button" className="manager-cancel-button" onClick={() => id === undefined ? setView({ type: "category", categoryId: 0 }) : selectCategory(id)}>{t("common.cancel")}</button><button type="submit" className="manager-submit-button" disabled={saving || !category.name.trim() || !colorValid}>{t("common.save")}</button></div>
       </form>
     );
   }
 
   function renderRuleForm() {
+    const placeholder = ruleDraft.match_type === "exe" ? "Code.exe" : ruleDraft.match_type === "domain" ? "youtube.com" : "Blender tutorial";
+    const cancelView: ManagerView = view.type === "newRule" && view.returnTo === "allRules"
+      ? { type: "allRules" }
+      : view.type === "newRule" && view.categoryId === 0
+        ? { type: "category", categoryId: 0 }
+        : { type: "rules", categoryId: view.type === "newRule" ? view.categoryId : ruleDraft.category_id };
     return (
-      <form className="manager-form rule-sentence-form" noValidate onSubmit={(event) => { event.preventDefault(); void createRule(); }}>
-        <strong className="rule-sentence-lead">{t("manager.if")}</strong>
-        <div className="rule-form-pair">
-          <label className="manager-field"><span>{t("manager.source")}</span><select className="with-chevron" value={newRule.match_type} onChange={(event) => setNewRule({ ...newRule, match_type: event.target.value as RuleMatchType })}><option value="exe">{t("manager.sourceApp")}</option><option value="title">{t("manager.sourceTitle")}</option><option value="domain">{t("manager.sourceWebsite")}</option></select></label>
-          <label className="manager-field"><span>{t("manager.how")}</span><select className="with-chevron" value={newRule.match_mode} onChange={(event) => setNewRule({ ...newRule, match_mode: event.target.value as RuleMatchMode })}><option value="legacy">{t("manager.smartMatch")}</option><option value="regex">{t("manager.regularExpression")}</option></select></label>
+      <form className="manager-form rule-sentence-form" noValidate onSubmit={(event) => { event.preventDefault(); void saveRule(); }}>
+        <div className="rule-sentence-fields">
+          <span>{t("manager.if")}</span>
+          <label className="manager-field manager-field-inline"><span>{t("manager.source")}</span><select className="with-chevron" value={ruleDraft.match_type} onChange={(event) => setRuleDraft({ ...ruleDraft, match_type: event.target.value as RuleMatchType })}><option value="exe">{t("manager.sourceApp")}</option><option value="title">{t("manager.sourceTitle")}</option><option value="domain">{t("manager.sourceWebsite")}</option></select></label>
+          <span>{ruleDraft.match_mode === "regex" ? t("manager.matchesExpression") : t("manager.contains")}</span>
+          <label className="rule-search-field"><span>{t("manager.whatToFind")}</span><input autoComplete="off" spellCheck={false} maxLength={500} placeholder={placeholder} value={ruleDraft.pattern} aria-invalid={patternError !== null || duplicate !== null} aria-describedby="rule-pattern-state" onChange={(event) => { setRuleDraft({ ...ruleDraft, pattern: event.target.value }); setPatternError(null); }} /></label>
+          <label className="manager-field manager-field-inline manager-category-select"><span>{t("manager.assignCategory")}</span><select className="with-chevron" value={ruleDraft.category_id || ""} onChange={(event) => setRuleDraft({ ...ruleDraft, category_id: Number(event.target.value) })}><option value="" disabled>{t("manager.chooseCategory")}</option>{manageable.map((category) => <option key={category.id} value={category.id}>{category.full_path}</option>)}</select></label>
         </div>
-        <div className="rule-pattern-group">
-          <div className="rule-pattern-heading"><span>{t("manager.pattern")}</span><label className="rule-case"><input type="checkbox" checked={newRule.case_insensitive} onChange={(event) => setNewRule({ ...newRule, case_insensitive: event.target.checked })} />{t("manager.caseInsensitive")}</label></div>
-          <input autoComplete="off" spellCheck={false} maxLength={500} value={newRule.pattern} aria-invalid={patternError !== null || duplicate !== null} aria-describedby="rule-pattern-state" onChange={(event) => { setNewRule({ ...newRule, pattern: event.target.value }); setPatternError(null); }} />
-          <p id="rule-pattern-state" className={patternError || duplicate ? "rule-field-error" : preview ? "rule-field-valid" : "rule-field-help"}>
-            {patternError ?? (duplicate ? t("validation.ruleDuplicate", { category: categoryName(duplicate.category_id), priority: duplicate.priority }) : preview ? t("manager.patternValid") : t("manager.patternHint"))}
-          </p>
-        </div>
-        <div className="rule-form-pair">
-          <label className="manager-field"><span>{t("manager.assignCategory")}</span><select className="with-chevron" value={newRule.category_id} onChange={(event) => setNewRule({ ...newRule, category_id: Number(event.target.value) })}>{manageable.map((category) => <option key={category.id} value={category.id}>{category.full_path}</option>)}</select></label>
-          <details className="rule-advanced"><summary>{t("settings.advanced")}</summary><p>{t("manager.ruleOrder", { count: rules.length })}</p></details>
-        </div>
-        <div className={`rule-preview ${preview?.broad_warning ? "is-warning" : ""}`} aria-live="polite">
-          {previewPending ? t("manager.previewLoading") : preview ? <>{preview.broad_warning && <span>{t("manager.broadWarning")} · </span>}{t("manager.livePreview", { count: preview.matched_values, duration: formatDuration(preview.matched_duration_ms) })}</> : t("manager.previewEmpty")}
-        </div>
-        <div className="manager-form-actions"><button type="button" className="manager-cancel-button" onClick={() => { setCreatingRule(false); setPatternError(null); }}>{t("common.cancel")}</button><button type="submit" className="manager-submit-button" disabled={saving || newRule.category_id === 0 || !newRule.pattern.trim() || duplicate !== null || patternError !== null}>{t("manager.addRule")}</button></div>
+        <p className="rule-field-help">{t("manager.ruleHint")}</p>
+        <p id="rule-pattern-state" className={patternError || duplicate ? "rule-field-error" : preview ? "rule-field-valid" : "rule-field-help"}>{patternError ?? (duplicate ? t("validation.ruleDuplicate", { category: categoryName(duplicate.category_id) }) : preview ? t("manager.patternValid") : "")}</p>
+        <details className="rule-advanced">
+          <summary>{t("settings.advanced")}</summary>
+          <div className="rule-toggle-list">
+            <label className="rule-toggle-row"><input type="checkbox" checked={ruleDraft.match_mode === "regex"} onChange={(event) => setRuleDraft({ ...ruleDraft, match_mode: event.target.checked ? "regex" : "legacy" })} /><span><strong>{t("manager.useRegex")}</strong><small>{t("manager.useRegexHint")}</small></span></label>
+            <label className="rule-toggle-row"><input type="checkbox" checked={ruleDraft.case_insensitive} onChange={(event) => setRuleDraft({ ...ruleDraft, case_insensitive: event.target.checked })} /><span><strong>{t("manager.caseInsensitive")}</strong><small>{t("manager.caseInsensitiveHint")}</small></span></label>
+          </div>
+        </details>
+        <div className={`rule-preview ${preview?.broad_warning ? "is-warning" : ""}`} aria-live="polite">{previewPending ? t("manager.previewLoading") : preview ? <>{preview.broad_warning && <span>{t("manager.broadWarning")} · </span>}{t("manager.livePreview", { count: preview.matched_values, duration: formatDuration(preview.matched_duration_ms) })}</> : t("manager.previewEmpty")}</div>
+        <div className="manager-form-actions"><button type="button" className="manager-cancel-button" onClick={() => { setView(cancelView); setPatternError(null); }}>{t("common.cancel")}</button><button type="submit" className="manager-submit-button" disabled={saving || ruleDraft.category_id === 0 || !ruleDraft.pattern.trim() || duplicate !== null || patternError !== null}>{ruleDraft.id === undefined ? t("manager.addRule") : t("common.save")}</button></div>
       </form>
     );
   }
@@ -479,22 +491,19 @@ export function CategoryManager({
   function renderRulesList() {
     if (visibleRules.length === 0) return <p className="manager-empty">{t("manager.noRules")}</p>;
     return (
-      <div className="manager-list rule-list">
+      <div className="rule-card-list">
         {visibleRules.map((rule) => {
           const globalIndex = rules.findIndex((item) => item.id === rule.id);
           return (
-            <div className="rule-manager-row rule-manager-edit" key={rule.id}>
-              <label className="manager-field"><span>{t("manager.source")}</span><select className="with-chevron" value={rule.match_type} onChange={(event) => void updateRule({ ...rule, match_type: event.target.value as RuleMatchType })}><option value="exe">{t("manager.sourceApp")}</option><option value="title">{t("manager.sourceTitle")}</option><option value="domain">{t("manager.sourceWebsite")}</option></select></label>
-              <label className="manager-field"><span>{t("manager.how")}</span><select className="with-chevron" value={rule.match_mode} onChange={(event) => void updateRule({ ...rule, match_mode: event.target.value as RuleMatchMode })}><option value="legacy">{t("manager.smartMatch")}</option><option value="regex">{t("manager.regularExpression")}</option></select></label>
-              <div className="rule-pattern-group">
-                <div className="rule-pattern-heading"><span>{t("manager.pattern")}</span><label className="rule-case"><input type="checkbox" checked={rule.case_insensitive} onChange={(event) => void updateRule({ ...rule, case_insensitive: event.target.checked })} />{t("manager.caseInsensitive")}</label></div>
-                <input autoComplete="off" spellCheck={false} value={rule.pattern} aria-invalid={rowErrors[rule.id] !== undefined} onChange={(event) => setRules((current) => current.map((item) => item.id === rule.id ? { ...item, pattern: event.target.value } : item))} onBlur={() => void updateRule(rule)} />
-                {rowErrors[rule.id] && <p className="rule-field-error">{rowErrors[rule.id]}</p>}
+            <article className="rule-card" key={rule.id}>
+              <p className="rule-card-sentence"><strong>{t(rule.match_type === "exe" ? "manager.sourceApp" : rule.match_type === "domain" ? "manager.sourceWebsite" : "manager.sourceTitle")}</strong> {t(rule.match_mode === "regex" ? "manager.matchesExpression" : "manager.contains")} <q>{rule.pattern}</q> <span aria-hidden="true">→</span> <strong>{categoryName(rule.category_id)}</strong></p>
+              <div className="rule-card-badges"><span>{t(rule.match_mode === "regex" ? "manager.regularExpression" : "manager.normalSearch")}</span>{rule.case_insensitive && <span>{t("manager.caseInsensitive")}</span>}</div>
+              <div className="rule-card-actions">
+                {view.type === "allRules" && <><button type="button" disabled={saving || globalIndex === 0} onClick={() => void moveRule(globalIndex, -1)}>{t("manager.earlier")}</button><button type="button" disabled={saving || globalIndex === rules.length - 1} onClick={() => void moveRule(globalIndex, 1)}>{t("manager.later")}</button></>}
+                <button type="button" onClick={() => startRule(rule.category_id, rule, view.type === "allRules" ? "allRules" : "rules")}>{t("common.edit")}</button>
+                <button type="button" className="is-danger" onClick={() => void removeRule(rule)}>{t("common.delete")}</button>
               </div>
-              <label className="manager-field"><span>{t("manager.assignCategory")}</span><select className="with-chevron" value={rule.category_id} onChange={(event) => void updateRule({ ...rule, category_id: Number(event.target.value) })}>{manageable.map((category) => <option key={category.id} value={category.id}>{category.full_path}</option>)}</select></label>
-              {detailMode === "all" && <div className="rule-order-actions"><span>{t("manager.orderNumber", { number: globalIndex + 1 })}</span><button type="button" disabled={saving || globalIndex === 0} onClick={() => void moveRule(globalIndex, -1)}>{t("manager.moveUp")}</button><button type="button" disabled={saving || globalIndex === rules.length - 1} onClick={() => void moveRule(globalIndex, 1)}>{t("manager.moveDown")}</button></div>}
-              <button type="button" className="manager-delete-button" aria-label={t("manager.deleteRule", { pattern: rule.pattern })} onClick={() => void removeRule(rule.id)}>🗑</button>
-            </div>
+            </article>
           );
         })}
       </div>
@@ -502,76 +511,50 @@ export function CategoryManager({
   }
 
   if (!open) return null;
-  if (loading) return <div className="manager-loading skeleton" />;
-
   const uncategorizedPercent = observedMs > 0 ? Math.round((uncategorizedMs / observedMs) * 100) : 0;
-  const formCategory = editing ?? newCategory;
 
   return (
-    <div className="category-manager">
-      <section className="category-overview">
-        <div className="all-activity-row">
-          <strong>{t("manager.allActivity")}</strong>
-          <span>{t("manager.allActivityStats", { duration: formatDuration(observedMs), apps: appCount, percent: uncategorizedPercent })}</span>
-          <small>{t("manager.allActivityHint")}</small>
-        </div>
-        <div className={`category-special-row ${selectedCategoryId === 0 ? "is-selected" : ""}`}>
-          <span className="manager-color-dot" />
-          <button type="button" className="category-special-main" onClick={() => uncategorized && selectCategory(uncategorized)}><strong>{t("manager.needsSorting")}</strong><small>{t("common.uncategorized")}</small></button>
-          <button type="button" className="category-special-cta" onClick={() => openRules(0)}>{t("manager.createRule")}</button>
-        </div>
-      </section>
-
-      <section className="category-master">
-        <div className="category-tree">
-          {visibleCategories.map(({ category, depth }) => {
-            const childCount = childrenByParent.get(category.id)?.length ?? 0;
-            const categoryRules = rules.filter((rule) => rule.category_id === category.id);
-            const rulesOpen = expandedRules.has(category.id);
-            return (
-              <div className="category-tree-node" key={category.id} style={{ "--tree-indent": `${depth * 20}px` } as CSSProperties}>
-                <div className={`category-tree-row ${selectedCategoryId === category.id ? "is-selected" : ""}`}>
-                  <button type="button" className="tree-disclosure" disabled={childCount === 0} onClick={() => setCollapsed((current) => { const next = new Set(current); if (next.has(category.id)) next.delete(category.id); else next.add(category.id); return next; })}>{childCount ? (collapsed.has(category.id) ? "›" : "⌄") : "·"}</button>
-                  <span className="manager-color-dot" style={{ backgroundColor: category.effective_color }} />
-                  <button type="button" className="category-tree-main" title={category.full_path} onClick={() => selectCategory(category)}><strong>{category.name}</strong><small>{categoryRules.length ? t("manager.ruleSummary", { count: categoryRules.length, mode: categoryRules[0].match_mode }) : t("manager.noRule")}</small></button>
-                  <span className={`category-score ${category.effective_score > 0 ? "is-positive" : category.effective_score < 0 ? "is-negative" : ""}`}>{scoreText(category.effective_score)}</span>
-                  <button type="button" className="manager-rules-link" onClick={() => { setExpandedRules((current) => { const next = new Set(current); if (next.has(category.id)) next.delete(category.id); else next.add(category.id); return next; }); openRules(category.id); }}>{t("manager.rules")}</button>
-                </div>
-                {rulesOpen && categoryRules.length > 0 && <div className="category-rule-chips">{categoryRules.map((rule) => <button type="button" key={rule.id} title={rule.pattern} onClick={() => openRules(category.id)}><span>{sourceShort(rule.match_type)}</span><span>{rule.match_mode === "regex" ? "REGEX" : "SMART"}</span><strong>{rule.pattern}</strong></button>)}</div>}
+    <div className="category-dialog-overlay">
+      <section className="category-dialog" role="dialog" aria-modal="true" aria-labelledby="category-dialog-title">
+        <header className="category-dialog-heading"><div><span className="eyebrow">{t("manager.eyebrow")}</span><h2 id="category-dialog-title">{t("manager.title")}</h2></div><button type="button" className="manager-close" aria-label={t("common.close")} onClick={onClose}>×</button></header>
+        <div className="all-activity-bar"><strong>{t("manager.allActivity")}</strong><span>{t("manager.allActivityStats", { duration: formatDuration(observedMs), apps: appCount, percent: uncategorizedPercent })}</span><small>{t("manager.allActivityHint")}</small></div>
+        {loading ? <div className="manager-loading skeleton" /> : (
+          <div className="category-manager">
+            <aside className="category-master">
+              <div className="category-tree">
+                <div className={`category-special-row ${selectedCategoryId === 0 ? "is-selected" : ""}`}><span className="manager-color-dot" /><button type="button" className="category-special-main" onClick={() => selectCategory(0)}><strong>{t("manager.needsSorting")}</strong><small>{t("common.uncategorized")}</small></button><button type="button" className="manager-rules-link" onClick={() => openRules(0)}>{t("manager.addRule")}</button></div>
+                {visibleCategories.map(({ category, depth }) => {
+                  const childCount = childrenByParent.get(category.id)?.length ?? 0;
+                  const categoryRuleCount = rules.filter((rule) => rule.category_id === category.id).length;
+                  return (
+                    <div className="category-tree-node" key={category.id} style={{ "--tree-indent": `${depth * 20}px` } as CSSProperties}>
+                      <div className={`category-tree-row ${selectedCategoryId === category.id ? "is-selected" : ""}`}>
+                        <button type="button" className="tree-disclosure" disabled={childCount === 0} aria-label={t("manager.toggleChildren", { category: category.name })} onClick={() => setCollapsed((current) => { const next = new Set(current); if (next.has(category.id)) next.delete(category.id); else next.add(category.id); return next; })}>{childCount ? (collapsed.has(category.id) ? "›" : "⌄") : "·"}</button>
+                        <span className="manager-color-dot" style={{ backgroundColor: category.effective_color }} />
+                        <button type="button" className="category-tree-main" title={category.full_path} onClick={() => selectCategory(category.id)}><strong>{category.name}</strong><small title={category.full_path}>{category.full_path}</small></button>
+                        <span className={`category-score ${category.effective_score > 0 ? "is-positive" : category.effective_score < 0 ? "is-negative" : ""}`}>{scoreText(category.effective_score)}</span>
+                        <button type="button" className="manager-rules-link" onClick={() => openRules(category.id)}>{t("manager.rules")} {categoryRuleCount > 0 ? `· ${categoryRuleCount}` : ""}</button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-        <div className="category-master-actions">
-          <button type="button" onClick={() => { setCreatingCategory(true); setEditing(null); setDetailMode("category"); }}>{t("manager.addCategory")}</button>
-          <button type="button" className={detailMode === "all" ? "is-selected" : ""} onClick={() => { setDetailMode("all"); setCreatingCategory(false); setEditing(null); setCreatingRule(false); }}>{t("manager.allRules")}</button>
-        </div>
-      </section>
+              <div className="category-master-actions"><button type="button" onClick={() => { setCategoryDraft({ ...EMPTY_CATEGORY }); setView({ type: "newCategory" }); }}>{t("manager.addCategory")}</button><button type="button" className={view.type === "allRules" ? "is-selected" : ""} onClick={() => { setView({ type: "allRules" }); setRepaintEnabled(false); setOverwriteManual(false); }}>{t("manager.allRules")}</button></div>
+            </aside>
 
-      <div className="category-detail">
-        {detailMode === "all" ? (
-          <>
-            <div className="manager-toolbar"><div><h4>{t("manager.allRules")}</h4><p>{t("manager.ruleCount", { count: rules.length })}</p></div><button type="button" className="manager-add-button" disabled={saving || rules.length === 0} onClick={() => void replayHistory()}>{t("manager.repaintAll")}</button></div>
-            <p className="rule-tiebreak">{t("manager.tieBreak")}</p>
-            {renderRulesList()}
-          </>
-        ) : creatingCategory ? (
-          <><div className="manager-toolbar"><h4>{t("manager.addCategory")}</h4></div>{renderCategoryForm(formCategory)}</>
-        ) : selectedCategory?.id === 0 ? (
-          <div className="needs-sorting-detail"><span className="eyebrow">{t("manager.needsSorting")}</span><h4>{t("common.uncategorized")}</h4><p>{t("manager.uncategorizedHint")}</p>{detailMode === "rules" && creatingRule ? renderRuleForm() : <button type="button" className="manager-submit-button" onClick={() => openRules(0)}>{t("manager.createRule")}</button>}</div>
-        ) : selectedCategory ? (
-          <>
-            <div className="category-detail-heading"><div><span className="eyebrow">{t("manager.category")}</span><h4 title={selectedCategory.full_path}>{selectedCategory.full_path}</h4></div><button type="button" className="manager-delete-button" disabled={saving || (childrenByParent.get(selectedCategory.id)?.length ?? 0) > 0} aria-label={t("manager.deleteCategory", { name: selectedCategory.name })} onClick={() => void removeCategory(selectedCategory)}>🗑</button></div>
-            {detailMode === "category" && editing && renderCategoryForm(editing, editing.id)}
-            <div className="category-rules-detail" ref={rulesSectionRef}>
-              <div className="manager-toolbar"><div><h4>{t("manager.rulesFor", { category: selectedCategory.full_path })}</h4><p>{t("manager.ruleCount", { count: rules.filter((rule) => rule.category_id === selectedCategory.id).length })}</p></div><button type="button" className="manager-add-button" onClick={() => { setCreatingRule(true); setNewRule(emptyRule(selectedCategory.id)); }}>{t("manager.addRule")}</button></div>
-              {creatingRule && renderRuleForm()}
-              {renderRulesList()}
-            </div>
-          </>
-        ) : <p className="manager-empty">{t("manager.noCategories")}</p>}
-      </div>
-      {error && <p className="settings-error manager-error">{error}</p>}
+            <main className="category-detail">
+              <button type="button" className="category-back" onClick={() => setView({ type: "category", categoryId: selectedCategoryId ?? 0 })}>{t("manager.backToCategories")}</button>
+              {view.type === "allRules" && <><div className="manager-toolbar"><div><h3>{t("manager.allRules")}</h3><p>{t("manager.ruleCount", { count: rules.length })}</p></div><button type="button" className="manager-add-button" onClick={() => startRule(0, undefined, "allRules")}>{t("manager.addRule")}</button></div><p className="rule-tiebreak">{t("manager.tieBreak")}</p>{renderRulesList()}<details className="history-repaint"><summary>{t("settings.advanced")}</summary><p>{historyPreview ? t("manager.repaintAffected", { count: historyPreview.changed_segments, duration: formatDuration(historyPreview.changed_duration_ms) }) : t("manager.previewLoading")}</p><label className="rule-toggle-row"><input type="checkbox" checked={overwriteManual} onChange={(event) => setOverwriteManual(event.target.checked)} /><span><strong>{t("manager.repaintManual")}</strong><small>{t("manager.repaintManualHint")}</small></span></label><label className="rule-toggle-row"><input type="checkbox" checked={repaintEnabled} onChange={(event) => setRepaintEnabled(event.target.checked)} /><span><strong>{t("manager.enableRepaint")}</strong><small>{t("manager.enableRepaintHint")}</small></span></label><button type="button" className="manager-submit-button" disabled={saving || !repaintEnabled || !historyPreview} onClick={() => void replayHistory()}>{t("manager.repaintHistory")}</button></details></>}
+              {view.type === "newCategory" && <><div className="manager-toolbar"><h3>{t("manager.addCategory")}</h3></div>{renderCategoryForm(categoryDraft)}</>}
+              {view.type === "newRule" && <><div className="manager-toolbar"><h3>{ruleDraft.id === undefined ? t("manager.addRule") : t("manager.editRule")}</h3></div>{renderRuleForm()}</>}
+              {view.type === "category" && view.categoryId === 0 && <div className="needs-sorting-detail"><span className="eyebrow">{t("manager.needsSorting")}</span><h3>{t("common.uncategorized")}</h3><p>{t("manager.uncategorizedHint")}</p><button type="button" className="manager-submit-button" onClick={() => openRules(0)}>{t("manager.addRule")}</button></div>}
+              {view.type === "category" && selectedCategory && selectedCategory.id !== 0 && <><div className="category-detail-heading"><div><span className="eyebrow">{t("manager.category")}</span><h3 title={selectedCategory.full_path}>{selectedCategory.full_path}</h3></div><button type="button" className="manager-text-danger" disabled={saving || (childrenByParent.get(selectedCategory.id)?.length ?? 0) > 0} onClick={() => void removeCategory(selectedCategory)}>{t("common.delete")}</button></div><div className="category-detail-tabs"><button type="button" className="is-selected">{t("manager.category")}</button><button type="button" onClick={() => openRules(selectedCategory.id)}>{t("manager.rules")}</button></div>{renderCategoryForm(categoryDraft, selectedCategory.id)}</>}
+              {view.type === "rules" && <><div className="manager-toolbar"><div><h3>{t("manager.rulesFor", { category: categoryName(view.categoryId) })}</h3><p>{t("manager.ruleCount", { count: visibleRules.length })}</p></div><button type="button" className="manager-add-button" onClick={() => startRule(view.categoryId)}>{t("manager.addRule")}</button></div>{view.categoryId !== 0 && <div className="category-detail-tabs"><button type="button" onClick={() => selectCategory(view.categoryId)}>{t("manager.category")}</button><button type="button" className="is-selected">{t("manager.rules")}</button></div>}{renderRulesList()}</>}
+              {error && <p className="settings-error manager-error">{error}</p>}
+            </main>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

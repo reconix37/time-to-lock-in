@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -30,11 +31,14 @@ import {
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
+import { parseMiniSettings, type MiniMode, type MiniTextSize } from "./miniSettings";
 import { nextRulePriority, titleRulePattern } from "./classification";
-import { langNames, localeForLang, type Lang, type Translate } from "./i18n";
+import { localizedDuration } from "./duration";
+import { langNames, localeForLang, type Lang } from "./i18n";
 import { I18nProvider, useI18n } from "./i18nContext";
 import "./styles/tokens.css";
 import "./App.css";
+import "./category-manager.css";
 
 interface Segment {
   id: number;
@@ -115,22 +119,6 @@ const EMPTY_STATS: TodayStats = {
   observed_ms: 0,
 };
 
-const DEFAULT_KIND_LABELS: KindLabels = {
-  useful: "Полезное",
-  neutral: "Нейтральное",
-  waste: "Потери",
-  observed: "Наблюдение",
-};
-
-function localizedDuration(milliseconds: number, t: Translate): string {
-  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
-  if (milliseconds > 0 && totalMinutes === 0) return t("duration.lessMinute");
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return t("duration.minutes", { minutes });
-  return minutes === 0 ? t("duration.hours", { hours }) : t("duration.hoursMinutes", { hours, minutes });
-}
-
 function formatTime(timestamp: number, lang: Lang): string {
   return new Intl.DateTimeFormat(localeForLang(lang), {
     hour: "2-digit",
@@ -190,6 +178,12 @@ function groupSegments(segments: Segment[]): DisplaySession[] {
 function DashboardView() {
   const { lang, setLang, t } = useI18n();
   const formatDuration = useCallback((milliseconds: number) => localizedDuration(milliseconds, t), [t]);
+  const defaultKindLabels: KindLabels = {
+    useful: t("mini.defaultUseful"),
+    neutral: t("mini.defaultNeutral"),
+    waste: t("mini.defaultWaste"),
+    observed: t("common.accounted"),
+  };
   const [segments, setSegments] = useState<Segment[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [stats, setStats] = useState<TodayStats>(EMPTY_STATS);
@@ -223,6 +217,7 @@ function DashboardView() {
   const [overwriteManual, setOverwriteManual] = useState(false);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheck>("unknown");
@@ -231,18 +226,25 @@ function DashboardView() {
   const [updateDownloading, setUpdateDownloading] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const [updateInstallError, setUpdateInstallError] = useState<string | null>(null);
+  const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const startupUpdateCheckStarted = useRef(false);
   const [extensionChromeId, setExtensionChromeId] = useState("");
   const [extensionEdgeId, setExtensionEdgeId] = useState("");
-  const [kindLabelUseful, setKindLabelUseful] = useState(DEFAULT_KIND_LABELS.useful);
-  const [kindLabelNeutral, setKindLabelNeutral] = useState(DEFAULT_KIND_LABELS.neutral);
-  const [kindLabelWaste, setKindLabelWaste] = useState(DEFAULT_KIND_LABELS.waste);
-  const [kindLabelObserved, setKindLabelObserved] = useState(DEFAULT_KIND_LABELS.observed);
+  const [kindLabelUseful, setKindLabelUseful] = useState(defaultKindLabels.useful);
+  const [kindLabelNeutral, setKindLabelNeutral] = useState(defaultKindLabels.neutral);
+  const [kindLabelWaste, setKindLabelWaste] = useState(defaultKindLabels.waste);
+  const [kindLabelObserved, setKindLabelObserved] = useState(defaultKindLabels.observed);
   const [usefulGoalMin, setUsefulGoalMin] = useState("120");
   const [wasteLimitMin, setWasteLimitMin] = useState("60");
   const [observedMin, setObservedMin] = useState("60");
   const [hourlyRate, setHourlyRate] = useState("");
   const [currency, setCurrency] = useState("₴");
+  const [miniMode, setMiniMode] = useState<MiniMode>("auto");
+  const [miniTextSize, setMiniTextSize] = useState<MiniTextSize>("normal");
+  const [miniPrivacyNow, setMiniPrivacyNow] = useState(false);
+  const [showMiniAtLaunch, setShowMiniAtLaunch] = useState(false);
+  const [miniOpacity, setMiniOpacity] = useState(100);
+  const [miniCornerPinned, setMiniCornerPinned] = useState(false);
   const [challengeInput, setChallengeInput] = useState("");
   const [challengeError, setChallengeError] = useState<string | null>(null);
   const [challengeImported, setChallengeImported] = useState(false);
@@ -431,11 +433,11 @@ function DashboardView() {
     : undefined;
   const displaySessions = useMemo(() => groupSegments(segments), [segments]);
   const kindLabels = useMemo<KindLabels>(() => ({
-    useful: settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful,
-    neutral: settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral,
-    waste: settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste,
-    observed: settings.kind_label_observed ?? DEFAULT_KIND_LABELS.observed,
-  }), [settings]);
+    useful: settings.kind_label_useful ?? defaultKindLabels.useful,
+    neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
+    waste: settings.kind_label_waste ?? defaultKindLabels.waste,
+    observed: settings.kind_label_observed ?? defaultKindLabels.observed,
+  }), [settings, t]);
   const appTimeline = useMemo<AppTimelineItem[]>(() => apps
     .map((app) => {
       const appSegments = segments.filter((segment) =>
@@ -604,15 +606,22 @@ function DashboardView() {
   async function openSettings() {
     setExtensionChromeId(settings.extension_chrome_id ?? "");
     setExtensionEdgeId(settings.extension_edge_id ?? "");
-    setKindLabelUseful(settings.kind_label_useful ?? DEFAULT_KIND_LABELS.useful);
-    setKindLabelNeutral(settings.kind_label_neutral ?? DEFAULT_KIND_LABELS.neutral);
-    setKindLabelWaste(settings.kind_label_waste ?? DEFAULT_KIND_LABELS.waste);
-    setKindLabelObserved(settings.kind_label_observed ?? DEFAULT_KIND_LABELS.observed);
+    setKindLabelUseful(settings.kind_label_useful ?? defaultKindLabels.useful);
+    setKindLabelNeutral(settings.kind_label_neutral ?? defaultKindLabels.neutral);
+    setKindLabelWaste(settings.kind_label_waste ?? defaultKindLabels.waste);
+    setKindLabelObserved(settings.kind_label_observed ?? defaultKindLabels.observed);
     setUsefulGoalMin(settings.useful_goal_min ?? "120");
     setWasteLimitMin(settings.waste_limit_min ?? "60");
     setObservedMin(settings.observed_min ?? "60");
     setHourlyRate(settings.hourly_rate ?? "");
     setCurrency(settings.currency ?? "₴");
+    const miniSettings = parseMiniSettings(settings);
+    setMiniMode(miniSettings.mode);
+    setMiniTextSize(miniSettings.textSize);
+    setMiniPrivacyNow(miniSettings.privacyNow);
+    setShowMiniAtLaunch(miniSettings.showAtLaunch);
+    setMiniOpacity(miniSettings.opacity);
+    setMiniCornerPinned(miniSettings.cornerPinned);
     setChallengeInput("");
     setChallengeError(null);
     setChallengeImported(false);
@@ -621,6 +630,8 @@ function DashboardView() {
     setTokenRevealed(false);
     setSettingsError(null);
     setSettingsOpen(true);
+    setInstalledVersion(null);
+    void getVersion().then(setInstalledVersion).catch(() => setInstalledVersion(null));
     try {
       setDbSizeMb(await invoke<number>("get_db_size_mb"));
     } catch (reason: unknown) {
@@ -711,6 +722,11 @@ function DashboardView() {
         invoke<void>("set_setting", { key: "kind_label_neutral", value: nextKindLabels.neutral }),
         invoke<void>("set_setting", { key: "kind_label_waste", value: nextKindLabels.waste }),
         invoke<void>("set_setting", { key: "kind_label_observed", value: nextKindLabels.observed }),
+        invoke<void>("set_setting", { key: "mini_mode", value: miniMode }),
+        invoke<void>("set_setting", { key: "mini_text_size", value: miniTextSize }),
+        invoke<void>("set_setting", { key: "mini_privacy_now", value: miniPrivacyNow ? "1" : "0" }),
+        invoke<void>("set_setting", { key: "tray_only", value: showMiniAtLaunch ? "0" : "1" }),
+        invoke<void>("set_setting", { key: "mini_opacity", value: String(miniOpacity) }),
       ]);
       setSettings((current) => ({
         ...current,
@@ -725,6 +741,11 @@ function DashboardView() {
         observed_min: observedMin,
         hourly_rate: hourlyRate.replace(",", "."),
         currency,
+        mini_mode: miniMode,
+        mini_text_size: miniTextSize,
+        mini_privacy_now: miniPrivacyNow ? "1" : "0",
+        tray_only: showMiniAtLaunch ? "0" : "1",
+        mini_opacity: String(miniOpacity),
       }));
       setSettingsOpen(false);
       setError(null);
@@ -1306,6 +1327,7 @@ function DashboardView() {
             <div className="settings-layout">
               <nav className="settings-nav" aria-label={t("settings.sections")}>
                 <a href="#appearance-settings">{t("settings.appearance")}</a>
+                <a href="#tracking-settings">{t("settings.tracking")}</a>
                 <a href="#classification-settings">{t("settings.categoriesRules")}</a>
                 <a href="#goal-settings">{t("settings.dayScore")}</a>
                 <a href="#mini-settings">{t("settings.miniWindow")}</a>
@@ -1313,7 +1335,7 @@ function DashboardView() {
                 <a href="#challenge-settings">{t("settings.challenge")}</a>
                 <a href="#labels-settings">{t("settings.kindLabels")}</a>
                 <a href="#startup-settings">{t("settings.startup")}</a>
-                <a href="#updates-settings">{t("updates.title")}</a>
+                <a href="#about-settings">{t("settings.about")}</a>
               </nav>
               <div className="settings-scroll">
               <section id="appearance-settings" className="settings-section" aria-labelledby="appearance-settings-title">
@@ -1338,22 +1360,23 @@ function DashboardView() {
                 </div>
               </section>
 
+              <section id="tracking-settings" className="settings-section" aria-labelledby="tracking-settings-title">
+                <div className="settings-section-heading">
+                  <h3 id="tracking-settings-title">{t("settings.tracking")}</h3>
+                  <span>{t("settings.trackingHint")}</span>
+                </div>
+                <label className="settings-toggle settings-toggle-explained">
+                  <input type="checkbox" checked={!paused} onChange={() => void toggleTracking()} />
+                  <span><strong>{t("settings.trackingEnabled")}</strong><small>{t("dashboard.trackingStoppedHint")}</small></span>
+                </label>
+              </section>
+
               <section id="classification-settings" className="settings-section settings-classification-section" aria-labelledby="classification-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="classification-settings-title">{t("settings.categoriesRules")}</h3>
                   <span>{t("settings.categoriesRulesHint")}</span>
                 </div>
-                <CategoryManager
-                  open={settingsOpen}
-                  categories={categories}
-                  kindLabels={kindLabels}
-                  formatDuration={formatDuration}
-                  observedMs={stats.observed_ms}
-                  appCount={apps.length}
-                  uncategorizedMs={segments.filter((segment) => segment.category_id === 0).reduce((total, segment) => total + Math.max(0, segment.ts_end - segment.ts_start), 0)}
-                  onCategoriesChange={setCategories}
-                  onDashboardRefresh={loadDashboard}
-                />
+                <button type="button" className="settings-manager-button" onClick={() => { setSettingsOpen(false); setCategoryManagerOpen(true); }}>{t("manager.open")}</button>
               </section>
 
               <section id="goal-settings" className="settings-section" aria-labelledby="goal-settings-title">
@@ -1384,6 +1407,34 @@ function DashboardView() {
                 <div className="settings-section-heading">
                   <h3 id="mini-settings-title">{t("settings.miniWindow")}</h3>
                   <span>{t("settings.miniWindowHint")}</span>
+                </div>
+                <div className="mini-settings-grid">
+                  <label className="settings-field">
+                    <span>{t("mini.settingsMode")}</span>
+                    <select className="with-chevron" value={miniMode} onChange={(event) => setMiniMode(event.target.value as MiniMode)}>
+                      <option value="auto">{t("mini.settingsModeAuto")}</option>
+                      <option value="compact">{t("mini.settingsModeCompact")}</option>
+                      <option value="detailed">{t("mini.settingsModeDetailed")}</option>
+                    </select>
+                  </label>
+                  <label className="settings-field">
+                    <span>{t("mini.settingsText")}</span>
+                    <select className="with-chevron" value={miniTextSize} onChange={(event) => setMiniTextSize(event.target.value as MiniTextSize)}>
+                      <option value="normal">{t("mini.settingsTextNormal")}</option>
+                      <option value="large">{t("mini.settingsTextLargeGrows")}</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="settings-toggle"><input type="checkbox" checked={miniPrivacyNow} onChange={(event) => setMiniPrivacyNow(event.target.checked)} /><span>{t("mini.settingsPrivacy")}</span></label>
+                <label className="settings-toggle"><input type="checkbox" checked={showMiniAtLaunch || miniCornerPinned} disabled={miniCornerPinned} onChange={(event) => setShowMiniAtLaunch(event.target.checked)} /><span>{miniCornerPinned ? t("mini.settingsLaunchCorner") : t("mini.settingsLaunch")}</span></label>
+                <label className="settings-field mini-opacity-field">
+                  <span>{t("mini.settingsOpacity")} · {miniOpacity}%</span>
+                  <input type="range" min="60" max="100" step="5" value={miniOpacity} onChange={(event) => setMiniOpacity(Number(event.target.value))} />
+                </label>
+                <div className="mini-settings-actions">
+                  <button type="button" onClick={() => void invoke("show_mini")}>{t("settings.miniShow")}</button>
+                  <button type="button" onClick={() => void invoke("minimize_mini")}>{t("mini.minimize")}</button>
+                  <button type="button" onClick={() => void invoke("hide_mini")}>{t("mini.hideToTray")}</button>
                 </div>
                 <p className="settings-hint">{t("settings.miniHelp")}</p>
               </section>
@@ -1423,19 +1474,19 @@ function DashboardView() {
                 </div>
                 <div className="kind-label-grid">
                   <label className="settings-field">
-                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.useful })}</span>
+                    <span>{t("settings.kindLabelName", { label: defaultKindLabels.useful })}</span>
                     <input autoFocus required maxLength={80} value={kindLabelUseful} onChange={(event) => setKindLabelUseful(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.neutral })}</span>
+                    <span>{t("settings.kindLabelName", { label: defaultKindLabels.neutral })}</span>
                     <input required maxLength={80} value={kindLabelNeutral} onChange={(event) => setKindLabelNeutral(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.waste })}</span>
+                    <span>{t("settings.kindLabelName", { label: defaultKindLabels.waste })}</span>
                     <input required maxLength={80} value={kindLabelWaste} onChange={(event) => setKindLabelWaste(event.target.value)} />
                   </label>
                   <label className="settings-field">
-                    <span>{t("settings.kindLabelName", { label: DEFAULT_KIND_LABELS.observed })}</span>
+                    <span>{t("settings.kindLabelName", { label: defaultKindLabels.observed })}</span>
                     <input required maxLength={80} value={kindLabelObserved} onChange={(event) => setKindLabelObserved(event.target.value)} />
                   </label>
                 </div>
@@ -1525,11 +1576,16 @@ function DashboardView() {
                 </label>
               </section>
 
-              <section id="updates-settings" className="settings-section" aria-labelledby="updates-settings-title">
+              <section id="about-settings" className="settings-section" aria-labelledby="about-settings-title">
                 <div className="settings-section-heading">
-                  <h3 id="updates-settings-title">{t("updates.title")}</h3>
+                  <h3 id="about-settings-title">{t("settings.about")}</h3>
                   <span>{t("updates.autoCheckNote")}</span>
                 </div>
+                {installedVersion && (
+                  <div className="update-status">
+                    <span>{t("settings.installedVersion", { version: installedVersion })}</span>
+                  </div>
+                )}
                 {updateCheck === "available" && updateInfo && (
                   <div className="update-available">
                     <span>{t("updates.available", { version: updateInfo.version })}</span>
@@ -1596,6 +1652,18 @@ function DashboardView() {
           </section>
         </div>
       )}
+      <CategoryManager
+        open={categoryManagerOpen}
+        categories={categories}
+        kindLabels={kindLabels}
+        formatDuration={formatDuration}
+        observedMs={stats.observed_ms}
+        appCount={apps.length}
+        uncategorizedMs={segments.filter((segment) => segment.category_id === 0 && (segment.status === "active" || segment.status === "crashed")).reduce((total, segment) => total + Math.max(0, segment.ts_end - segment.ts_start), 0)}
+        onClose={() => { setCategoryManagerOpen(false); setSettingsOpen(true); }}
+        onCategoriesChange={setCategories}
+        onDashboardRefresh={loadDashboard}
+      />
     </main>
   );
 }

@@ -1,19 +1,27 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
-const large = new URLSearchParams(window.location.search).get("large") === "1";
+const params = new URLSearchParams(window.location.search);
+const large = params.get("large") === "1";
+const requestedLanguage = params.get("lang");
+const language = requestedLanguage === "ua" || requestedLanguage === "en" ? requestedLanguage : "ru";
+const kindLabels = {
+  ru: { useful: "Заебись с очень длинной меткой", neutral: "Нейтрально", waste: "Пиздец" },
+  ua: { useful: "Корисне з дуже довгою міткою", neutral: "Нейтральне", waste: "Втрати" },
+  en: { useful: "Useful with a very long label", neutral: "Neutral", waste: "Waste" },
+}[language];
 mockWindows("mini");
 mockIPC((command) => {
   if (command === "get_settings") return {
-    language: "ru",
+    language,
     mini_mode: "auto",
     mini_text_size: large ? "large" : "normal",
     mini_pinned: "1",
     mini_privacy_now: "0",
+    mini_opacity: "100",
     tray_only: "0",
-    mini_observed_explained_v1: "1",
-    kind_label_useful: "Заебись с очень длинной меткой",
-    kind_label_neutral: "Нейтрально",
-    kind_label_waste: "Пиздец",
+    kind_label_useful: kindLabels.useful,
+    kind_label_neutral: kindLabels.neutral,
+    kind_label_waste: kindLabels.waste,
   };
   if (command === "get_progress_overview") return {
     today: {
@@ -54,12 +62,32 @@ mockIPC((command) => {
     is_uncategorized: false,
   };
   if (command === "get_tracking_paused") return false;
-  if (command === "mini_hourly") return Array.from({ length: 12 }, (_, index) => ({
-    hour_ts: Date.now() - (11 - index) * 3_600_000,
-    useful_ms: index % 2 === 0 ? 25 * 60_000 : 10 * 60_000,
-    neutral_ms: 5 * 60_000,
-    waste_ms: index % 3 === 0 ? 8 * 60_000 : 0,
-  }));
+  if (command === "get_mini_state") return {
+    pinned: true,
+    corner: null,
+    resizable: true,
+    position_x: 0,
+    position_y: 0,
+  };
+  if (command === "get_today_scoring") return {
+    total_score: -13.7,
+    productive_percent: 40.5,
+    top_productive: [
+      { category_id: 2, name: "Video", full_path: "Work > Video", effective_color: "#286983", duration_ms: 102 * 60_000, points: 5.8 },
+      { category_id: 4, name: "3D", full_path: "Work > 3D", effective_color: "#56949f", duration_ms: 44 * 60_000, points: 1.4 },
+    ],
+    top_distracting: [
+      { category_id: 3, name: "Socials", full_path: "Waste > Socials", effective_color: "#b4637a", duration_ms: 58 * 60_000, points: -18.7 },
+      { category_id: 5, name: "Games", full_path: "Waste > Games", effective_color: "#907aa9", duration_ms: 31 * 60_000, points: -2.2 },
+    ],
+    top_categories: [
+      { category_id: 2, name: "Video", full_path: "Work > Video", effective_color: "#286983", duration_ms: 102 * 60_000, points: 5.8 },
+      { category_id: 3, name: "Socials", full_path: "Waste > Socials", effective_color: "#b4637a", duration_ms: 58 * 60_000, points: -18.7 },
+      { category_id: 4, name: "3D", full_path: "Work > 3D", effective_color: "#56949f", duration_ms: 44 * 60_000, points: 1.4 },
+      { category_id: 5, name: "Games", full_path: "Waste > Games", effective_color: "#907aa9", duration_ms: 31 * 60_000, points: -2.2 },
+    ],
+  };
+  if (["resize_mini", "save_mini_geometry", "show_dashboard", "start_mini_drag", "minimize_mini", "hide_mini"].includes(command)) return undefined;
   return undefined;
 }, { shouldMockEvents: true });
 
