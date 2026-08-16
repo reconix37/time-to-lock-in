@@ -9,13 +9,14 @@ CREATE TABLE IF NOT EXISTS categories (
     kind           TEXT    NOT NULL DEFAULT 'neutral' CHECK (kind IN ('useful','neutral','waste')),
     goal_multiplier REAL   NOT NULL DEFAULT 1.0, -- только для локальных целей, НЕ в Public XP
     created_at     INTEGER NOT NULL,
-    sort_order     INTEGER NOT NULL DEFAULT 0
+    sort_order     INTEGER NOT NULL DEFAULT 0,
+    priority       INTEGER NOT NULL DEFAULT 999 -- 1 = перехватывает названия первой
 );
 
 INSERT OR IGNORE INTO categories
-    (id, name, color, icon, kind, goal_multiplier, created_at, sort_order)
+    (id, name, color, icon, kind, goal_multiplier, created_at, sort_order, priority)
 VALUES
-    (0, 'Без категории', '#9893a5', '', 'neutral', 1.0, 0, -1);
+    (0, 'Без категории', '#9893a5', '', 'neutral', 1.0, 0, -1, 999);
 
 CREATE TABLE IF NOT EXISTS rules (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -16,6 +16,7 @@ pub struct RuleDefinition {
     pub pattern: String,
     pub category_id: i64,
     pub priority: i64,
+    pub category_priority: i64,
     pub match_mode: String,
     pub case_insensitive: bool,
 }
@@ -99,12 +100,14 @@ impl RuleSet {
     pub fn load(connection: &Connection) -> Result<Self, String> {
         let mut statement = connection
             .prepare(
-                "SELECT id, match_type, pattern, category_id, priority,
-                        match_mode, case_insensitive
-                 FROM rules
-                 ORDER BY priority DESC,
-                          CASE match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
-                          id ASC",
+                "SELECT r.id, r.match_type, r.pattern, r.category_id, r.priority,
+                        r.match_mode, r.case_insensitive, c.priority
+                 FROM rules r
+                 JOIN categories c ON c.id = r.category_id
+                 ORDER BY c.priority ASC,
+                          r.priority DESC,
+                          CASE r.match_type WHEN 'domain' THEN 3 WHEN 'title' THEN 2 ELSE 1 END DESC,
+                          r.id ASC",
             )
             .map_err(|error| error.to_string())?;
         let definitions = statement
@@ -115,6 +118,7 @@ impl RuleSet {
                     pattern: row.get(2)?,
                     category_id: row.get(3)?,
                     priority: row.get(4)?,
+                    category_priority: row.get(7)?,
                     match_mode: row.get(5)?,
                     case_insensitive: row.get::<_, i64>(6)? == 1,
                 })
@@ -132,9 +136,10 @@ impl RuleSet {
                 "title" => 2,
                 _ => 1,
             };
-            right
-                .priority
-                .cmp(&left.priority)
+            // Приоритет категории (1 = перехватывает первой) — первичный ключ сортировки.
+            left.category_priority
+                .cmp(&right.category_priority)
+                .then_with(|| right.priority.cmp(&left.priority))
                 .then_with(|| target_rank(right).cmp(&target_rank(left)))
                 .then_with(|| left.id.cmp(&right.id))
         });
@@ -424,6 +429,7 @@ mod tests {
             pattern: pattern.to_string(),
             category_id: category,
             priority: 0,
+            category_priority: 0,
             match_mode: "legacy".to_string(),
             case_insensitive: true,
         }
@@ -531,11 +537,39 @@ mod tests {
     }
 
     #[test]
+    fn lower_category_priority_claims_name_first() {
+        // Категория с приоритетом 1 перехватывает названия раньше категории с
+        // приоритетом 2 — даже если у той правило приоритетнее и специфичнее
+        // (кейс Эдуарда: «AI Studio» = AI 3D, а не Google).
+        let mut first_category = rule(1, "title", "AI Studio", 1);
+        first_category.category_priority = 1;
+        let mut second_category = rule(2, "exe", "google.exe", 2);
+        second_category.category_priority = 2;
+        second_category.priority = 10;
+        let rules = RuleSet::compile(vec![second_category, first_category]).expect("rules");
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "google.exe",
+                title: "AI Studio — Blender Course",
+                domain: "",
+            }),
+            1
+        );
+    }
+
+    #[test]
     fn revision_change_reclassifies_unchanged_activity() {
         let connection = Connection::open_in_memory().expect("database");
         connection
             .execute_batch(
                 "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE categories (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#286983',
+                    icon TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'neutral',
+                    goal_multiplier REAL NOT NULL DEFAULT 1.0, created_at INTEGER NOT NULL DEFAULT 0,
+                    sort_order INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 999
+                 );
+                 INSERT INTO categories (id, name) VALUES (4, 'Cat4'), (9, 'Cat9');
                  CREATE TABLE rules (
                     id INTEGER PRIMARY KEY, match_type TEXT NOT NULL, pattern TEXT NOT NULL,
                     category_id INTEGER NOT NULL, priority INTEGER NOT NULL,

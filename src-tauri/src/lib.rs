@@ -779,6 +779,7 @@ struct Category {
     kind: String,
     goal_multiplier: f64,
     sort_order: i64,
+    priority: i64,
     parent_id: Option<i64>,
     score: f64,
     inherit_color: bool,
@@ -798,6 +799,7 @@ impl From<db::CategoryRecord> for Category {
             kind: category.kind,
             goal_multiplier: category.goal_multiplier,
             sort_order: category.sort_order,
+            priority: category.priority,
             parent_id: category.parent_id,
             score: category.score,
             inherit_color: category.inherit_color,
@@ -978,6 +980,7 @@ fn create_category(
     score: f64,
     inherit_color: bool,
     inherit_score: bool,
+    priority: i64,
 ) -> Result<Category, String> {
     validate_category_icon(&icon)?;
     db::create_category(db::CategoryValues {
@@ -989,6 +992,7 @@ fn create_category(
         score,
         inherit_color,
         inherit_score,
+        priority,
     })
     .map(Category::from)
 }
@@ -1004,6 +1008,7 @@ fn update_category(
     score: f64,
     inherit_color: bool,
     inherit_score: bool,
+    priority: i64,
 ) -> Result<Category, String> {
     validate_category_icon(&icon)?;
     db::update_category(
@@ -1017,6 +1022,7 @@ fn update_category(
             score,
             inherit_color,
             inherit_score,
+            priority,
         },
     )
     .map(Category::from)
@@ -1139,6 +1145,7 @@ fn create_rule(
         pattern: normalized.clone(),
         category_id,
         priority,
+        category_priority: 0,
         match_mode: match_mode.clone(),
         case_insensitive,
     }])?;
@@ -1222,6 +1229,7 @@ fn update_rule(
         pattern: normalized.clone(),
         category_id,
         priority,
+        category_priority: 0,
         match_mode: match_mode.clone(),
         case_insensitive,
     }])?;
@@ -1291,6 +1299,7 @@ fn preview_rule(
             pattern: rules::normalize_pattern(&pattern),
             category_id: 1,
             priority: 0,
+            category_priority: 0,
             match_mode,
             case_insensitive,
         },

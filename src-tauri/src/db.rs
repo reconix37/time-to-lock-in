@@ -13,6 +13,7 @@ const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.s
 const MIGRATION_005: &str = include_str!("../migrations/005_categories_scoring.sql");
 const MIGRATION_006: &str = include_str!("../migrations/006_rule_uniqueness.sql");
 const MIGRATION_007: &str = include_str!("../migrations/007_rule_match_any.sql");
+const MIGRATION_008: &str = include_str!("../migrations/008_category_priority.sql");
 
 const TITLE_NOISE_WORDS: &[&str] = &[
     "смотреть",
@@ -103,6 +104,7 @@ pub struct CategoryRecord {
     pub kind: String,
     pub goal_multiplier: f64,
     pub sort_order: i64,
+    pub priority: i64,
     pub parent_id: Option<i64>,
     pub score: f64,
     pub inherit_color: bool,
@@ -332,6 +334,12 @@ pub fn initialize() -> Result<(), String> {
             .execute_batch(MIGRATION_007)
             .map_err(|error| error.to_string())?;
     }
+    if previous_version < 8 && previous_version > 0 {
+        // Fresh-установки получают priority из обновлённого 001_init.sql.
+        transaction
+            .execute_batch(MIGRATION_008)
+            .map_err(|error| error.to_string())?;
+    }
     if previous_version < 4 {
         transaction
             .execute_batch(MIGRATION_004)
@@ -381,7 +389,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=6;")
+        .execute_batch("PRAGMA user_version=8;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -501,6 +509,7 @@ pub struct CategoryValues<'a> {
     pub score: f64,
     pub inherit_color: bool,
     pub inherit_score: bool,
+    pub priority: i64,
 }
 
 fn validate_category_values(values: CategoryValues<'_>) -> Result<(), String> {
@@ -527,6 +536,9 @@ fn validate_category_values(values: CategoryValues<'_>) -> Result<(), String> {
     }
     if values.parent_id.is_some_and(|parent_id| parent_id <= 0) {
         return Err("Недопустимый родитель категории".to_string());
+    }
+    if !(1..=9999).contains(&values.priority) {
+        return Err("Приоритет должен быть от 1 до 9999".to_string());
     }
     Ok(())
 }
@@ -585,16 +597,16 @@ pub fn list_categories(connection: &Connection) -> Result<Vec<CategoryRecord>, S
     let mut statement = connection
         .prepare(
             "WITH RECURSIVE category_tree (
-                id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+                id, name, color, icon, kind, goal_multiplier, sort_order, priority, parent_id,
                 score, inherit_color, inherit_score, effective_color, effective_score,
                 full_path, depth
-             ) AS (
-                SELECT id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+            ) AS (
+                SELECT id, name, color, icon, kind, goal_multiplier, sort_order, priority, parent_id,
                        score, inherit_color, inherit_score, color, score, name, 1
                 FROM categories WHERE parent_id IS NULL
                 UNION ALL
                 SELECT child.id, child.name, child.color, child.icon, child.kind,
-                       child.goal_multiplier, child.sort_order, child.parent_id, child.score,
+                       child.goal_multiplier, child.sort_order, child.priority, child.parent_id, child.score,
                        child.inherit_color, child.inherit_score,
                        CASE WHEN child.inherit_color = 1 THEN parent.effective_color ELSE child.color END,
                        CASE WHEN child.inherit_score = 1 THEN parent.effective_score ELSE child.score END,
@@ -602,7 +614,7 @@ pub fn list_categories(connection: &Connection) -> Result<Vec<CategoryRecord>, S
                 FROM categories child
                 JOIN category_tree parent ON child.parent_id = parent.id
              )
-             SELECT id, name, color, icon, kind, goal_multiplier, sort_order, parent_id,
+             SELECT id, name, color, icon, kind, goal_multiplier, sort_order, priority, parent_id,
                     score, inherit_color, inherit_score, effective_color, effective_score,
                     full_path
              FROM category_tree ORDER BY full_path COLLATE NOCASE",
@@ -618,13 +630,14 @@ pub fn list_categories(connection: &Connection) -> Result<Vec<CategoryRecord>, S
                 kind: row.get(4)?,
                 goal_multiplier: row.get(5)?,
                 sort_order: row.get(6)?,
-                parent_id: row.get(7)?,
-                score: row.get(8)?,
-                inherit_color: row.get::<_, i64>(9)? == 1,
-                inherit_score: row.get::<_, i64>(10)? == 1,
-                effective_color: row.get(11)?,
-                effective_score: row.get(12)?,
-                full_path: row.get(13)?,
+                priority: row.get(7)?,
+                parent_id: row.get(8)?,
+                score: row.get(9)?,
+                inherit_color: row.get::<_, i64>(10)? == 1,
+                inherit_score: row.get::<_, i64>(11)? == 1,
+                effective_color: row.get(12)?,
+                effective_score: row.get(13)?,
+                full_path: row.get(14)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -669,9 +682,9 @@ pub fn create_category(values: CategoryValues<'_>) -> Result<CategoryRecord, Str
     connection
         .execute(
             "INSERT INTO categories (
-                name, color, icon, kind, goal_multiplier, created_at, sort_order,
+                name, color, icon, kind, goal_multiplier, created_at, sort_order, priority,
                 parent_id, score, inherit_color, inherit_score
-             ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 normalized_name,
                 values.color.to_lowercase(),
@@ -679,6 +692,7 @@ pub fn create_category(values: CategoryValues<'_>) -> Result<CategoryRecord, Str
                 values.kind,
                 now_ms(),
                 sort_order,
+                values.priority,
                 values.parent_id,
                 values.score,
                 i64::from(values.inherit_color),
@@ -695,13 +709,21 @@ pub fn update_category(id: i64, values: CategoryValues<'_>) -> Result<CategoryRe
     }
     validate_category_values(values)?;
     let normalized_name = values.name.trim();
-    let connection = open()?;
+    let mut connection = open()?;
     validate_category_tree(&connection, Some(id), values.parent_id)?;
+    let previous_priority = connection
+        .query_row(
+            "SELECT priority FROM categories WHERE id = ?1",
+            [id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
     let updated = connection
         .execute(
             "UPDATE categories SET name = ?1, color = ?2, icon = ?3, kind = ?4, parent_id = ?5,
-                    score = ?6, inherit_color = ?7, inherit_score = ?8
-             WHERE id = ?9",
+                    score = ?6, inherit_color = ?7, inherit_score = ?8, priority = ?9
+             WHERE id = ?10",
             params![
                 normalized_name,
                 values.color.to_lowercase(),
@@ -711,12 +733,20 @@ pub fn update_category(id: i64, values: CategoryValues<'_>) -> Result<CategoryRe
                 values.score,
                 i64::from(values.inherit_color),
                 i64::from(values.inherit_score),
+                values.priority,
                 id,
             ],
         )
         .map_err(|error| error.to_string())?;
     if updated == 0 {
         return Err("Категория не найдена".to_string());
+    }
+    if previous_priority != Some(values.priority) {
+        // Приоритет категории меняет порядок перехвата — обновляем кэш правил
+        // и перекрашиваем историю (не-manual сегменты), иначе старые сегменты
+        // остаются в прежних категориях.
+        bump_rules_revision(&connection)?;
+        reclassify_history(&mut connection, false, None, None)?;
     }
     category_by_id(&connection, id)
 }
@@ -959,6 +989,7 @@ fn reclassification_changes(
                 pattern: pattern.to_string(),
                 category_id: 1,
                 priority: 0,
+                category_priority: 0,
                 match_mode: "legacy".to_string(),
                 case_insensitive: true,
             }])
@@ -1100,6 +1131,7 @@ pub fn classification_match_stats_with_mode(
         pattern: pattern.trim().to_string(),
         category_id: 1,
         priority: 0,
+        category_priority: 0,
         match_mode: match_mode.to_string(),
         case_insensitive,
     }])?;
@@ -1824,6 +1856,42 @@ mod tests {
                 .expect("rule count"),
             2,
         );
+    }
+
+    #[test]
+    fn migration_008_adds_category_priority_with_default_999() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "CREATE TABLE categories (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name           TEXT    NOT NULL UNIQUE,
+                    color          TEXT    NOT NULL,
+                    icon           TEXT    NOT NULL DEFAULT '',
+                    kind           TEXT    NOT NULL DEFAULT 'neutral',
+                    goal_multiplier REAL   NOT NULL DEFAULT 1.0,
+                    created_at     INTEGER NOT NULL,
+                    sort_order     INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO categories (name, color, kind, created_at, sort_order)
+                 VALUES ('Work', '#286983', 'useful', 0, 0);",
+            )
+            .expect("pre-v8 schema");
+
+        connection.execute_batch(MIGRATION_008).expect("migration");
+
+        let priority: i64 = connection
+            .query_row(
+                "SELECT priority FROM categories WHERE name = 'Work'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("priority column");
+        assert_eq!(priority, 999);
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version, 8);
     }
 
     #[test]
