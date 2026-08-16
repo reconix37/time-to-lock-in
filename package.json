@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:icons": "node -e \"const fs=require('fs');const ts=fs.readFileSync('src/components/CategoryIcon.tsx','utf8').match(/CATEGORY_ICONS: Record<string, JSX\\.Element> = \\{([\\s\\S]*?)\\n\\};/)[1];const rs=fs.readFileSync('src-tauri/src/lib.rs','utf8').match(/const CATEGORY_ICONS: &\\[&str\\] = &\\[([\\s\\S]*?)\\n\\];/)[1];const front=[...ts.matchAll(/^  \\\"([^\\\"]+)\\\":/gm)].map(x=>x[1]);const back=[...rs.matchAll(/\\\"([^\\\"]+)\\\"/g)].map(x=>x[1]);if(JSON.stringify(front)!==JSON.stringify(back)){console.error({front,back});process.exit(1)}console.log('Category icon registries match:',front.join(', '))\"",
     "preview": "vite preview",
     "tauri": "tauri"
   },

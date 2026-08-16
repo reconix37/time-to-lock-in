@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { TodayScoring } from "./components/ScorePanel";
+import { CategoryMark } from "./components/CategoryIcon";
 import { localizedDuration } from "./duration";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
@@ -132,7 +133,7 @@ function MiniTopCategories({ scoring }: { scoring: TodayScoring | null }) {
       <span className="mini-top-heading mini-top-heading-expanded">{t("mini.topFourCategories")}</span>
       {categories.length === 0 ? <span className="mini-score-empty">{t("mini.noData")}</span> : categories.map((category) => (
         <div className="mini-top-category" key={category.category_id} title={category.full_path}>
-          <span className="mini-score-dot" style={{ backgroundColor: category.effective_color }} />
+          <CategoryMark icon={category.icon} color={category.effective_color} compact />
           <EllipsizedText text={category.full_path} />
           <strong className={category.points > 0 ? "is-positive" : category.points < 0 ? "is-negative" : ""}>{formatScore(category.points)}</strong>
         </div>

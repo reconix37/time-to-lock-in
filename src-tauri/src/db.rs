@@ -117,6 +117,7 @@ pub struct ScoringCategoryRecord {
     pub name: String,
     pub full_path: String,
     pub effective_color: String,
+    pub icon: String,
     pub duration_ms: i64,
     pub points: f64,
 }
@@ -488,6 +489,7 @@ pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64
 pub struct CategoryValues<'a> {
     pub name: &'a str,
     pub color: &'a str,
+    pub icon: &'a str,
     pub kind: &'a str,
     pub parent_id: Option<i64>,
     pub score: f64,
@@ -606,7 +608,7 @@ pub fn list_categories(connection: &Connection) -> Result<Vec<CategoryRecord>, S
                 id: row.get(0)?,
                 name: row.get(1)?,
                 color: row.get(2)?,
-                icon: row.get(3)?,
+                icon: crate::category_icon_or_fallback(row.get(3)?),
                 kind: row.get(4)?,
                 goal_multiplier: row.get(5)?,
                 sort_order: row.get(6)?,
@@ -663,10 +665,11 @@ pub fn create_category(values: CategoryValues<'_>) -> Result<CategoryRecord, Str
             "INSERT INTO categories (
                 name, color, icon, kind, goal_multiplier, created_at, sort_order,
                 parent_id, score, inherit_color, inherit_score
-             ) VALUES (?1, ?2, '', ?3, 1.0, ?4, ?5, ?6, ?7, ?8, ?9)",
+             ) VALUES (?1, ?2, ?3, ?4, 1.0, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 normalized_name,
                 values.color.to_lowercase(),
+                values.icon,
                 values.kind,
                 now_ms(),
                 sort_order,
@@ -690,12 +693,13 @@ pub fn update_category(id: i64, values: CategoryValues<'_>) -> Result<CategoryRe
     validate_category_tree(&connection, Some(id), values.parent_id)?;
     let updated = connection
         .execute(
-            "UPDATE categories SET name = ?1, color = ?2, kind = ?3, parent_id = ?4,
-                    score = ?5, inherit_color = ?6, inherit_score = ?7
-             WHERE id = ?8",
+            "UPDATE categories SET name = ?1, color = ?2, icon = ?3, kind = ?4, parent_id = ?5,
+                    score = ?6, inherit_color = ?7, inherit_score = ?8
+             WHERE id = ?9",
             params![
                 normalized_name,
                 values.color.to_lowercase(),
+                values.icon,
                 values.kind,
                 values.parent_id,
                 values.score,
@@ -1140,6 +1144,7 @@ pub fn today_scoring(connection: &Connection) -> Result<TodayScoringRecord, Stri
                 name: category.name.clone(),
                 full_path: category.full_path.clone(),
                 effective_color: category.effective_color.clone(),
+                icon: category.icon.clone(),
                 duration_ms,
                 points: category.effective_score * duration_ms as f64 / 3_600_000.0,
             })
@@ -1570,10 +1575,11 @@ pub fn mini_hourly(
 #[cfg(test)]
 mod tests {
     use super::{
-        afk_series, daily_series, import_challenge, mini_hourly, preview_reclassify_history,
-        progress_series, reclassify_history, refresh_daily_stats, segment_local_dates, set_setting,
-        today_cumulative, today_scoring, upsert_exe_rule, validate_category_tree, MIGRATION_001,
-        MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006,
+        afk_series, daily_series, import_challenge, list_categories, mini_hourly,
+        preview_reclassify_history, progress_series, reclassify_history, refresh_daily_stats,
+        segment_local_dates, set_setting, today_cumulative, today_scoring, upsert_exe_rule,
+        validate_category_tree, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
+        MIGRATION_005, MIGRATION_006,
     };
     use rusqlite::{params, Connection};
 
@@ -1886,12 +1892,12 @@ mod tests {
         connection
             .execute_batch(
                 "INSERT INTO categories (
-                    id, name, color, kind, created_at, parent_id, score,
+                    id, name, color, icon, kind, created_at, parent_id, score,
                     inherit_color, inherit_score
                  ) VALUES
-                    (1, 'Work', '#286983', 'waste', 0, NULL, 8, 0, 0),
-                    (2, 'Video', '#b4637a', 'neutral', 0, 1, 5, 1, 0),
-                    (3, 'Social', '#b4637a', 'useful', 0, NULL, -10, 0, 0);
+                    (1, 'Work', '#286983', 'briefcase', 'waste', 0, NULL, 8, 0, 0),
+                    (2, 'Video', '#b4637a', 'play-circle', 'neutral', 0, 1, 5, 1, 0),
+                    (3, 'Social', '#b4637a', 'message-circle', 'useful', 0, NULL, -10, 0, 0);
                  INSERT INTO segments (
                     ts_start, ts_end, app, category_id, status
                  ) VALUES
@@ -1910,9 +1916,49 @@ mod tests {
         assert!((scoring.total_score - 0.0).abs() < f64::EPSILON);
         assert!((scoring.productive_percent - 50.0).abs() < 0.001);
         assert_eq!(scoring.top_productive[0].full_path, "Work > Video");
+        assert_eq!(scoring.top_productive[0].icon, "play-circle");
         assert_eq!(scoring.top_productive[0].points, 10.0);
         assert_eq!(scoring.top_distracting[0].points, -10.0);
         assert_eq!(scoring.top_categories[0].category_id, 2);
+    }
+
+    #[test]
+    fn category_icons_keep_empty_and_known_values_and_fallback_unknown_values() {
+        let connection = score_schema();
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, icon, kind, created_at) VALUES
+                    (1, 'Known', '#286983', 'brain', 'useful', 0),
+                    (2, 'Empty', '#ea9d34', '', 'neutral', 0),
+                    (3, 'Legacy', '#b4637a', 'unknown-icon', 'waste', 0);",
+            )
+            .expect("categories");
+
+        let categories = list_categories(&connection).expect("category list");
+        assert_eq!(
+            categories
+                .iter()
+                .find(|item| item.id == 1)
+                .expect("known")
+                .icon,
+            "brain"
+        );
+        assert_eq!(
+            categories
+                .iter()
+                .find(|item| item.id == 2)
+                .expect("empty")
+                .icon,
+            ""
+        );
+        assert_eq!(
+            categories
+                .iter()
+                .find(|item| item.id == 3)
+                .expect("legacy")
+                .icon,
+            "tag"
+        );
     }
 
     #[test]

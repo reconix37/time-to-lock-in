@@ -34,6 +34,13 @@ pub struct RulePreview {
     pub broad_warning: bool,
 }
 
+pub fn normalize_pattern(pattern: &str) -> String {
+    pattern
+        .trim()
+        .replace("\r\n", " ")
+        .replace(['\r', '\n'], " ")
+}
+
 #[derive(Clone)]
 enum Matcher {
     Legacy,
@@ -407,7 +414,7 @@ fn universal_pattern(pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activity, RuleCache, RuleDefinition, RuleSet};
+    use super::{normalize_pattern, Activity, RuleCache, RuleDefinition, RuleSet};
     use rusqlite::Connection;
 
     fn rule(id: i64, target: &str, pattern: &str, category: i64) -> RuleDefinition {
@@ -430,6 +437,23 @@ mod tests {
                 app: "browser.exe",
                 title: "Blender Course Animation",
                 domain: "courses.example",
+            }),
+            7
+        );
+    }
+
+    #[test]
+    fn real_newlines_normalize_to_spaces_but_literal_escape_keeps_regex_meaning() {
+        assert_eq!(normalize_pattern("Blender\r\ntutorial"), "Blender tutorial");
+
+        let mut definition = rule(1, "title", &normalize_pattern(r"first\nsecond"), 7);
+        definition.match_mode = "regex".to_string();
+        let rules = RuleSet::compile(vec![definition]).expect("rules");
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "browser.exe",
+                title: "first\nsecond",
+                domain: "",
             }),
             7
         );

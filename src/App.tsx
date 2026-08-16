@@ -17,6 +17,7 @@ import {
   type RuleMatchType,
 } from "./components/CategoryManager";
 import { ScorePanel, type TodayScoring } from "./components/ScorePanel";
+import { CategoryMark } from "./components/CategoryIcon";
 import { TrendsStacked } from "./components/TrendsStacked";
 import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
@@ -1218,7 +1219,7 @@ function DashboardView() {
               <div className="top-category-list">
                 {scoring.top_categories.map((category) => (
                   <div className="top-category-row" key={category.category_id} title={category.full_path}>
-                    <span className="manager-color-dot" style={{ backgroundColor: category.effective_color }} />
+                    <CategoryMark icon={category.icon} color={category.effective_color} />
                     <span>{category.full_path}</span>
                     <strong>{formatDuration(category.duration_ms)}</strong>
                   </div>

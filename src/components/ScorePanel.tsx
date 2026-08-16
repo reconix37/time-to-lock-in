@@ -1,10 +1,12 @@
 import { useI18n } from "../i18nContext";
+import { CategoryMark } from "./CategoryIcon";
 
 export interface ScoringCategory {
   category_id: number;
   name: string;
   full_path: string;
   effective_color: string;
+  icon: string;
   duration_ms: number;
   points: number;
 }
@@ -46,5 +48,5 @@ export function ScorePanel({ data }: Props) {
 }
 
 function ScoreList({ title, entries }: { title: string; entries: ScoringCategory[] }) {
-  return <div className="score-list"><h3>{title}</h3>{entries.map((entry) => <div className="score-entry" key={entry.category_id} title={entry.full_path}><span className="manager-color-dot" style={{ backgroundColor: entry.effective_color }} /><span>{entry.full_path}</span><strong className={entry.points > 0 ? "is-positive" : "is-negative"}>{points(entry.points)}</strong></div>)}</div>;
+  return <div className="score-list"><h3>{title}</h3>{entries.map((entry) => <div className="score-entry" key={entry.category_id} title={entry.full_path}><CategoryMark icon={entry.icon} color={entry.effective_color} /><span>{entry.full_path}</span><strong className={entry.points > 0 ? "is-positive" : "is-negative"}>{points(entry.points)}</strong></div>)}</div>;
 }

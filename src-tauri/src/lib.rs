@@ -152,6 +152,56 @@ const RANKS: [(&str, i64); 8] = [
     ("Повелитель времени", 100_000),
 ];
 
+const CATEGORY_ICONS: &[&str] = &[
+    "briefcase",
+    "coffee",
+    "skull",
+    "brain",
+    "laptop",
+    "code",
+    "gamepad",
+    "message-circle",
+    "play-circle",
+    "dumbbell",
+    "music",
+    "book-open",
+    "house",
+    "moon",
+    "palette",
+    "globe",
+    "folder",
+    "tag",
+];
+
+fn validate_category_icon(icon: &str) -> Result<(), String> {
+    if icon.is_empty() || CATEGORY_ICONS.contains(&icon) {
+        Ok(())
+    } else {
+        Err("invalid category icon".to_string())
+    }
+}
+
+#[cfg(test)]
+mod category_icon_tests {
+    use super::{category_icon_or_fallback, validate_category_icon};
+
+    #[test]
+    fn category_icon_allowlist_accepts_empty_and_known_ids_only() {
+        assert!(validate_category_icon("").is_ok());
+        assert!(validate_category_icon("brain").is_ok());
+        assert!(validate_category_icon("not-lucide").is_err());
+        assert_eq!(category_icon_or_fallback("not-lucide".to_string()), "tag");
+    }
+}
+
+pub(crate) fn category_icon_or_fallback(icon: String) -> String {
+    if icon.is_empty() || CATEGORY_ICONS.contains(&icon.as_str()) {
+        icon
+    } else {
+        "tag".to_string()
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct DayPrintEntry {
     app: String,
@@ -784,6 +834,7 @@ struct ScoringCategory {
     name: String,
     full_path: String,
     effective_color: String,
+    icon: String,
     duration_ms: i64,
     points: f64,
 }
@@ -804,6 +855,7 @@ impl From<db::ScoringCategoryRecord> for ScoringCategory {
             name: record.name,
             full_path: record.full_path,
             effective_color: record.effective_color,
+            icon: record.icon,
             duration_ms: record.duration_ms,
             points: record.points,
         }
@@ -920,15 +972,18 @@ fn get_categories() -> Result<Vec<Category>, String> {
 fn create_category(
     name: String,
     color: String,
+    icon: String,
     kind: String,
     parent_id: Option<i64>,
     score: f64,
     inherit_color: bool,
     inherit_score: bool,
 ) -> Result<Category, String> {
+    validate_category_icon(&icon)?;
     db::create_category(db::CategoryValues {
         name: &name,
         color: &color,
+        icon: &icon,
         kind: &kind,
         parent_id,
         score,
@@ -943,17 +998,20 @@ fn update_category(
     id: i64,
     name: String,
     color: String,
+    icon: String,
     kind: String,
     parent_id: Option<i64>,
     score: f64,
     inherit_color: bool,
     inherit_score: bool,
 ) -> Result<Category, String> {
+    validate_category_icon(&icon)?;
     db::update_category(
         id,
         db::CategoryValues {
             name: &name,
             color: &color,
+            icon: &icon,
             kind: &kind,
             parent_id,
             score,
@@ -1074,7 +1132,7 @@ fn create_rule(
     if !matches!(match_type.as_str(), "exe" | "title" | "domain" | "any") {
         return Err("invalid match type".to_string());
     }
-    let normalized = pattern.trim().to_string();
+    let normalized = rules::normalize_pattern(&pattern);
     rules::RuleSet::compile(vec![rules::RuleDefinition {
         id: 0,
         match_type: match_type.clone(),
@@ -1154,7 +1212,7 @@ fn update_rule(
         return Err("Без категории нельзя привязать".to_string());
     }
 
-    let normalized = pattern.trim().to_string();
+    let normalized = rules::normalize_pattern(&pattern);
     rules::RuleSet::compile(vec![rules::RuleDefinition {
         id,
         match_type: match_type.clone(),
@@ -1223,7 +1281,7 @@ fn preview_rule(
         rules::RuleDefinition {
             id: 0,
             match_type,
-            pattern: pattern.trim().to_string(),
+            pattern: rules::normalize_pattern(&pattern),
             category_id: 1,
             priority: 0,
             match_mode,
