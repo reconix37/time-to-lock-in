@@ -1143,7 +1143,7 @@ fn create_rule(
         case_insensitive,
     }])?;
 
-    let connection = db::open()?;
+    let mut connection = db::open()?;
     let category_exists = connection
         .query_row(
             "SELECT 1 FROM categories WHERE id = ?1",
@@ -1184,6 +1184,9 @@ fn create_rule(
         .map_err(|error| rule_write_error(&connection, error))?;
     let id = connection.last_insert_rowid();
     db::bump_rules_revision(&connection)?;
+    // Правило изменилось — сразу перекрашиваем историю (не-manual сегменты),
+    // иначе старые сегменты висят без категории до ручной перекраски.
+    db::reclassify_history(&mut connection, false, None, None)?;
     Ok(Rule {
         id,
         match_type,
@@ -1222,7 +1225,7 @@ fn update_rule(
         match_mode: match_mode.clone(),
         case_insensitive,
     }])?;
-    let connection = db::open()?;
+    let mut connection = db::open()?;
     ensure_rule_unique(
         &connection,
         Some(id),
@@ -1252,6 +1255,8 @@ fn update_rule(
         return Err("rule does not exist".to_string());
     }
     db::bump_rules_revision(&connection)?;
+    // Правило изменилось — сразу перекрашиваем историю (не-manual сегменты).
+    db::reclassify_history(&mut connection, false, None, None)?;
     Ok(())
 }
 
@@ -1260,11 +1265,13 @@ fn delete_rule(id: i64) -> Result<(), String> {
     if id <= 0 {
         return Err("invalid rule id".to_string());
     }
-    let connection = db::open()?;
+    let mut connection = db::open()?;
     connection
         .execute("DELETE FROM rules WHERE id = ?1", [id])
         .map_err(|error| error.to_string())?;
     db::bump_rules_revision(&connection)?;
+    // Правило удалено — возвращаем затронутые сегменты следующему матчу (или Без категории).
+    db::reclassify_history(&mut connection, false, None, None)?;
     Ok(())
 }
 
