@@ -770,10 +770,11 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-settings-window-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .mini-settings-window-actions button { min-width: 0; height: 24px; padding: 0 5px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font-size: var(--mini-font-control); cursor: pointer; }
 .mini-settings-reset { position: sticky; bottom: 0; width: 100%; height: 24px; margin-top: 5px; border: var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--mini-font-control); }
-.mini-corner-popover { top: 25px; right: 58px; display: grid; grid-template-columns: repeat(2, 30px) minmax(min-content, max-content); gap: 4px; padding: 5px; }
+.mini-corner-popover { top: 25px; right: 58px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 5px; width: max-content; }
+.mini-corner-buttons { display: grid; grid-template-columns: repeat(2, 30px); gap: 4px; }
 .mini-corner-popover button { width: 30px; height: 26px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font: 500 var(--mini-font-control) var(--font-mono); }
 .mini-corner-popover button.is-active { background: color-mix(in srgb, var(--iris) 12%, var(--surface)); color: var(--iris); }
-.mini-corner-tuck { display: grid; grid-column: 1 / -1; grid-template-columns: auto 1fr; gap: 2px 6px; align-items: center; margin-top: 4px; padding-top: 5px; border-top: 1px solid var(--hl-low); color: var(--muted); font-size: var(--mini-font-control); white-space: nowrap; }
+.mini-corner-tuck { display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; align-items: center; margin-top: 4px; padding-top: 5px; border-top: 1px solid var(--hl-low); color: var(--muted); font-size: var(--mini-font-control); white-space: nowrap; }
 .mini-corner-tuck small { grid-column: 2; color: var(--subtle); font-size: 10px; }
 
 @media (max-height: 259px) {

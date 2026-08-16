@@ -409,8 +409,9 @@ export function MiniView() {
   async function toggleCornerPopover(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     setSettingsOpen(false);
-    if (corner) await selectCorner(corner);
-    else setCornerOpen((open) => !open);
+    // Всегда открываем меню выбора угла (даже если угол уже запинен).
+    // Распин — повторный клик по активной кнопке угла внутри меню.
+    setCornerOpen((open) => !open);
   }
 
   const away = liveSegment?.status === "away";
@@ -600,9 +601,11 @@ export function MiniView() {
       )}
       {cornerOpen && (
         <section ref={cornerPopoverRef} className="mini-popover mini-corner-popover" aria-label={t("mini.cornerChoose")} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-          {(["tl", "tr", "bl", "br"] as const).map((option) => (
-            <button type="button" key={option} className={corner === option ? "is-active" : ""} aria-pressed={corner === option} aria-label={t(`mini.cornerName.${option}`)} onClick={() => void selectCorner(option)}>{t(`mini.corner.${option}`)}</button>
-          ))}
+          <div className="mini-corner-buttons">
+            {(["tl", "tr", "bl", "br"] as const).map((option) => (
+              <button type="button" key={option} className={corner === option ? "is-active" : ""} aria-pressed={corner === option} aria-label={t(`mini.cornerName.${option}`)} onClick={() => void selectCorner(option)}>{t(`mini.corner.${option}`)}</button>
+            ))}
+          </div>
           <label className="mini-corner-tuck" title={t("mini.tuckHint")}>
             <input type="checkbox" checked={cornerTuck} disabled={corner === null || clickThrough} onChange={(event) => void changeCornerTuck(event.target.checked)} />
             <span>{t("mini.tuckCorner")}</span>
