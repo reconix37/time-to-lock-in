@@ -500,7 +500,7 @@ pub fn apply_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), St
         .map_err(|error| error.to_string())
 }
 
-pub fn sync_click_through_checked(app: &AppHandle) {
+pub fn sync_click_through_checked() {
     if let Ok(connection) = db::open() {
         if let Ok(Some(enabled)) = db::setting(&connection, "mini_click_through") {
             if let Some(item) = CLICK_THROUGH_ITEM.lock().unwrap().as_ref() {
@@ -520,7 +520,7 @@ pub fn toggle_mini_click_through(app: &AppHandle) -> Result<(), String> {
         "mini_click_through",
         if next { "1" } else { "0" },
     )?;
-    sync_click_through_checked(app);
+    sync_click_through_checked();
     Ok(())
 }
 
@@ -532,7 +532,7 @@ pub fn set_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), Stri
         "mini_click_through",
         if enabled { "1" } else { "0" },
     )?;
-    sync_click_through_checked(app);
+    sync_click_through_checked();
     Ok(())
 }
 
@@ -679,36 +679,6 @@ fn place_mini_at_default(window: &WebviewWindow) -> Result<(), String> {
             area.position.x + area.size.width.saturating_sub(size.width) as i32 - MINI_MARGIN,
             area.position.y + area.size.height.saturating_sub(size.height) as i32 - MINI_MARGIN,
         ))
-        .map_err(|error| error.to_string())
-}
-
-fn move_mini_to_corner(window: &WebviewWindow, corner: &str) -> Result<(), String> {
-    let monitor = window
-        .current_monitor()
-        .map_err(|error| error.to_string())?
-        .or(window
-            .primary_monitor()
-            .map_err(|error| error.to_string())?);
-    let Some(monitor) = monitor else {
-        return Ok(());
-    };
-    let area = monitor.work_area();
-    let size = window.inner_size().map_err(|error| error.to_string())?;
-    let left = area.position.x + MINI_CORNER_MARGIN;
-    let top = area.position.y + MINI_CORNER_MARGIN;
-    let right =
-        area.position.x + area.size.width.saturating_sub(size.width) as i32 - MINI_CORNER_MARGIN;
-    let bottom =
-        area.position.y + area.size.height.saturating_sub(size.height) as i32 - MINI_CORNER_MARGIN;
-    let position = match corner {
-        "tl" => PhysicalPosition::new(left, top),
-        "tr" => PhysicalPosition::new(right, top),
-        "bl" => PhysicalPosition::new(left, bottom),
-        "br" => PhysicalPosition::new(right, bottom),
-        _ => return Err("invalid mini-window corner".to_string()),
-    };
-    window
-        .set_position(position)
         .map_err(|error| error.to_string())
 }
 
