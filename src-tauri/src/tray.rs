@@ -736,9 +736,19 @@ fn clamp_mini_window(window: &WebviewWindow) -> Result<(), String> {
         proposed_size.width.clamp(MINI_MIN_WIDTH, max_width),
         proposed_size.height.clamp(MINI_MIN_HEIGHT, max_height),
     );
-    window
-        .set_size(clamped_size)
-        .map_err(|error| error.to_string())?;
+    // Дробный DPI (125%): физический 487.5 → 487 → логический 389.6. set_size с тем же
+    // логическим размером на Windows может эмитить resize-событие → петля (виджет
+    // дёргается, CPU горит). Если размер фактически тот же (с допуском на округление
+    // физических пикселей) — окно не трогаем, позицию всё равно поправим ниже.
+    let current_w = current_size.width.round();
+    let current_h = current_size.height.round();
+    let size_changed = (clamped_size.width - current_w).abs() >= 0.75
+        || (clamped_size.height - current_h).abs() >= 0.75;
+    if size_changed {
+        window
+            .set_size(clamped_size)
+            .map_err(|error| error.to_string())?;
+    }
     let size = clamped_size.to_physical::<u32>(scale_factor);
     let proposed = saved_position.unwrap_or_else(|| {
         PhysicalPosition::new(

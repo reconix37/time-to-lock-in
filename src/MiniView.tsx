@@ -217,8 +217,6 @@ export function MiniView() {
     };
     void getCurrentWindow().onResized(() => {
       saveGeometry();
-      const required = requiredMiniSize(modeRef.current, textSizeRef.current);
-      void invoke("resize_mini", required);
     }).then((unlisten) => {
       if (active) stopResizeListener = unlisten;
       else unlisten();
