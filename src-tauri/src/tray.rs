@@ -3,10 +3,11 @@ use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
 
@@ -43,8 +44,11 @@ struct TrayLabels {
     pause: &'static str,
     resume: &'static str,
     exit: &'static str,
+    click_through: &'static str,
     loading: &'static str,
 }
+
+static CLICK_THROUGH_ITEM: Mutex<Option<CheckMenuItem<tauri::Wry>>> = Mutex::new(None);
 
 pub fn enforce_mini_topmost(mini: &tauri::Window) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -154,6 +158,7 @@ fn tray_labels(language: &str) -> TrayLabels {
             pause: "Зупинити відстеження",
             resume: "Відновити відстеження",
             exit: "Вихід",
+            click_through: "Кліки наскрізь",
             loading: "TTLI — статистика завантажується",
         },
         "en" => TrayLabels {
@@ -161,6 +166,7 @@ fn tray_labels(language: &str) -> TrayLabels {
             pause: "Stop tracking",
             resume: "Resume tracking",
             exit: "Exit",
+            click_through: "Click-through",
             loading: "TTLI — loading statistics",
         },
         _ => TrayLabels {
@@ -168,6 +174,7 @@ fn tray_labels(language: &str) -> TrayLabels {
             pause: "Остановить отслеживание",
             resume: "Возобновить отслеживание",
             exit: "Выход",
+            click_through: "Клики сквозь",
             loading: "TTLI — статистика загружается",
         },
     }
@@ -186,10 +193,24 @@ pub fn install(
         .map_err(|error| error.to_string())?;
     let pause_item = MenuItem::with_id(app, "pause", labels.pause, true, None::<&str>)
         .map_err(|error| error.to_string())?;
+    let connection = db::open()?;
+    let click_through_enabled =
+        db::setting(&connection, "mini_click_through")?.as_deref() == Some("1");
+    drop(connection);
+    let click_item = CheckMenuItem::with_id(
+        app,
+        "click_through",
+        labels.click_through,
+        true,
+        click_through_enabled,
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
     let exit_item = MenuItem::with_id(app, "exit", labels.exit, true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let menu = Menu::with_items(app, &[&open_item, &pause_item, &exit_item])
+    let menu = Menu::with_items(app, &[&open_item, &pause_item, &click_item, &exit_item])
         .map_err(|error| error.to_string())?;
+    *CLICK_THROUGH_ITEM.lock().unwrap() = Some(click_item.clone());
 
     let menu_paused = Arc::clone(&paused);
     let tray = TrayIconBuilder::with_id("ttli-tray")
@@ -202,6 +223,11 @@ pub fn install(
             "pause" => {
                 let next = !menu_paused.load(Ordering::Relaxed);
                 menu_paused.store(next, Ordering::Relaxed);
+            }
+            "click_through" => {
+                if let Err(error) = toggle_mini_click_through(app) {
+                    eprintln!("toggle click-through failed: {error}");
+                }
             }
             "exit" => app.exit(0),
             _ => {}
@@ -238,6 +264,7 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
     let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
     let visible = db::setting(&connection, "mini_visible")?.as_deref() == Some("1");
     let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
     let opacity = saved_mini_opacity(&connection)?;
     drop(connection);
 
@@ -249,7 +276,7 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
         clamp_mini_window(&mini)?;
         let corner_pinned = valid_mini_corner(&corner);
         if corner_pinned {
-            move_mini_to_corner(&mini, &corner)?;
+            move_mini_to_corner(&mini, &corner, corner_tuck)?;
             mini.set_resizable(false)
                 .map_err(|error| error.to_string())?;
         }
@@ -370,13 +397,18 @@ pub fn save_mini_geometry(app: &AppHandle) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    // при corner-lock позиция — производная от угла (и tuck), не сохраняем абсолют
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if valid_mini_corner(&corner) {
+        return Ok(());
+    }
     let position = mini.inner_position().map_err(|error| error.to_string())?;
     let scale_factor = mini.scale_factor().map_err(|error| error.to_string())?;
     let size = mini
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(scale_factor);
-    let connection = db::open()?;
     db::set_setting(
         &connection,
         "mini_window_pos",
@@ -389,7 +421,7 @@ pub fn save_mini_geometry(app: &AppHandle) -> Result<(), String> {
     )
 }
 
-pub fn resize_mini(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
+pub fn resize_mini(app: &AppHandle, width: f64, height: f64, force: bool) -> Result<(), String> {
     if !width.is_finite() || !height.is_finite() {
         return Err("invalid mini-window size".to_string());
     }
@@ -400,29 +432,178 @@ pub fn resize_mini(app: &AppHandle, width: f64, height: f64) -> Result<(), Strin
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(mini.scale_factor().map_err(|error| error.to_string())?);
-    if current.width >= width && current.height >= height {
+    if !force && current.width >= width && current.height >= height {
         return Ok(());
     }
-    let size = LogicalSize::new(
-        current
-            .width
-            .max(width)
-            .clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH),
-        current
-            .height
-            .max(height)
-            .clamp(MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
-    );
+    let size = if force {
+        LogicalSize::new(
+            width.clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH),
+            height.clamp(MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
+        )
+    } else {
+        LogicalSize::new(
+            current
+                .width
+                .max(width)
+                .clamp(MINI_MIN_WIDTH, MINI_MAX_WIDTH),
+            current
+                .height
+                .max(height)
+                .clamp(MINI_MIN_HEIGHT, MINI_MAX_HEIGHT),
+        )
+    };
     mini.set_size(size).map_err(|error| error.to_string())?;
     save_mini_geometry(app)?;
     clamp_mini_window(&mini)?;
     let connection = db::open()?;
     let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    drop(connection);
     if corner.is_empty() {
         Ok(())
     } else {
-        move_mini_to_corner(&mini, &corner)
+        move_mini_to_corner(&mini, &corner, corner_tuck)
     }
+}
+
+pub fn set_mini_resizable(app: &AppHandle, resizable: bool) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    mini.set_resizable(resizable)
+        .map_err(|error| error.to_string())
+}
+
+const MINI_TUCK_PEEK: i32 = 24;
+
+fn mini_tuck_active(connection: &rusqlite::Connection) -> Result<bool, String> {
+    let corner = db::setting(connection, "mini_corner")?.unwrap_or_default();
+    if !valid_mini_corner(&corner) {
+        return Ok(false);
+    }
+    Ok(db::setting(connection, "mini_corner_tuck")?.as_deref() == Some("1"))
+}
+
+pub fn apply_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    // «клики сквозь» + tuck несовместимы: hover-reveal не работает, окно станет недосягаемым
+    if enabled {
+        let connection = db::open()?;
+        if mini_tuck_active(&connection)? {
+            let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+            move_mini_to_corner(&mini, &corner, false)?;
+        }
+    }
+    mini.set_ignore_cursor_events(enabled)
+        .map_err(|error| error.to_string())
+}
+
+pub fn sync_click_through_checked(app: &AppHandle) {
+    if let Ok(connection) = db::open() {
+        if let Ok(Some(enabled)) = db::setting(&connection, "mini_click_through") {
+            if let Some(item) = CLICK_THROUGH_ITEM.lock().unwrap().as_ref() {
+                let _ = item.set_checked(enabled == "1");
+            }
+        }
+    }
+}
+
+pub fn toggle_mini_click_through(app: &AppHandle) -> Result<(), String> {
+    let connection = db::open()?;
+    let enabled = db::setting(&connection, "mini_click_through")?.as_deref() == Some("1");
+    let next = !enabled;
+    apply_mini_click_through(app, next)?;
+    db::set_setting(
+        &connection,
+        "mini_click_through",
+        if next { "1" } else { "0" },
+    )?;
+    sync_click_through_checked(app);
+    Ok(())
+}
+
+pub fn set_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    apply_mini_click_through(app, enabled)?;
+    let connection = db::open()?;
+    db::set_setting(
+        &connection,
+        "mini_click_through",
+        if enabled { "1" } else { "0" },
+    )?;
+    sync_click_through_checked(app);
+    Ok(())
+}
+
+pub fn set_mini_tuck(app: &AppHandle, tucked: bool) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if !valid_mini_corner(&corner) {
+        return Err("mini-window is not corner-pinned".to_string());
+    }
+    db::set_setting(
+        &connection,
+        "mini_corner_tuck",
+        if tucked { "1" } else { "0" },
+    )?;
+    move_mini_to_corner(&mini, &corner, tucked)
+}
+
+/// Позиционирование tuck без записи в БД — для hover-reveal (частые вызовы)
+pub fn tuck_mini_position(app: &AppHandle, tucked: bool) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if !valid_mini_corner(&corner) {
+        return Ok(());
+    }
+    move_mini_to_corner(&mini, &corner, tucked)
+}
+
+fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?);
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let width_logical =
+        size.width as f64 / window.scale_factor().map_err(|error| error.to_string())?;
+    let height_logical =
+        size.height as f64 / window.scale_factor().map_err(|error| error.to_string())?;
+    let margin = if tucked { 0 } else { MINI_CORNER_MARGIN };
+    let (left, top) = if tucked {
+        // видимый пятачок 24×24 в углу, остальное — за краем рабочей области
+        (
+            area.position.x - (width_logical as i32 - MINI_TUCK_PEEK),
+            area.position.y - (height_logical as i32 - MINI_TUCK_PEEK),
+        )
+    } else {
+        (area.position.x + margin, area.position.y + margin)
+    };
+    let right = area.position.x + area.size.width.saturating_sub(size.width) as i32 - margin;
+    let bottom = area.position.y + area.size.height.saturating_sub(size.height) as i32 - margin;
+    let position = match corner {
+        "tl" => PhysicalPosition::new(left, top),
+        "tr" => PhysicalPosition::new(right, top),
+        "bl" => PhysicalPosition::new(left, bottom),
+        "br" => PhysicalPosition::new(right, bottom),
+        _ => return Err("invalid mini-window corner".to_string()),
+    };
+    window
+        .set_position(position)
+        .map_err(|error| error.to_string())
 }
 
 pub fn reset_mini_geometry(app: &AppHandle) -> Result<(), String> {
@@ -464,9 +645,11 @@ pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
             let _ = mini.set_resizable(previous_resizable);
             return Err(error);
         }
+        let _ = db::set_setting(&connection, "mini_corner_tuck", "0");
         return Ok(());
     }
-    move_mini_to_corner(&mini, corner)?;
+    let tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    move_mini_to_corner(&mini, corner, tuck)?;
     if let Err(error) = mini.set_resizable(false) {
         let _ = mini.set_position(previous_position);
         return Err(error.to_string());

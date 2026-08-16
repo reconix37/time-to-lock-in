@@ -19,7 +19,7 @@ VALUES
 
 CREATE TABLE IF NOT EXISTS rules (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    match_type  TEXT    NOT NULL CHECK (match_type IN ('exe','title','domain')),
+    match_type  TEXT    NOT NULL CHECK (match_type IN ('exe','title','domain','any')),
     pattern     TEXT    NOT NULL,              -- exe: точное/префикс; title/domain: contains; lowercase
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
     priority    INTEGER NOT NULL DEFAULT 0,    -- выше = раньше; при равном: domain > title > exe

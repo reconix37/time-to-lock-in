@@ -6,7 +6,7 @@ const baseUrl = process.env.TTLI_TEST_URL ?? "http://127.0.0.1:4173";
 const chromePath = process.env.TTLI_CHROMIUM ?? "/snap/bin/chromium";
 const languages = ["ru", "ua", "en"];
 const textSizes = ["normal", "large"];
-const viewports = [[300, 228], [340, 252], [420, 320], [480, 340]];
+const viewports = [[300, 228], [340, 252], [390, 280], [480, 340]];
 
 const port = await new Promise((resolve, reject) => {
   const server = net.createServer();

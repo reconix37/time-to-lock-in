@@ -1348,9 +1348,12 @@ fn set_setting(key: String, value: String, app: tauri::AppHandle) -> Result<(), 
         "theme" => matches!(value.as_str(), "dawn" | "dark"),
         "language" => matches!(value.as_str(), "ru" | "ua" | "en"),
         "currency" => matches!(value.as_str(), "₴" | "$" | "€" | "₽"),
-        "onboarding_done" | "tray_only" | "mini_observed_explained_v1" | "mini_privacy_now" => {
-            matches!(value.as_str(), "0" | "1")
-        }
+        "onboarding_done"
+        | "tray_only"
+        | "mini_observed_explained_v1"
+        | "mini_privacy_now"
+        | "mini_click_through"
+        | "mini_corner_tuck" => matches!(value.as_str(), "0" | "1"),
         "mini_mode" => matches!(value.as_str(), "auto" | "compact" | "detailed"),
         "mini_text_size" => matches!(value.as_str(), "normal" | "large"),
         "mini_opacity" => value
@@ -1388,6 +1391,17 @@ fn set_setting(key: String, value: String, app: tauri::AppHandle) -> Result<(), 
             let _ = tray::apply_mini_opacity(&mini, previous_opacity);
             return Err(error);
         }
+        return Ok(());
+    }
+
+    if key == "mini_click_through" {
+        let enabled = value == "1";
+        tray::set_mini_click_through(&app, enabled)?;
+        return Ok(());
+    }
+    if key == "mini_corner_tuck" {
+        let tucked = value == "1";
+        tray::set_mini_tuck(&app, tucked)?;
         return Ok(());
     }
 
@@ -1623,8 +1637,23 @@ fn save_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn resize_mini(width: f64, height: f64, app: tauri::AppHandle) -> Result<(), String> {
-    tray::resize_mini(&app, width, height)
+fn resize_mini(
+    width: f64,
+    height: f64,
+    force: Option<bool>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    tray::resize_mini(&app, width, height, force.unwrap_or(false))
+}
+
+#[tauri::command]
+fn set_mini_resizable(resizable: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::set_mini_resizable(&app, resizable)
+}
+
+#[tauri::command]
+fn tuck_mini_position(tucked: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::tuck_mini_position(&app, tucked)
 }
 
 #[tauri::command]
@@ -1831,6 +1860,8 @@ pub fn run() {
             get_mini_state,
             save_mini_geometry,
             resize_mini,
+            set_mini_resizable,
+            tuck_mini_position,
             reset_mini_geometry,
             pin_mini_corner,
             start_mini_drag,

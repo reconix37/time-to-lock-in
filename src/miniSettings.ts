@@ -8,6 +8,8 @@ export interface MiniSettings {
   showAtLaunch: boolean;
   opacity: number;
   cornerPinned: boolean;
+  clickThrough: boolean;
+  cornerTuck: boolean;
 }
 
 export function parseMiniSettings(settings: Record<string, string>): MiniSettings {
@@ -24,5 +26,7 @@ export function parseMiniSettings(settings: Record<string, string>): MiniSetting
       || settings.mini_corner === "tr"
       || settings.mini_corner === "bl"
       || settings.mini_corner === "br",
+    clickThrough: settings.mini_click_through === "1",
+    cornerTuck: settings.mini_corner_tuck === "1",
   };
 }

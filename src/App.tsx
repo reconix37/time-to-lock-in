@@ -245,6 +245,7 @@ function DashboardView() {
   const [miniPrivacyNow, setMiniPrivacyNow] = useState(false);
   const [showMiniAtLaunch, setShowMiniAtLaunch] = useState(false);
   const [miniOpacity, setMiniOpacity] = useState(100);
+  const [miniClickThrough, setMiniClickThrough] = useState(false);
   const [miniCornerPinned, setMiniCornerPinned] = useState(false);
   const [challengeInput, setChallengeInput] = useState("");
   const [challengeError, setChallengeError] = useState<string | null>(null);
@@ -622,6 +623,7 @@ function DashboardView() {
     setMiniPrivacyNow(miniSettings.privacyNow);
     setShowMiniAtLaunch(miniSettings.showAtLaunch);
     setMiniOpacity(miniSettings.opacity);
+    setMiniClickThrough(miniSettings.clickThrough);
     setMiniCornerPinned(miniSettings.cornerPinned);
     setChallengeInput("");
     setChallengeError(null);
@@ -728,6 +730,7 @@ function DashboardView() {
         invoke<void>("set_setting", { key: "mini_privacy_now", value: miniPrivacyNow ? "1" : "0" }),
         invoke<void>("set_setting", { key: "tray_only", value: showMiniAtLaunch ? "0" : "1" }),
         invoke<void>("set_setting", { key: "mini_opacity", value: String(miniOpacity) }),
+        invoke<void>("set_setting", { key: "mini_click_through", value: miniClickThrough ? "1" : "0" }),
       ]);
       setSettings((current) => ({
         ...current,
@@ -747,6 +750,7 @@ function DashboardView() {
         mini_privacy_now: miniPrivacyNow ? "1" : "0",
         tray_only: showMiniAtLaunch ? "0" : "1",
         mini_opacity: String(miniOpacity),
+        mini_click_through: miniClickThrough ? "1" : "0",
       }));
       setSettingsOpen(false);
       setError(null);
@@ -1432,6 +1436,7 @@ function DashboardView() {
                   <span>{t("mini.settingsOpacity")} · {miniOpacity}%</span>
                   <input type="range" min="60" max="100" step="5" value={miniOpacity} onChange={(event) => setMiniOpacity(Number(event.target.value))} />
                 </label>
+                <label className="settings-toggle" title={t("mini.clickThroughHint")}><input type="checkbox" checked={miniClickThrough} onChange={(event) => setMiniClickThrough(event.target.checked)} /><span>{t("mini.clickThrough")}</span></label>
                 <div className="mini-settings-actions">
                   <button type="button" onClick={() => void invoke("show_mini")}>{t("settings.miniShow")}</button>
                   <button type="button" onClick={() => void invoke("minimize_mini")}>{t("mini.minimize")}</button>

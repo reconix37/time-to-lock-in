@@ -12,6 +12,7 @@ const MIGRATION_003: &str = include_str!("../migrations/003_day_print.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_reclassify_history.sql");
 const MIGRATION_005: &str = include_str!("../migrations/005_categories_scoring.sql");
 const MIGRATION_006: &str = include_str!("../migrations/006_rule_uniqueness.sql");
+const MIGRATION_007: &str = include_str!("../migrations/007_rule_match_any.sql");
 
 const TITLE_NOISE_WORDS: &[&str] = &[
     "смотреть",
@@ -324,6 +325,11 @@ pub fn initialize() -> Result<(), String> {
     if previous_version < 6 {
         transaction
             .execute_batch(MIGRATION_006)
+            .map_err(|error| error.to_string())?;
+    }
+    if previous_version < 7 {
+        transaction
+            .execute_batch(MIGRATION_007)
             .map_err(|error| error.to_string())?;
     }
     if previous_version < 4 {

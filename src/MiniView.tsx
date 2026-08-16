@@ -8,7 +8,7 @@ import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
 import { parseMiniSettings, type MiniMode, type MiniTextSize } from "./miniSettings";
-import { formatCompactMinutes } from "./miniVerdict";
+import { getMiniVerdict } from "./miniVerdict";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
@@ -34,12 +34,6 @@ interface MiniState {
   position_x: number;
   position_y: number;
 }
-
-type BulletBarProps = {
-  kind: CategoryKind;
-  label: string;
-  valueMs: number;
-} & ({ threshold: { minutes: number; label: string } } | { threshold?: undefined });
 
 function cleanAppName(app: string): string {
   return app.replace(/\.exe$/i, "");
@@ -72,7 +66,7 @@ function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "minimize" |
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 8.3 9.7 3.8a2.1 2.1 0 0 1 3 3l-5.9 5.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4" /></svg>;
   }
   if (name === "pin") {
-    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 2 6 6-2 .7-1.6 2.5-.7 2.3-1.2-1.2 1.1-3L3 5.7 5 5zM3 13l3-3" /></svg>;
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><rect className="mini-icon-win-back" x="2.5" y="3.5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><rect className="mini-icon-win-front" x="5.5" y="5.5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>;
   }
   if (name === "minimize") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11.5h10" /></svg>;
@@ -81,32 +75,6 @@ function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "minimize" |
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" /></svg>;
   }
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.9 2.2h2.2l.4 1.5 1.2.7 1.5-.5 1.1 1.9-1.1 1.1v1.4l1.1 1.1-1.1 1.9-1.5-.5-1.2.7-.4 1.5H6.9l-.4-1.5-1.2-.7-1.5.5-1.1-1.9 1.1-1.1V6.9L2.7 5.8l1.1-1.9 1.5.5 1.2-.7z" /><circle cx="8" cy="7.6" r="1.7" /></svg>;
-}
-
-function BulletBar({ kind, label, valueMs, threshold }: BulletBarProps) {
-  const thresholdMs = threshold === undefined ? null : threshold.minutes * 60_000;
-  const scaleMs = thresholdMs === null ? Math.max(valueMs, 1) : Math.max(thresholdMs * 1.25, valueMs, 1);
-  const overflowedWaste = kind === "waste" && thresholdMs !== null && valueMs > thresholdMs;
-  const fill = overflowedWaste ? 100 : Math.min(100, valueMs / scaleMs * 100);
-  const tick = thresholdMs === null ? null : Math.min(100, thresholdMs / scaleMs * 100);
-  const value = formatCompactMinutes(Math.floor(valueMs / 60_000));
-
-  return (
-    <div className={`mini-bullet kind-${kind}`}>
-      <div className="mini-bullet-copy">
-        <EllipsizedText text={label} />
-        <strong>
-          {threshold === undefined
-            ? value
-            : <>{value} / {formatCompactMinutes(threshold.minutes)} <small>· {threshold.label}</small></>}
-        </strong>
-      </div>
-      <div className="mini-bullet-rail" aria-hidden="true">
-        <i style={{ width: `${fill}%` }} />
-        {tick !== null && <span style={{ left: `${tick}%` }} />}
-      </div>
-    </div>
-  );
 }
 
 function MiniScoreHero({ scoring }: { scoring: TodayScoring | null }) {
@@ -118,7 +86,6 @@ function MiniScoreHero({ scoring }: { scoring: TodayScoring | null }) {
       <span>{t("mini.scoreToday")}</span>
       <div className="mini-score-values">
         <strong className={tone}>{scoring ? formatScore(scoring.total_score) : "0.0"}</strong>
-        <small>{t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })}</small>
       </div>
     </section>
   );
@@ -143,7 +110,7 @@ function MiniTopCategories({ scoring }: { scoring: TodayScoring | null }) {
 }
 
 function requiredMiniSize(mode: MiniMode, textSize: MiniTextSize): { width: number; height: number } {
-  if (mode === "detailed") return { width: 420, height: 320 };
+  if (mode === "detailed") return { width: 390, height: 280 };
   if (textSize === "large") return { width: 340, height: 252 };
   return { width: 300, height: 228 };
 }
@@ -166,6 +133,8 @@ export function MiniView() {
   const [showMiniAtLaunch, setShowMiniAtLaunch] = useState(false);
   const [opacity, setOpacity] = useState(100);
   const [corner, setCorner] = useState<MiniCorner | null>(null);
+  const [clickThrough, setClickThrough] = useState(false);
+  const [cornerTuck, setCornerTuck] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cornerOpen, setCornerOpen] = useState(false);
   const [kindLabels, setKindLabels] = useState(defaultKindLabels);
@@ -175,6 +144,7 @@ export function MiniView() {
   const settingsPopoverRef = useRef<HTMLElement | null>(null);
   const cornerButtonRef = useRef<HTMLButtonElement | null>(null);
   const cornerPopoverRef = useRef<HTMLElement | null>(null);
+  const tuckTimerRef = useRef<number | null>(null);
   const modeRef = useRef<MiniMode>(mode);
   const textSizeRef = useRef<MiniTextSize>(textSize);
   modeRef.current = mode;
@@ -211,11 +181,19 @@ export function MiniView() {
       setPrivacyNow(miniSettings.privacyNow);
       setShowMiniAtLaunch(miniSettings.showAtLaunch);
       setOpacity(miniSettings.opacity);
+      setClickThrough(miniSettings.clickThrough);
+      setCornerTuck(miniSettings.cornerTuck);
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
         waste: settings.kind_label_waste ?? defaultKindLabels.waste,
       });
+      // режим «Компактно» на старте: точный размер + блокировка ресайза (иначе пустая геометрия с компакт-контентом)
+      if (miniSettings.mode === "compact" && miniState.resizable) {
+        const required = requiredMiniSize("compact", miniSettings.textSize);
+        void invoke("resize_mini", { width: required.width, height: required.height, force: true });
+        void invoke("set_mini_resizable", { resizable: false });
+      }
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
@@ -256,6 +234,7 @@ export function MiniView() {
       stopResizeListener?.();
       stopMoveListener?.();
       if (geometryTimer !== null) window.clearTimeout(geometryTimer);
+      if (tuckTimerRef.current !== null) window.clearTimeout(tuckTimerRef.current);
       window.clearInterval(refresh);
     };
   }, [loadMini]);
@@ -322,7 +301,8 @@ export function MiniView() {
     const previous = mode;
     try {
       const required = requiredMiniSize(nextMode, textSize);
-      await invoke("resize_mini", required);
+      await invoke("resize_mini", { width: required.width, height: required.height, force: nextMode === "compact" });
+      if (!corner) await invoke("set_mini_resizable", { resizable: nextMode !== "compact" });
       await saveSetting("mini_mode", nextMode);
       setMode(nextMode);
     } catch {
@@ -367,6 +347,28 @@ export function MiniView() {
       await saveSetting("mini_opacity", String(nextOpacity));
     } catch {
       setOpacity(previous);
+    }
+  }
+
+  async function changeClickThrough(next: boolean) {
+    const previous = clickThrough;
+    setClickThrough(next);
+    try {
+      await saveSetting("mini_click_through", next ? "1" : "0");
+      // при включении окно перестаёт ловить клики — попап закроем сами через 3 сек
+      if (next) window.setTimeout(() => setSettingsOpen(false), 3000);
+    } catch {
+      setClickThrough(previous);
+    }
+  }
+
+  async function changeCornerTuck(next: boolean) {
+    const previous = cornerTuck;
+    setCornerTuck(next);
+    try {
+      await saveSetting("mini_corner_tuck", next ? "1" : "0");
+    } catch {
+      setCornerTuck(previous);
     }
   }
 
@@ -416,6 +418,19 @@ export function MiniView() {
   const away = liveSegment?.status === "away";
   const trackingTone = paused ? "off" : away ? "away" : "live";
   const trackingLabel = trackingTone === "live" ? t("mini.trackingLive") : trackingTone === "away" ? t("mini.trackingAway") : t("mini.trackingOff");
+  // tuck: наведение выезжает окно, увод мыши прячет обратно (800 мс)
+  const scheduleTuck = () => {
+    if (!cornerTuck || !corner || clickThrough || settingsOpen || cornerOpen) return;
+    if (tuckTimerRef.current !== null) window.clearTimeout(tuckTimerRef.current);
+    tuckTimerRef.current = window.setTimeout(() => void invoke("tuck_mini_position", { tucked: true }), 800);
+  };
+  const revealTuck = () => {
+    if (tuckTimerRef.current !== null) {
+      window.clearTimeout(tuckTimerRef.current);
+      tuckTimerRef.current = null;
+    }
+    if (cornerTuck && corner && !clickThrough) void invoke("tuck_mini_position", { tucked: false });
+  };
   const actualCurrentApp = paused
     ? t("mini.trackingOff")
     : !loaded
@@ -434,9 +449,25 @@ export function MiniView() {
   const rankText = progress
     ? t("mini.rank", { rank: progress.current_rank, xp: progress.lifetime_xp.toLocaleString(localeForLang(lang)) })
     : t("mini.rank", { rank: "—", xp: "0" });
+  const verdict = progress
+    ? getMiniVerdict({
+        usefulMs: progress.today.useful_ms,
+        wasteMs: progress.today.waste_ms,
+        observedMs: progress.today.observed_ms,
+        usefulGoalMin: progress.today.useful_goal_min,
+        wasteLimitMin: progress.today.waste_limit_min,
+        observedMin: progress.today.observed_min,
+        usefulLabel: kindLabels.useful,
+        wasteLabel: kindLabels.waste,
+      })
+    : null;
 
   return (
-    <main className={`mini-shell mini-mode-${mode}${textSize === "large" ? " mini-text-large" : ""}${corner ? " is-corner-pinned" : ""}`}>
+    <main
+      className={`mini-shell mini-mode-${mode}${textSize === "large" ? " mini-text-large" : ""}${corner ? " is-corner-pinned" : ""}`}
+      onMouseEnter={revealTuck}
+      onMouseLeave={scheduleTuck}
+    >
       <header
         className="mini-drag-strip"
         onMouseDown={(event) => {
@@ -447,6 +478,7 @@ export function MiniView() {
         <div className="mini-header-status">
           <span className={`mini-pulse is-${trackingTone}`} role="img" aria-label={trackingLabel} title={trackingLabel} />
           <span className="mini-brand">TTLI</span>
+          {clickThrough && <span className="mini-privacy-badge mini-click-through-badge" title={t("mini.clickThroughHint")}>{t("mini.clickThroughBadge")}</span>}
         </div>
         <div className="mini-header-controls">
           <button
@@ -516,11 +548,9 @@ export function MiniView() {
         <MiniScoreHero scoring={scoring} />
         <MiniTopCategories scoring={scoring} />
 
-        {progress ? (
-          <section className="mini-metrics" aria-label={t("mini.dayProgress")}>
-            <BulletBar kind="useful" label={kindLabels.useful} valueMs={progress.today.useful_ms} threshold={{ minutes: progress.today.useful_goal_min, label: t("mini.goalSuffix") }} />
-            <BulletBar kind="waste" label={kindLabels.waste} valueMs={progress.today.waste_ms} threshold={{ minutes: progress.today.waste_limit_min, label: t("mini.limitSuffix") }} />
-            <BulletBar kind="neutral" label={kindLabels.neutral} valueMs={progress.today.neutral_ms} />
+        {progress && verdict ? (
+          <section className="mini-verdict" aria-label={t("mini.dayProgress")}>
+            <EllipsizedText text={t(verdict.key, verdict.vars)} />
           </section>
         ) : <div className="mini-loading" aria-label={t("common.loading")} />}
 
@@ -536,6 +566,7 @@ export function MiniView() {
 
       <footer className="mini-actions">
         <div className="mini-footer-stats">
+          <EllipsizedText className="mini-productive" text={t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })} />
           <EllipsizedText className="mini-accounted" text={accountedText} />
           <EllipsizedText className="mini-rank" text={rankText} />
         </div>
@@ -560,6 +591,7 @@ export function MiniView() {
             <label className="mini-settings-check"><input type="checkbox" checked={privacyNow} onChange={(event) => void changePrivacy(event.target.checked)} /><span>{t("mini.settingsPrivacy")}</span></label>
             <label className="mini-settings-check"><input type="checkbox" checked={showMiniAtLaunch || corner !== null} disabled={corner !== null} onChange={(event) => void changeLaunchVisibility(event.target.checked)} /><span>{corner ? t("mini.settingsLaunchCorner") : t("mini.settingsLaunch")}</span></label>
             <label className="mini-settings-opacity"><span>{t("mini.settingsOpacity")}</span><output>{opacity}%</output><input type="range" min="60" max="100" step="5" value={opacity} onChange={(event) => void changeOpacity(Number(event.target.value))} /></label>
+            <label className="mini-settings-check" title={t("mini.clickThroughHint")}><input type="checkbox" checked={clickThrough} onChange={(event) => void changeClickThrough(event.target.checked)} /><span>{t("mini.clickThrough")}</span></label>
             <div className="mini-settings-window-actions">
               <button type="button" onClick={() => void invoke("minimize_mini")}>{t("mini.minimize")}</button>
               <button type="button" onClick={() => void invoke("hide_mini")}>{t("mini.hideToTray")}</button>
@@ -573,6 +605,12 @@ export function MiniView() {
           {(["tl", "tr", "bl", "br"] as const).map((option) => (
             <button type="button" key={option} className={corner === option ? "is-active" : ""} aria-pressed={corner === option} aria-label={t(`mini.cornerName.${option}`)} onClick={() => void selectCorner(option)}>{t(`mini.corner.${option}`)}</button>
           ))}
+          <label className="mini-corner-tuck" title={t("mini.tuckHint")}>
+            <input type="checkbox" checked={cornerTuck} disabled={corner === null || clickThrough} onChange={(event) => void changeCornerTuck(event.target.checked)} />
+            <span>{t("mini.tuckCorner")}</span>
+            {corner === null && <small>{t("mini.tuckNeedCorner")}</small>}
+            {corner !== null && clickThrough && <small>{t("mini.tuckClickThroughFirst")}</small>}
+          </label>
         </section>
       )}
       <span className="mini-resize-grip" aria-hidden="true" />
