@@ -432,7 +432,13 @@ pub fn resize_mini(app: &AppHandle, width: f64, height: f64, force: bool) -> Res
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(mini.scale_factor().map_err(|error| error.to_string())?);
-    if !force && current.width >= width && current.height >= height {
+    // Дробный DPI (например, 125%): 390 × 1.25 = 487.5 физических → Windows округляет
+    // до 487 → обратно в логические 389.6 < 390 → ранний выход не срабатывал и
+    // set_size уходил в бесконечный цикл resize (виджет дёргался, UI виснул).
+    // Сравниваем округлённые значения — петля разрывается, защита от сжатия остаётся.
+    let current_w = current.width.round();
+    let current_h = current.height.round();
+    if !force && current_w >= width && current_h >= height {
         return Ok(());
     }
     let size = if force {
