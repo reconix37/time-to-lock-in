@@ -1071,7 +1071,7 @@ fn create_rule(
     if category_id == 0 {
         return Err("Без категории нельзя привязать".to_string());
     }
-    if !matches!(match_type.as_str(), "exe" | "title" | "domain") {
+    if !matches!(match_type.as_str(), "exe" | "title" | "domain" | "any") {
         return Err("invalid match type".to_string());
     }
     let normalized = pattern.trim().to_string();

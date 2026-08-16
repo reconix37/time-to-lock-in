@@ -12,7 +12,7 @@ export interface CategoryNode {
 }
 
 export interface RuleSignature {
-  match_type: "exe" | "title" | "domain";
+  match_type: "exe" | "title" | "domain" | "any";
   match_mode: "legacy" | "regex";
   pattern: string;
   category_id: number;

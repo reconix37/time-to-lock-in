@@ -136,10 +136,13 @@ impl RuleSet {
             .map(|definition| {
                 validate_definition(&definition)?;
                 let matcher = if definition.match_mode == "regex" {
-                    Matcher::Regex(compile_regex(
-                        &definition.pattern,
-                        definition.case_insensitive,
-                    )?)
+                    let pattern = if definition.match_type == "any" {
+                        validate_list_separator(&definition.pattern)?;
+                        normalize_any_pattern(&definition.pattern)
+                    } else {
+                        definition.pattern.clone()
+                    };
+                    Matcher::Regex(compile_regex(&pattern, definition.case_insensitive)?)
                 } else {
                     Matcher::Legacy
                 };
@@ -232,7 +235,11 @@ impl RuleSet {
                 title: &title,
                 domain: &domain,
             };
-            let value = field_value(&definition.match_type, &activity).to_string();
+            let value = if definition.match_type == "any" {
+                format!("{app}|{title}|{domain}")
+            } else {
+                field_value(&definition.match_type, &activity).to_string()
+            };
             let matched = rule.matches(&activity);
             let entry = values.entry(value).or_insert((matched, 0));
             entry.0 |= matched;
@@ -255,6 +262,9 @@ impl RuleSet {
 
 impl CompiledRule {
     fn matches(&self, activity: &Activity<'_>) -> bool {
+        if self.definition.match_type == "any" {
+            return self.matches_any(activity);
+        }
         let value = field_value(&self.definition.match_type, activity);
         match &self.matcher {
             Matcher::Regex(regex) => regex.is_match(value),
@@ -266,6 +276,43 @@ impl CompiledRule {
             ),
         }
     }
+
+    fn matches_any(&self, activity: &Activity<'_>) -> bool {
+        match &self.matcher {
+            Matcher::Regex(regex) => {
+                regex.is_match(activity.app)
+                    || regex.is_match(activity.title)
+                    || regex.is_match(activity.domain)
+            }
+            Matcher::Legacy => {
+                let tokens = list_tokens(&self.definition.pattern);
+                if self.definition.case_insensitive {
+                    let values = [
+                        activity.app.to_lowercase(),
+                        activity.title.to_lowercase(),
+                        activity.domain.to_lowercase(),
+                    ];
+                    tokens.iter().any(|token| {
+                        let token = token.to_lowercase();
+                        values.iter().any(|value| value.contains(&token))
+                    })
+                } else {
+                    let values = [activity.app, activity.title, activity.domain];
+                    tokens
+                        .iter()
+                        .any(|token| values.iter().any(|value| value.contains(token)))
+                }
+            }
+        }
+    }
+}
+
+fn list_tokens(pattern: &str) -> Vec<&str> {
+    pattern
+        .split(['|', ','])
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 fn field_value<'a>(match_type: &str, activity: &'a Activity<'_>) -> &'a str {
@@ -303,8 +350,45 @@ fn compile_regex(pattern: &str, case_insensitive: bool) -> Result<Regex, String>
     Ok(regex)
 }
 
+fn validate_list_separator(pattern: &str) -> Result<(), String> {
+    if matches!(pattern.trim().chars().last(), Some('|' | ',')) {
+        return Err("rule pattern must not end with a list separator".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_any_pattern(pattern: &str) -> String {
+    let mut normalized = String::with_capacity(pattern.len());
+    let mut characters = pattern.chars().peekable();
+    let mut in_braces = false;
+    while let Some(character) = characters.next() {
+        match character {
+            '{' => {
+                in_braces = true;
+                normalized.push(character);
+            }
+            '}' => {
+                in_braces = false;
+                normalized.push(character);
+            }
+            ',' if !in_braces => {
+                while normalized.chars().last().is_some_and(char::is_whitespace) {
+                    normalized.pop();
+                }
+                normalized.push('|');
+                while characters.next_if(|next| next.is_whitespace()).is_some() {}
+            }
+            _ => normalized.push(character),
+        }
+    }
+    normalized
+}
+
 fn validate_definition(definition: &RuleDefinition) -> Result<(), String> {
-    if !matches!(definition.match_type.as_str(), "exe" | "title" | "domain") {
+    if !matches!(
+        definition.match_type.as_str(),
+        "exe" | "title" | "domain" | "any"
+    ) {
         return Err("invalid rule match type".to_string());
     }
     if !matches!(definition.match_mode.as_str(), "legacy" | "regex") {
@@ -505,6 +589,125 @@ mod tests {
         let mut empty = rule(2, "title", ".*", 1);
         empty.match_mode = "regex".to_string();
         assert!(RuleSet::compile(vec![empty]).is_err());
+    }
+
+    #[test]
+    fn any_regex_matches_either_field() {
+        let mut definition = rule(1, "any", "tiktok|reddit", 4);
+        definition.match_mode = "regex".to_string();
+        let rules = RuleSet::compile(vec![definition]).expect("rules");
+
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "discord.exe",
+                title: "TikTok",
+                domain: "",
+            }),
+            4
+        );
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "browser.exe",
+                title: "Home",
+                domain: "reddit.com",
+            }),
+            4
+        );
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "Code.exe",
+                title: "Untitled",
+                domain: "",
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn any_regex_treats_comma_as_separator_and_keeps_braces() {
+        let mut list = rule(1, "any", "tiktok, reddit, facebook", 4);
+        list.match_mode = "regex".to_string();
+        assert_eq!(
+            RuleSet::compile(vec![list])
+                .expect("list rule")
+                .classify(&Activity {
+                    app: "browser.exe",
+                    title: "Facebook",
+                    domain: "social.example",
+                }),
+            4
+        );
+
+        let mut quantified = rule(2, "any", "a{2,3}|blender", 5);
+        quantified.match_mode = "regex".to_string();
+        assert_eq!(
+            RuleSet::compile(vec![quantified])
+                .expect("quantified rule")
+                .classify(&Activity {
+                    app: "browser.exe",
+                    title: "aaa course",
+                    domain: "courses.example",
+                }),
+            5
+        );
+    }
+
+    #[test]
+    fn any_legacy_matches_list_or_single_token_in_any_field() {
+        let rules = RuleSet::compile(vec![rule(1, "any", "tiktok|reddit", 4)]).expect("rules");
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "tiktok.exe",
+                title: "Home",
+                domain: "",
+            }),
+            4
+        );
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "browser.exe",
+                title: "Reddit",
+                domain: "social.example",
+            }),
+            4
+        );
+
+        let single = RuleSet::compile(vec![rule(2, "any", "blender", 5)]).expect("single rule");
+        assert_eq!(
+            single.classify(&Activity {
+                app: "blender.exe",
+                title: "Untitled",
+                domain: "",
+            }),
+            5
+        );
+    }
+
+    #[test]
+    fn specific_domain_rule_beats_any_rule_at_equal_priority() {
+        let mut domain = rule(1, "domain", r"reddit\.com", 5);
+        domain.match_mode = "regex".to_string();
+        let mut any = rule(2, "any", "reddit", 6);
+        any.match_mode = "regex".to_string();
+        let rules = RuleSet::compile(vec![any, domain]).expect("rules");
+
+        assert_eq!(
+            rules.classify(&Activity {
+                app: "browser.exe",
+                title: "Reddit",
+                domain: "reddit.com",
+            }),
+            5
+        );
+    }
+
+    #[test]
+    fn any_regex_rejects_trailing_separator() {
+        for pattern in ["tiktok|reddit|", "tiktok, reddit,"] {
+            let mut definition = rule(1, "any", pattern, 4);
+            definition.match_mode = "regex".to_string();
+            assert!(RuleSet::compile(vec![definition]).is_err());
+        }
     }
 
     #[test]
