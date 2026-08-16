@@ -555,7 +555,7 @@ export function MiniView() {
         <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
           <span className="mini-now-label">{t("mini.nowLabel")}</span>
           <EllipsizedText className="mini-current-app" text={currentApp} />
-          {privacyNow && <span className="mini-privacy-badge">{t("mini.nowHiddenBadge")}</span>}
+          {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
           {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
         </section>
       </section>

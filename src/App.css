@@ -730,7 +730,8 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-category-badge, .mini-privacy-badge { overflow: hidden; flex-shrink: 0; max-width: 100px; padding: 0 6px; border: 1px solid var(--hl-low); border-radius: var(--radius-pill); background: var(--hl-low); color: var(--cat-neutral); font-size: var(--mini-font-label); font-weight: 500; line-height: var(--mini-line-label); text-overflow: ellipsis; white-space: nowrap; }
 .mini-category-badge.kind-useful { color: var(--cat-useful); }
 .mini-category-badge.kind-waste { color: var(--cat-waste); }
-.mini-privacy-badge { max-width: none; border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--warn); }
+.mini-privacy-badge { max-width: none; border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--warn); cursor: pointer; }
+.mini-privacy-badge:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .mini-click-through-badge { margin-left: 4px; }
 
 .mini-actions { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 2px 12px; border-top: 1px solid var(--hl-low); }
