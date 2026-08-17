@@ -14,9 +14,9 @@ CREATE TABLE IF NOT EXISTS categories (
 );
 
 INSERT OR IGNORE INTO categories
-    (id, name, color, icon, kind, goal_multiplier, created_at, sort_order, priority)
+    (id, name, color, icon, kind, goal_multiplier, created_at, sort_order)
 VALUES
-    (0, 'Без категории', '#9893a5', '', 'neutral', 1.0, 0, -1, 999);
+    (0, 'Без категории', '#9893a5', '', 'neutral', 1.0, 0, -1);
 
 CREATE TABLE IF NOT EXISTS rules (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
