@@ -7,6 +7,7 @@ import { Agentation } from "agentation";
 import { CalendarHeatmap } from "./components/CalendarHeatmap";
 import { AfkStrip } from "./components/AfkStrip";
 import { CumulativeChart, type TodayCumulative } from "./components/CumulativeChart";
+import { DayCalendar } from "./components/DayCalendar";
 import { DayPrint } from "./components/DayPrint";
 import { DayScorecard } from "./components/DayScorecard";
 import {
@@ -192,6 +193,7 @@ function DashboardView() {
   const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
   const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
   const [dayCumulativeDate, setDayCumulativeDate] = useState<string>("");
+  const [dayCalendarOpen, setDayCalendarOpen] = useState(false);
   const [dayCumulative, setDayCumulative] = useState<TodayCumulative | null>(null);
   const [dayCumulativeLoading, setDayCumulativeLoading] = useState(false);
   const [afkSeries, setAfkSeries] = useState<AfkDay[]>([]);
@@ -1348,9 +1350,28 @@ function DashboardView() {
                   <div><span className="eyebrow">{t("trends.dayEyebrow")}</span><h2>{t("trends.dayTitle")}</h2></div>
                 </div>
                 <div className="trends-day-picker" aria-label={t("trends.dayPickerLabel")}>
-                  <button type="button" onClick={() => setDayCumulativeDate((date) => shiftLocalDate(date, -1))} aria-label={t("trends.prevDay")} title={t("trends.prevDay")}>‹</button>
-                  <span className="mono-meta">{dayCumulativeDate ? formatLocalDate(dayCumulativeDate, { weekday: "long", day: "numeric", month: "long" }) : "—"}</span>
-                  <button type="button" onClick={() => setDayCumulativeDate((date) => shiftLocalDate(date, 1))} aria-label={t("trends.nextDay")} title={t("trends.nextDay")}>›</button>
+                  <button type="button" className="day-cal-chevron" onClick={() => setDayCumulativeDate((date) => shiftLocalDate(date, -1))} aria-label={t("trends.prevDay")} title={t("trends.prevDay")}>‹</button>
+                  <button
+                    type="button"
+                    className={`day-cal-open ${dayCalendarOpen ? "is-open" : ""}`}
+                    aria-expanded={dayCalendarOpen}
+                    aria-label={t("trends.openCalendar")}
+                    title={t("trends.openCalendar")}
+                    onClick={() => setDayCalendarOpen((open) => !open)}
+                  >
+                    {dayCumulativeDate ? formatLocalDate(dayCumulativeDate, { weekday: "long", day: "numeric", month: "long" }) : "—"}
+                  </button>
+                  <button type="button" className="day-cal-chevron" onClick={() => { setDayCalendarOpen(false); setDayCumulativeDate((date) => shiftLocalDate(date, 1)); }} aria-label={t("trends.nextDay")} title={t("trends.nextDay")}>›</button>
+                  {dayCalendarOpen && (
+                    <div className="day-calendar-anchor">
+                      <DayCalendar
+                        selected={dayCumulativeDate}
+                        today={todayLocalDate}
+                        onSelect={setDayCumulativeDate}
+                        onClose={() => setDayCalendarOpen(false)}
+                      />
+                    </div>
+                  )}
                 </div>
                 {dayCumulativeLoading ? (
                   <div className="card trends-skeleton skeleton" aria-label={t("dashboard.trendsLoading")} />
