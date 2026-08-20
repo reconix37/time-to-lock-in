@@ -19,6 +19,15 @@ pub struct RuleDefinition {
     pub category_priority: i64,
     pub match_mode: String,
     pub case_insensitive: bool,
+    pub conditions: Vec<RuleCondition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuleCondition {
+    pub match_type: String,
+    pub pattern: String,
+    pub match_mode: String,
+    pub case_insensitive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,11 +130,35 @@ impl RuleSet {
                     category_priority: row.get(7)?,
                     match_mode: row.get(5)?,
                     case_insensitive: row.get::<_, i64>(6)? == 1,
+                    conditions: Vec::new(),
                 })
             })
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
+        let mut definitions = definitions;
+        for definition in &mut definitions {
+            let mut statement = connection
+                .prepare("SELECT match_type, pattern, match_mode, case_insensitive FROM rule_conditions WHERE rule_id = ?1 ORDER BY ordinal")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([definition.id], |row| {
+                    Ok(RuleCondition {
+                        match_type: row.get(0)?,
+                        pattern: row.get(1)?,
+                        match_mode: row.get(2)?,
+                        case_insensitive: row.get::<_, i64>(3)? == 1,
+                    })
+                })
+                .map_err(|error| error.to_string())?;
+            let mut conditions = Vec::new();
+            for row in rows {
+                conditions.push(row.map_err(|error| error.to_string())?);
+            }
+            if !conditions.is_empty() {
+                definition.conditions = conditions;
+            }
+        }
         Self::compile(definitions)
     }
 
@@ -274,6 +307,22 @@ impl RuleSet {
 
 impl CompiledRule {
     fn matches(&self, activity: &Activity<'_>) -> bool {
+        if !self.definition.conditions.is_empty() {
+            return self.definition.conditions.iter().all(|condition| {
+                let value = field_value(&condition.match_type, activity);
+                if condition.match_mode == "regex" {
+                    compile_regex(&condition.pattern, condition.case_insensitive)
+                        .is_ok_and(|regex| regex.is_match(value))
+                } else {
+                    legacy_matches(
+                        &condition.match_type,
+                        &condition.pattern,
+                        value,
+                        condition.case_insensitive,
+                    )
+                }
+            });
+        }
         if self.definition.match_type == "any" {
             return self.matches_any(activity);
         }
@@ -410,6 +459,24 @@ fn validate_definition(definition: &RuleDefinition) -> Result<(), String> {
     if length == 0 || length > 500 {
         return Err("rule pattern must contain 1-500 characters".to_string());
     }
+    if definition.conditions.len() > 20 {
+        return Err("rule conditions must contain at most 20 items".to_string());
+    }
+    for condition in &definition.conditions {
+        if !matches!(condition.match_type.as_str(), "exe" | "title" | "domain") {
+            return Err("invalid rule condition match type".to_string());
+        }
+        if !matches!(condition.match_mode.as_str(), "legacy" | "regex") {
+            return Err("invalid rule condition match mode".to_string());
+        }
+        let condition_length = condition.pattern.chars().count();
+        if condition_length == 0 || condition_length > 500 {
+            return Err("rule condition pattern must contain 1-500 characters".to_string());
+        }
+        if condition.match_mode == "regex" {
+            compile_regex(&condition.pattern, condition.case_insensitive)?;
+        }
+    }
     Ok(())
 }
 
@@ -432,6 +499,7 @@ mod tests {
             category_priority: 0,
             match_mode: "legacy".to_string(),
             case_insensitive: true,
+            conditions: Vec::new(),
         }
     }
 

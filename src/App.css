@@ -629,6 +629,52 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-icon-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.35; }
 .mini-icon-button:hover { background: var(--hl-low); color: var(--text); }
 .mini-icon-button.is-active { color: var(--iris); }
+.mini-drag-strip { position: relative; }
+.mini-brow-handle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  height: 22px;
+  color: var(--subtle);
+  pointer-events: none;
+}
+.mini-brow-handle svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.mini-drag-strip:hover .mini-brow-handle svg { opacity: 1; }
+.mini-brow-panel {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  animation: mini-brow-in 0.12s ease;
+}
+@keyframes mini-brow-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.mini-brow-panel .mini-icon-button { color: var(--muted); }
+.mini-brow-panel .mini-icon-button:hover { color: var(--text); background: var(--hl-low); }
 .mini-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
 .mini-pulse.is-live { background: var(--ok); animation: pulse 2s steps(2, end) infinite; }
 .mini-pulse.is-away { background: var(--warn); animation: pulse 1.2s steps(2, end) infinite; }

@@ -61,15 +61,18 @@ function EllipsizedText({ className, text }: { className?: string; text: string 
   return <span ref={ref} className={className} aria-label={text} title={truncated ? text : undefined}>{text}</span>;
 }
 
-function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "minimize" | "hide" }) {
+function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "click" | "chevron" }) {
   if (name === "corner") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 8.3 9.7 3.8a2.1 2.1 0 0 1 3 3l-5.9 5.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4" /></svg>;
   }
   if (name === "pin") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><rect className="mini-icon-win-back" x="2.5" y="3.5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><rect className="mini-icon-win-front" x="5.5" y="5.5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>;
   }
-  if (name === "minimize") {
-    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11.5h10" /></svg>;
+  if (name === "click") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.9 2.7 12 7 7.7 8.2 6 12.5z" /></svg>;
+  }
+  if (name === "chevron") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 6 4.5 4 4.5-4" /></svg>;
   }
   if (name === "hide") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" /></svg>;
@@ -135,6 +138,18 @@ export function MiniView() {
   const [corner, setCorner] = useState<MiniCorner | null>(null);
   const [clickThrough, setClickThrough] = useState(false);
   const [cornerTuck, setCornerTuck] = useState(false);
+  const [browOpen, setBrowOpen] = useState(false);
+  const browTimerRef = useRef<number | null>(null);
+  // «бровь»: панель управления выезжает по hover'у, чтобы не занимать место и не мешать ресайзу окна.
+  const openBrow = () => {
+    if (browTimerRef.current !== null) window.clearTimeout(browTimerRef.current);
+    setBrowOpen(true);
+  };
+  const scheduleCloseBrow = () => {
+    if (settingsOpen || cornerOpen) return;
+    if (browTimerRef.current !== null) window.clearTimeout(browTimerRef.current);
+    browTimerRef.current = window.setTimeout(() => setBrowOpen(false), 280);
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cornerOpen, setCornerOpen] = useState(false);
   const [kindLabels, setKindLabels] = useState(defaultKindLabels);
@@ -473,12 +488,15 @@ export function MiniView() {
           event.stopPropagation();
           if (event.button === 0 && !corner) void invoke("start_mini_drag");
         }}
+        onMouseEnter={openBrow}
+        onMouseLeave={scheduleCloseBrow}
       >
         <div className="mini-header-status">
           <span className={`mini-pulse is-${trackingTone}`} role="img" aria-label={trackingLabel} title={trackingLabel} />
           <span className="mini-brand">TTLI</span>
           {clickThrough && <span className="mini-privacy-badge mini-click-through-badge" title={t("mini.clickThroughHint")}>{t("mini.clickThroughBadge")}</span>}
         </div>
+        <span className="mini-brow-handle" aria-hidden="true" title={t("mini.browReveal")}><MiniIcon name="chevron" /></span>
         <div className="mini-header-controls">
           <button
             ref={cornerButtonRef}
@@ -493,6 +511,28 @@ export function MiniView() {
           >{corner ? t(`mini.corner.${corner}`) : <MiniIcon name="corner" />}</button>
           <button
             type="button"
+            className="mini-icon-button"
+            aria-label={t("mini.hideToTray")}
+            title={t("mini.hideToTray")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void invoke("hide_mini");
+            }}
+          ><MiniIcon name="hide" /></button>
+        </div>
+      </header>
+
+      {browOpen && (
+        <nav
+          className="mini-brow-panel"
+          onMouseEnter={openBrow}
+          onMouseLeave={scheduleCloseBrow}
+          aria-label={t("mini.browActions")}
+        >
+          <button
+            type="button"
             className={`mini-icon-button${pinned ? " is-active" : ""}`}
             aria-pressed={pinned}
             aria-label={pinned ? t("mini.unpin") : t("mini.pin")}
@@ -501,6 +541,20 @@ export function MiniView() {
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => void togglePin(event)}
           ><MiniIcon name="pin" /></button>
+          <button
+            type="button"
+            className={`mini-icon-button${clickThrough ? " is-active" : ""}`}
+            aria-pressed={clickThrough}
+            aria-label={t("mini.clickThrough")}
+            title={t("mini.clickThroughHint")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setBrowOpen(false);
+              void changeClickThrough(!clickThrough);
+            }}
+          ><MiniIcon name="click" /></button>
           <button
             ref={settingsButtonRef}
             type="button"
@@ -516,32 +570,8 @@ export function MiniView() {
               setSettingsOpen((open) => !open);
             }}
           ><MiniIcon name="settings" /></button>
-          <button
-            type="button"
-            className="mini-icon-button"
-            aria-label={t("mini.minimize")}
-            title={t("mini.minimize")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void invoke("minimize_mini");
-            }}
-          ><MiniIcon name="minimize" /></button>
-          <button
-            type="button"
-            className="mini-icon-button"
-            aria-label={t("mini.hideToTray")}
-            title={t("mini.hideToTray")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void invoke("hide_mini");
-            }}
-          ><MiniIcon name="hide" /></button>
-        </div>
-      </header>
+        </nav>
+      )}
 
       <section className="mini-body">
         <MiniScoreHero scoring={scoring} />
@@ -592,7 +622,6 @@ export function MiniView() {
             <label className="mini-settings-opacity"><span>{t("mini.settingsOpacity")}</span><output>{opacity}%</output><input type="range" min="60" max="100" step="5" value={opacity} onChange={(event) => void changeOpacity(Number(event.target.value))} /></label>
             <label className="mini-settings-check" title={t("mini.clickThroughHint")}><input type="checkbox" checked={clickThrough} onChange={(event) => void changeClickThrough(event.target.checked)} /><span>{t("mini.clickThrough")}</span></label>
             <div className="mini-settings-window-actions">
-              <button type="button" onClick={() => void invoke("minimize_mini")}>{t("mini.minimize")}</button>
               <button type="button" onClick={() => void invoke("hide_mini")}>{t("mini.hideToTray")}</button>
             </div>
           </div>

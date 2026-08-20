@@ -829,6 +829,7 @@ struct Rule {
     priority: i64,
     match_mode: String,
     case_insensitive: bool,
+    conditions: Vec<rules::RuleCondition>,
 }
 
 #[derive(Serialize)]
@@ -1064,12 +1065,79 @@ fn get_rules() -> Result<Vec<Rule>, String> {
                 priority: row.get(4)?,
                 match_mode: row.get(5)?,
                 case_insensitive: row.get::<_, i64>(6)? == 1,
+                conditions: Vec::new(),
             })
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    drop(statement);
+    let mut rules = rules;
+    for rule in &mut rules {
+        let mut condition_statement = connection
+            .prepare("SELECT match_type, pattern, match_mode, case_insensitive FROM rule_conditions WHERE rule_id = ?1 ORDER BY ordinal")
+            .map_err(|error| error.to_string())?;
+        let rows = condition_statement
+            .query_map([rule.id], |row| {
+                Ok(rules::RuleCondition {
+                    match_type: row.get(0)?,
+                    pattern: row.get(1)?,
+                    match_mode: row.get(2)?,
+                    case_insensitive: row.get::<_, i64>(3)? == 1,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        for condition in rows {
+            rule.conditions
+                .push(condition.map_err(|error| error.to_string())?);
+        }
+    }
     Ok(rules)
+}
+
+fn normalized_conditions(
+    conditions: Option<Vec<rules::RuleCondition>>,
+) -> Vec<rules::RuleCondition> {
+    conditions
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut condition| {
+            condition.pattern = rules::normalize_pattern(&condition.pattern);
+            condition
+        })
+        .collect()
+}
+
+fn mirror_first_condition(
+    match_type: &mut String,
+    pattern: &mut String,
+    match_mode: &mut String,
+    case_insensitive: &mut bool,
+    conditions: &[rules::RuleCondition],
+) {
+    if let Some(first) = conditions.first() {
+        *match_type = first.match_type.clone();
+        *pattern = first.pattern.clone();
+        *match_mode = first.match_mode.clone();
+        *case_insensitive = first.case_insensitive;
+    }
+}
+
+fn write_rule_conditions(
+    connection: &rusqlite::Connection,
+    rule_id: i64,
+    conditions: &[rules::RuleCondition],
+) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM rule_conditions WHERE rule_id = ?1", [rule_id])
+        .map_err(|error| error.to_string())?;
+    for (ordinal, condition) in conditions.iter().enumerate() {
+        connection.execute(
+            "INSERT INTO rule_conditions (rule_id, ordinal, match_type, pattern, match_mode, case_insensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![rule_id, ordinal as i64, condition.match_type, condition.pattern, condition.match_mode, i64::from(condition.case_insensitive)],
+        ).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn rule_duplicate_error(connection: &rusqlite::Connection) -> String {
@@ -1092,30 +1160,54 @@ fn ensure_rule_unique(
     match_mode: &str,
     pattern: &str,
     case_insensitive: bool,
+    conditions: &[rules::RuleCondition],
 ) -> Result<(), String> {
-    let duplicate_exists = connection
-        .query_row(
-            "SELECT 1 FROM rules
-             WHERE category_id = ?1
-               AND match_type = ?2
-               AND match_mode = ?3
-               AND pattern = ?4
-               AND case_insensitive = ?5
-               AND (?6 IS NULL OR id <> ?6)
-             LIMIT 1",
-            params![
-                category_id,
-                match_type,
-                match_mode,
-                pattern,
-                i64::from(case_insensitive),
-                excluded_rule_id,
-            ],
-            |_| Ok(true),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .unwrap_or(false);
+    let mut statement = connection
+        .prepare("SELECT id, match_type, pattern, match_mode, case_insensitive FROM rules WHERE category_id = ?1 AND (?2 IS NULL OR id <> ?2)")
+        .map_err(|error| error.to_string())?;
+    let candidates = statement
+        .query_map(params![category_id, excluded_rule_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)? == 1,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut duplicate_exists = false;
+    for candidate in candidates {
+        let (id, candidate_type, candidate_pattern, candidate_mode, candidate_case) =
+            candidate.map_err(|error| error.to_string())?;
+        if candidate_type != match_type
+            || candidate_pattern != pattern
+            || candidate_mode != match_mode
+            || candidate_case != case_insensitive
+        {
+            continue;
+        }
+        let mut child = connection.prepare("SELECT match_type, pattern, match_mode, case_insensitive FROM rule_conditions WHERE rule_id = ?1 ORDER BY ordinal").map_err(|error| error.to_string())?;
+        let rows = child
+            .query_map([id], |row| {
+                Ok(rules::RuleCondition {
+                    match_type: row.get(0)?,
+                    pattern: row.get(1)?,
+                    match_mode: row.get(2)?,
+                    case_insensitive: row.get::<_, i64>(3)? == 1,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        let mut candidate_conditions = Vec::new();
+        for row in rows {
+            candidate_conditions.push(row.map_err(|error| error.to_string())?);
+        }
+        if candidate_conditions == conditions {
+            duplicate_exists = true;
+            break;
+        }
+    }
+    drop(statement);
     if duplicate_exists {
         Err(rule_duplicate_error(connection))
     } else {
@@ -1140,6 +1232,7 @@ fn create_rule(
     priority: i64,
     match_mode: String,
     case_insensitive: bool,
+    conditions: Option<Vec<rules::RuleCondition>>,
 ) -> Result<Rule, String> {
     if category_id == 0 {
         return Err("Без категории нельзя привязать".to_string());
@@ -1147,7 +1240,14 @@ fn create_rule(
     if !matches!(match_type.as_str(), "exe" | "title" | "domain" | "any") {
         return Err("invalid match type".to_string());
     }
-    let normalized = rules::normalize_pattern(&pattern);
+    let mut normalized = rules::normalize_pattern(&pattern);
+    let mut conditions = normalized_conditions(conditions);
+    if let Some(first) = conditions.first() {
+        match_type = first.match_type.clone();
+        normalized = first.pattern.clone();
+        match_mode = first.match_mode.clone();
+        case_insensitive = first.case_insensitive;
+    }
     rules::RuleSet::compile(vec![rules::RuleDefinition {
         id: 0,
         match_type: match_type.clone(),
@@ -1157,6 +1257,7 @@ fn create_rule(
         category_priority: 0,
         match_mode: match_mode.clone(),
         case_insensitive,
+        conditions: conditions.clone(),
     }])?;
 
     let mut connection = db::open()?;
@@ -1180,6 +1281,7 @@ fn create_rule(
         &match_mode,
         &normalized,
         case_insensitive,
+        &conditions,
     )?;
 
     connection
@@ -1199,6 +1301,7 @@ fn create_rule(
         )
         .map_err(|error| rule_write_error(&connection, error))?;
     let id = connection.last_insert_rowid();
+    write_rule_conditions(&connection, id, &conditions)?;
     db::bump_rules_revision(&connection)?;
     // Правило изменилось — сразу перекрашиваем историю (не-manual сегменты),
     // иначе старые сегменты висят без категории до ручной перекраски.
@@ -1211,6 +1314,7 @@ fn create_rule(
         priority,
         match_mode,
         case_insensitive,
+        conditions,
     })
 }
 
@@ -1223,6 +1327,7 @@ fn update_rule(
     priority: i64,
     match_mode: String,
     case_insensitive: bool,
+    conditions: Option<Vec<rules::RuleCondition>>,
 ) -> Result<(), String> {
     if id <= 0 {
         return Err("invalid rule id".to_string());
@@ -1231,7 +1336,14 @@ fn update_rule(
         return Err("Без категории нельзя привязать".to_string());
     }
 
-    let normalized = rules::normalize_pattern(&pattern);
+    let mut normalized = rules::normalize_pattern(&pattern);
+    let mut conditions = normalized_conditions(conditions);
+    if let Some(first) = conditions.first() {
+        match_type = first.match_type.clone();
+        normalized = first.pattern.clone();
+        match_mode = first.match_mode.clone();
+        case_insensitive = first.case_insensitive;
+    }
     rules::RuleSet::compile(vec![rules::RuleDefinition {
         id,
         match_type: match_type.clone(),
@@ -1241,6 +1353,7 @@ fn update_rule(
         category_priority: 0,
         match_mode: match_mode.clone(),
         case_insensitive,
+        conditions: conditions.clone(),
     }])?;
     let mut connection = db::open()?;
     ensure_rule_unique(
@@ -1251,6 +1364,7 @@ fn update_rule(
         &match_mode,
         &normalized,
         case_insensitive,
+        &conditions,
     )?;
     let updated = connection
         .execute(
@@ -1271,6 +1385,7 @@ fn update_rule(
     if updated == 0 {
         return Err("rule does not exist".to_string());
     }
+    write_rule_conditions(&connection, id, &conditions)?;
     db::bump_rules_revision(&connection)?;
     // Правило изменилось — сразу перекрашиваем историю (не-manual сегменты).
     db::reclassify_history(&mut connection, false, None, None)?;
@@ -1298,19 +1413,33 @@ fn preview_rule(
     pattern: String,
     match_mode: String,
     case_insensitive: bool,
+    conditions: Option<Vec<rules::RuleCondition>>,
 ) -> Result<RulePreview, String> {
     let connection = db::open()?;
+    let mut match_type = match_type;
+    let mut pattern = rules::normalize_pattern(&pattern);
+    let mut match_mode = match_mode;
+    let mut case_insensitive = case_insensitive;
+    let conditions = normalized_conditions(conditions);
+    mirror_first_condition(
+        &mut match_type,
+        &mut pattern,
+        &mut match_mode,
+        &mut case_insensitive,
+        &conditions,
+    );
     let preview = rules::RuleSet::preview(
         &connection,
         rules::RuleDefinition {
             id: 0,
             match_type,
-            pattern: rules::normalize_pattern(&pattern),
+            pattern,
             category_id: 1,
             priority: 0,
             category_priority: 0,
             match_mode,
             case_insensitive,
+            conditions,
         },
         db::now_ms(),
     )?;

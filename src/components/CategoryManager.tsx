@@ -6,8 +6,10 @@ import { CATEGORY_ICONS, CategoryIcon, CategoryMark } from "./CategoryIcon";
 import {
   nextSelectionAfterDelete,
   rulesActionView,
+  normalizedRuleConditions,
   sameRuleSignature,
   type ManagerView,
+  type RuleConditionSignature,
 } from "../categoryManagerModel";
 
 export type CategoryKind = "useful" | "neutral" | "waste";
@@ -32,6 +34,8 @@ export interface Category {
   full_path: string;
 }
 
+export interface RuleCondition extends RuleConditionSignature {}
+
 export interface Rule {
   id: number;
   match_type: RuleMatchType;
@@ -40,6 +44,7 @@ export interface Rule {
   priority: number;
   match_mode: RuleMatchMode;
   case_insensitive: boolean;
+  conditions?: RuleCondition[];
 }
 
 interface RulePreview {
@@ -111,6 +116,7 @@ function emptyRule(categoryId: number): RuleDraft {
     category_id: categoryId,
     match_mode: "legacy",
     case_insensitive: true,
+    conditions: [{ match_type: "title", pattern: "", match_mode: "legacy", case_insensitive: true }],
   };
 }
 
@@ -214,7 +220,7 @@ export function CategoryManager({
   const duplicate = useMemo(
     () => rules.find((rule) => rule.id !== ruleDraft.id && sameRuleSignature(
       { ...rule, pattern: normalizePattern(rule.pattern) },
-      { ...ruleDraft, pattern: normalizePattern(ruleDraft.pattern) },
+      { ...ruleDraft, pattern: normalizePattern(ruleDraft.pattern), conditions: normalizedRuleConditions(ruleDraft).map((condition) => ({ ...condition, pattern: normalizePattern(condition.pattern) })) },
     )) ?? null,
     [ruleDraft, rules],
   );
@@ -305,6 +311,7 @@ export function CategoryManager({
         pattern: normalizePattern(ruleDraft.pattern),
         matchMode: ruleDraft.match_mode,
         caseInsensitive: ruleDraft.case_insensitive,
+        conditions: ruleConditions().length > 1 ? ruleConditions().map((condition) => ({ match_type: condition.match_type, pattern: normalizePattern(condition.pattern), match_mode: condition.match_mode, case_insensitive: condition.case_insensitive })) : undefined,
       }).then((result) => {
         if (previewRequest.current !== requestId) return;
         setPreview(result);
@@ -425,6 +432,7 @@ export function CategoryManager({
         priority: ruleDraft.priority ?? nextPriority,
         matchMode: ruleDraft.match_mode,
         caseInsensitive: ruleDraft.case_insensitive,
+        conditions: ruleConditions().length > 1 ? ruleConditions().map((condition) => ({ match_type: condition.match_type, pattern: normalizePattern(condition.pattern), match_mode: condition.match_mode, case_insensitive: condition.case_insensitive })) : undefined,
       });
       const targetView: ManagerView = view.type === "newRule" && view.returnTo === "allRules"
         ? { type: "allRules" }
@@ -478,6 +486,12 @@ export function CategoryManager({
           priority,
           matchMode: rule.match_mode,
           caseInsensitive: rule.case_insensitive,
+          conditions: rule.conditions?.map((condition) => ({
+            match_type: condition.match_type,
+            pattern: normalizePattern(condition.pattern),
+            match_mode: condition.match_mode,
+            case_insensitive: condition.case_insensitive,
+          })),
         });
       }
       await reload();
@@ -523,10 +537,48 @@ export function CategoryManager({
   }
 
   function startRule(categoryId: number, rule?: Rule, returnTo: "rules" | "allRules" = "rules") {
-    setRuleDraft(rule ? { ...rule } : emptyRule(categoryId));
+    if (rule) {
+      const conditions = normalizedRuleConditions(rule);
+      setRuleDraft({ ...rule, conditions, pattern: conditions[0]?.pattern ?? rule.pattern });
+    } else {
+      setRuleDraft(emptyRule(categoryId));
+    }
     setPatternError(null);
     setPreview(null);
     setView({ type: "newRule", categoryId, returnTo });
+  }
+
+  function ruleConditions(): RuleCondition[] {
+    return (ruleDraft.conditions ?? []).length > 0
+      ? [...(ruleDraft.conditions ?? [])]
+      : normalizedRuleConditions(ruleDraft);
+  }
+
+  function updateRuleCondition(index: number, update: Partial<RuleCondition>) {
+    const conditions = ruleConditions().map((condition, conditionIndex) => conditionIndex === index ? { ...condition, ...update } : condition);
+    const first = conditions[0];
+    setRuleDraft({
+      ...ruleDraft,
+      conditions,
+      pattern: first?.pattern ?? "",
+      match_type: first?.match_type ?? ruleDraft.match_type,
+      match_mode: first?.match_mode ?? ruleDraft.match_mode,
+      case_insensitive: first?.case_insensitive ?? ruleDraft.case_insensitive,
+    });
+    setPatternError(null);
+  }
+
+  function addRuleCondition() {
+    setRuleDraft({
+      ...ruleDraft,
+      conditions: [...ruleConditions(), { match_type: "title", pattern: "", match_mode: "legacy", case_insensitive: ruleDraft.case_insensitive }],
+    });
+  }
+
+  function removeRuleCondition(index: number) {
+    const conditions = ruleConditions().filter((_, conditionIndex) => conditionIndex !== index);
+    const first = conditions[0];
+    setRuleDraft({ ...ruleDraft, conditions, pattern: first?.pattern ?? "", match_type: first?.match_type ?? "any" });
   }
 
   function renderCategoryForm(category: CategoryDraft, id?: number) {
@@ -567,7 +619,9 @@ export function CategoryManager({
   }
 
   function renderRuleForm() {
-    const placeholder = ruleDraft.match_type === "any" ? "tiktok, reddit, youtube" : ruleDraft.match_type === "exe" ? "Code.exe" : ruleDraft.match_type === "domain" ? "youtube.com" : "Blender tutorial";
+    const placeholder = (ruleDraft.match_type as RuleMatchType) === "any" ? "tiktok, reddit, youtube" : ruleDraft.match_type === "exe" ? "Code.exe" : ruleDraft.match_type === "domain" ? "youtube.com" : "Blender tutorial";
+    const conditions = ruleConditions();
+    const isAny = conditions.length === 0 && ruleDraft.match_type === "any";
     const resizePatternField = (field: HTMLTextAreaElement) => {
       field.style.height = "auto";
       field.style.height = `${Math.min(field.scrollHeight, 136)}px`;
@@ -580,8 +634,20 @@ export function CategoryManager({
     return (
       <form className="manager-form rule-sentence-form" noValidate onSubmit={(event) => { event.preventDefault(); void saveRule(); }}>
         <div className="rule-sentence-fields">
-          <div className="rule-condition-row"><span>{t("manager.if")}</span><label className="manager-field manager-field-inline"><span>{t("manager.source")}</span><select className="with-chevron" value={ruleDraft.match_type} onChange={(event) => setRuleDraft({ ...ruleDraft, match_type: event.target.value as RuleMatchType })}><option value="any">{t("manager.sourceAny")}</option><option value="exe">{t("manager.sourceApp")}</option><option value="title">{t("manager.sourceTitle")}</option><option value="domain">{t("manager.sourceWebsite")}</option></select></label><span>{ruleDraft.match_mode === "regex" ? t("manager.matchesExpression") : t("manager.contains")}</span></div>
-          <label className="rule-search-field"><span>{t("manager.whatToFind")}</span><textarea ref={(field) => { if (field) resizePatternField(field); }} rows={2} autoComplete="off" spellCheck={false} maxLength={500} placeholder={placeholder} value={ruleDraft.pattern} aria-invalid={patternError !== null || duplicate !== null} aria-describedby="rule-pattern-state" onInput={(event) => resizePatternField(event.currentTarget)} onChange={(event) => { const pattern = event.target.value; setRuleDraft({ ...ruleDraft, pattern, match_mode: ruleDraft.match_type === "any" && ruleDraft.match_mode === "legacy" && /[|,\\]/.test(pattern) ? "regex" : ruleDraft.match_mode }); setPatternError(null); }} /></label>
+          {isAny ? (
+            <>
+              <div className="rule-condition-row"><span>{t("manager.if")}</span><label className="manager-field manager-field-inline"><span>{t("manager.source")}</span><select className="with-chevron" value="any" disabled><option value="any">{t("manager.sourceAny")}</option></select></label><span>{ruleDraft.match_mode === "regex" ? t("manager.matchesExpression") : t("manager.contains")}</span></div>
+              <label className="rule-search-field"><span>{t("manager.whatToFind")}</span><textarea rows={2} autoComplete="off" spellCheck={false} maxLength={500} placeholder={placeholder} value={ruleDraft.pattern} aria-invalid={patternError !== null || duplicate !== null} aria-describedby="rule-pattern-state" onInput={(event) => resizePatternField(event.currentTarget)} onChange={(event) => { const pattern = event.target.value; setRuleDraft({ ...ruleDraft, pattern, match_mode: ruleDraft.match_mode === "legacy" && /[|,\\]/.test(pattern) ? "regex" : ruleDraft.match_mode }); setPatternError(null); }} /></label>
+            </>
+          ) : (
+            conditions.map((condition, index) => (
+              <div className="rule-condition-group" key={index}>
+                <div className="rule-condition-row"><span>{index === 0 ? t("manager.if") : t("manager.and")}</span><label className="manager-field manager-field-inline"><span>{t("manager.source")}</span><select className="with-chevron" value={condition.match_type} onChange={(event) => updateRuleCondition(index, { match_type: event.target.value as RuleConditionSignature["match_type"] })}><option value="exe">{t("manager.sourceApp")}</option><option value="title">{t("manager.sourceTitle")}</option><option value="domain">{t("manager.sourceWebsite")}</option></select></label><span>{condition.match_mode === "regex" ? t("manager.matchesExpression") : t("manager.contains")}</span>{conditions.length > 1 && <button type="button" onClick={() => removeRuleCondition(index)}>{t("common.delete")}</button>}</div>
+                <label className="rule-search-field"><span>{t("manager.whatToFind")}</span><textarea ref={(field) => { if (field) resizePatternField(field); }} rows={2} autoComplete="off" spellCheck={false} maxLength={500} placeholder={placeholder} value={condition.pattern} aria-invalid={patternError !== null || duplicate !== null} aria-describedby="rule-pattern-state" onInput={(event) => resizePatternField(event.currentTarget)} onChange={(event) => { const pattern = event.target.value; updateRuleCondition(index, { pattern, match_mode: condition.match_mode === "legacy" && /[|,\\]/.test(pattern) ? "regex" : condition.match_mode }); }} /></label>
+              </div>
+            ))
+          )}
+          {!isAny && <button type="button" onClick={addRuleCondition}>{t("manager.addCondition")}</button>}
           <div className="rule-category-row"><span aria-hidden="true">→</span><span>{t("manager.assignCategory")}</span><label className="manager-field manager-field-inline manager-category-select"><span>{t("manager.assignCategory")}</span><select className="with-chevron" value={ruleDraft.category_id || ""} onChange={(event) => setRuleDraft({ ...ruleDraft, category_id: Number(event.target.value) })}><option value="" disabled>{t("manager.chooseCategory")}</option>{manageable.map((category) => <option key={category.id} value={category.id}>{category.full_path}</option>)}</select></label></div>
         </div>
         <p className="rule-field-help">{t("manager.ruleHint")}</p>
@@ -589,7 +655,7 @@ export function CategoryManager({
         <details className="rule-advanced">
           <summary>{t("settings.advanced")}</summary>
           <div className="rule-toggle-list">
-            <label className="rule-toggle-row"><input type="checkbox" checked={ruleDraft.match_mode === "regex"} onChange={(event) => setRuleDraft({ ...ruleDraft, match_mode: event.target.checked ? "regex" : "legacy" })} /><span><strong>{t("manager.useRegex")}</strong><small>{t("manager.useRegexHint")}</small></span></label>
+            <label className="rule-toggle-row"><input type="checkbox" checked={ruleDraft.match_mode === "regex"} onChange={(event) => { const mode = event.target.checked ? "regex" : "legacy"; setRuleDraft({ ...ruleDraft, match_mode: mode, conditions: (ruleDraft.conditions ?? []).map((condition) => ({ ...condition, match_mode: mode })) }); }} /><span><strong>{t("manager.useRegex")}</strong><small>{t("manager.useRegexHint")}</small></span></label>
             <label className="rule-toggle-row"><input type="checkbox" checked={ruleDraft.case_insensitive} onChange={(event) => setRuleDraft({ ...ruleDraft, case_insensitive: event.target.checked })} /><span><strong>{t("manager.caseInsensitive")}</strong><small>{t("manager.caseInsensitiveHint")}</small></span></label>
           </div>
         </details>
@@ -607,7 +673,19 @@ export function CategoryManager({
           const globalIndex = rules.findIndex((item) => item.id === rule.id);
           return (
             <article className="rule-card" key={rule.id}>
-              <p className="rule-card-sentence"><strong>{t(rule.match_type === "any" ? "manager.sourceAny" : rule.match_type === "exe" ? "manager.sourceApp" : rule.match_type === "domain" ? "manager.sourceWebsite" : "manager.sourceTitle")}</strong> {t(rule.match_mode === "regex" ? "manager.matchesExpression" : "manager.contains")} <q>{rule.pattern}</q> <span aria-hidden="true">→</span> <strong>{categoryName(rule.category_id)}</strong></p>
+              <p className="rule-card-sentence">{
+                (() => {
+                  const conds = rule.conditions && rule.conditions.length > 0
+                    ? rule.conditions
+                    : [{ match_type: rule.match_type, pattern: rule.pattern, match_mode: rule.match_mode, case_insensitive: rule.case_insensitive }];
+                  return conds.map((condition, index) => (
+                    <span key={index}>
+                      {index > 0 && <span> {t("manager.and")} </span>}
+                      <strong>{t(condition.match_type === "any" ? "manager.sourceAny" : condition.match_type === "exe" ? "manager.sourceApp" : condition.match_type === "domain" ? "manager.sourceWebsite" : "manager.sourceTitle")}</strong> {t(condition.match_mode === "regex" ? "manager.matchesExpression" : "manager.contains")} <q>{condition.pattern}</q>
+                    </span>
+                  ));
+                })()
+              } <span aria-hidden="true">→</span> <strong>{categoryName(rule.category_id)}</strong></p>
               <div className="rule-card-badges"><span>{t(rule.match_mode === "regex" ? "manager.regularExpression" : "manager.normalSearch")}</span>{rule.case_insensitive && <span>{t("manager.caseInsensitive")}</span>}</div>
               <div className="rule-card-actions">
                 {view.type === "allRules" && <><button type="button" disabled={saving || globalIndex === 0} onClick={() => void moveRule(globalIndex, -1)}>{t("manager.earlier")}</button><button type="button" disabled={saving || globalIndex === rules.length - 1} onClick={() => void moveRule(globalIndex, 1)}>{t("manager.later")}</button></>}

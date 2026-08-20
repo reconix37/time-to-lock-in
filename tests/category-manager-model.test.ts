@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   nextSelectionAfterDelete,
+  normalizedRuleConditions,
   rulesActionView,
   sameRuleSignature,
   type CategoryNode,
@@ -45,3 +46,40 @@ test("deleting a root selects the nearest sibling, then Needs sorting", () => {
   assert.equal(nextSelectionAfterDelete(deleted, [{ id: 1, parent_id: null, sort_order: 1 }, { id: 3, parent_id: null, sort_order: 9 }]), 3);
   assert.equal(nextSelectionAfterDelete(deleted, []), 0);
 });
+
+test("normalizedRuleConditions derives a single condition from legacy fields", () => {
+  assert.deepEqual(normalizedRuleConditions(baseRule), [{
+    match_type: "title",
+    match_mode: "legacy",
+    pattern: "youtube",
+    case_insensitive: true,
+  }]);
+});
+
+test("normalizedRuleConditions keeps explicit multi-condition list", () => {
+  const conditions = [
+    { match_type: "exe" as const, match_mode: "legacy" as const, pattern: "Telegram.exe", case_insensitive: true },
+    { match_type: "title" as const, match_mode: "legacy" as const, pattern: "3D", case_insensitive: true },
+  ];
+  const rule: RuleSignature = { ...baseRule, conditions };
+  assert.deepEqual(normalizedRuleConditions(rule), conditions);
+});
+
+test("sameRuleSignature treats condition order and AND-set as significant", () => {
+  const left: RuleSignature = {
+    ...baseRule,
+    conditions: [
+      { match_type: "exe", match_mode: "legacy", pattern: "Telegram.exe", case_insensitive: true },
+      { match_type: "title", match_mode: "legacy", pattern: "3D", case_insensitive: true },
+    ],
+  };
+  const same = { ...left };
+  const differentOrder = { ...left, conditions: [...left.conditions!].reverse() };
+  const differentPattern = { ...left, conditions: [{ ...left.conditions![1], pattern: "Cinema 4D" }] };
+  const single = { ...left, conditions: [left.conditions![0]] };
+  assert.equal(sameRuleSignature(left, same), true);
+  assert.equal(sameRuleSignature(left, differentOrder), true);
+  assert.equal(sameRuleSignature(left, differentPattern), false);
+  assert.equal(sameRuleSignature(left, single), false);
+});
+

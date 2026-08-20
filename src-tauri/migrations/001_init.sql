@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS rules (
 );
 CREATE INDEX IF NOT EXISTS idx_rules_lookup ON rules(match_type, priority DESC);
 
+CREATE TABLE IF NOT EXISTS rule_conditions (
+    rule_id INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    match_type TEXT NOT NULL CHECK (match_type IN ('exe','title','domain')),
+    pattern TEXT NOT NULL,
+    match_mode TEXT NOT NULL DEFAULT 'legacy' CHECK (match_mode IN ('legacy','regex')),
+    case_insensitive INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (rule_id, ordinal)
+);
+
 CREATE TABLE IF NOT EXISTS segments (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     ts_start     INTEGER NOT NULL,             -- epoch ms (UTC)

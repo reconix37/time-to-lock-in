@@ -14,6 +14,7 @@ const MIGRATION_005: &str = include_str!("../migrations/005_categories_scoring.s
 const MIGRATION_006: &str = include_str!("../migrations/006_rule_uniqueness.sql");
 const MIGRATION_007: &str = include_str!("../migrations/007_rule_match_any.sql");
 const MIGRATION_008: &str = include_str!("../migrations/008_category_priority.sql");
+const MIGRATION_009: &str = include_str!("../migrations/009_rule_conditions.sql");
 
 const TITLE_NOISE_WORDS: &[&str] = &[
     "смотреть",
@@ -340,6 +341,11 @@ pub fn initialize() -> Result<(), String> {
             .execute_batch(MIGRATION_008)
             .map_err(|error| error.to_string())?;
     }
+    if previous_version < 9 {
+        transaction
+            .execute_batch(MIGRATION_009)
+            .map_err(|error| error.to_string())?;
+    }
     if previous_version < 4 {
         transaction
             .execute_batch(MIGRATION_004)
@@ -389,7 +395,7 @@ pub fn initialize() -> Result<(), String> {
         rebuild_daily_stats(&transaction)?;
     }
     transaction
-        .execute_batch("PRAGMA user_version=8;")
+        .execute_batch("PRAGMA user_version=9;")
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -992,6 +998,7 @@ fn reclassification_changes(
                 category_priority: 0,
                 match_mode: "legacy".to_string(),
                 case_insensitive: true,
+                conditions: Vec::new(),
             }])
         })
         .transpose()?;
@@ -1134,6 +1141,7 @@ pub fn classification_match_stats_with_mode(
         category_priority: 0,
         match_mode: match_mode.to_string(),
         case_insensitive,
+        conditions: Vec::new(),
     }])?;
     let stats = rules.match_stats(connection)?;
     Ok(ClassificationMatchStats {
@@ -1891,7 +1899,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
