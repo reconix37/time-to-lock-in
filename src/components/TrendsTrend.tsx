@@ -56,7 +56,7 @@ export function TrendsTrend({ sourceDays, formatDuration, kindLabels }: TrendsTr
       </div>
       <div className="trends-legend" aria-label={t("chart.legend")}>
         <span className="kind-useful"><i />{t("trends.perDay", { label: kindLabels.useful })}</span>
-        <span className="is-average"><i />{t("trends.average")}</span>
+        <span className="is-average" title={t("trends.averageHint")}><i />{t("trends.average")}</span>
       </div>
 
       <div

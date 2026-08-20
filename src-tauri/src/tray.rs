@@ -287,9 +287,12 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
         apply_mini_opacity(&mini, opacity)?;
         enforce_mini_topmost(&mini.as_ref().window())?;
     }
-    if onboarding_done {
-        if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.get_webview_window("main") {
+        if onboarding_done {
             main.hide().map_err(|error| error.to_string())?;
+        } else {
+            // Первый запуск — показать дашборд (окно создаётся скрытым, видимость управляется здесь)
+            main.show().map_err(|error| error.to_string())?;
         }
     }
     Ok(())
@@ -582,7 +585,11 @@ fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Re
     let Some(monitor) = monitor else {
         return Ok(());
     };
-    let area = monitor.work_area();
+    // Полный экран (включая панель задач Windows): виджет цепляется в САМЫЙ угол
+    // поверх панели (жалоба A3), и tuck доезжает до края без зазора (жалоба C1).
+    // work_area() исключает панель задач — потому не используем его здесь.
+    let origin = *monitor.position();
+    let screen_size = *monitor.size();
     let size = window.inner_size().map_err(|error| error.to_string())?;
     let width_logical =
         size.width as f64 / window.scale_factor().map_err(|error| error.to_string())?;
@@ -590,16 +597,16 @@ fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Re
         size.height as f64 / window.scale_factor().map_err(|error| error.to_string())?;
     let margin = if tucked { 0 } else { MINI_CORNER_MARGIN };
     let (left, top) = if tucked {
-        // видимый пятачок 24×24 в углу, остальное — за краем рабочей области
+        // видимый пятачок 24×24 в углу, остальное — за краем экрана
         (
-            area.position.x - (width_logical as i32 - MINI_TUCK_PEEK),
-            area.position.y - (height_logical as i32 - MINI_TUCK_PEEK),
+            origin.x - (width_logical as i32 - MINI_TUCK_PEEK),
+            origin.y - (height_logical as i32 - MINI_TUCK_PEEK),
         )
     } else {
-        (area.position.x + margin, area.position.y + margin)
+        (origin.x + margin, origin.y + margin)
     };
-    let right = area.position.x + area.size.width.saturating_sub(size.width) as i32 - margin;
-    let bottom = area.position.y + area.size.height.saturating_sub(size.height) as i32 - margin;
+    let right = origin.x + screen_size.width.saturating_sub(size.width) as i32 - margin;
+    let bottom = origin.y + screen_size.height.saturating_sub(size.height) as i32 - margin;
     let position = match corner {
         "tl" => PhysicalPosition::new(left, top),
         "tr" => PhysicalPosition::new(right, top),

@@ -83,6 +83,12 @@ const COLORS = [
   { id: "brightLove", value: "#eb6f92" },
   { id: "brightFoam", value: "#9ccfd8" },
   { id: "brightIris", value: "#c4a7e7" },
+  { id: "red", value: "#d1504a" },
+  { id: "green", value: "#4c9f4e" },
+  { id: "teal", value: "#1f8f7a" },
+  { id: "indigo", value: "#5a6cd6" },
+  { id: "violet", value: "#9b59c9" },
+  { id: "olive", value: "#8a9a3d" },
 ] as const;
 const EMPTY_CATEGORY: CategoryDraft = {
   name: "",
@@ -145,10 +151,16 @@ type PriorityValidation =
 
 function validatePriorityInput(input: string): PriorityValidation {
   const trimmed = input.trim();
+  // Пусто = «без приоритета» (в конец очереди) → значение 0 (в БД сохраняется как 999)
+  if (trimmed === "") return { value: 0, error: null };
   if (!/^\d+$/.test(trimmed)) return { value: null, error: "validation.priorityInvalid" };
   const value = Number(trimmed);
-  if (value < 1 || value > 9999) return { value: null, error: "validation.priorityRange" };
+  if (value < 1 || value > 10) return { value: null, error: "validation.priorityRange" };
   return { value, error: null };
+}
+
+function normalizedPriorityText(priority: number): string {
+  return priority >= 1 && priority <= 10 ? String(priority) : "";
 }
 
 function normalizePattern(pattern: string): string {
@@ -177,7 +189,7 @@ export function CategoryManager({
   const [view, setView] = useState<ManagerView>({ type: "category", categoryId: 0 });
   const [categoryDraft, setCategoryDraft] = useState<CategoryDraft>({ ...EMPTY_CATEGORY });
   const [scoreInput, setScoreInput] = useState("0");
-  const [priorityInput, setPriorityInput] = useState("999");
+  const [priorityInput, setPriorityInput] = useState("");
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRule(0));
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [historyPreview, setHistoryPreview] = useState<ReclassificationSummary | null>(null);
@@ -274,7 +286,7 @@ export function CategoryManager({
     if (category) {
       setCategoryDraft({ ...category });
       setScoreInput(normalizedScoreText(category.score));
-      setPriorityInput(String(category.priority));
+      setPriorityInput(normalizedPriorityText(category.priority));
     }
   }, [categories, view]);
 
@@ -341,9 +353,12 @@ export function CategoryManager({
     if (scoreValidation.error !== null) return;
     const priorityValidation = validatePriorityInput(priorityInput);
     if (priorityValidation.error !== null) return;
-    const normalizedCategory = { ...category, score: scoreValidation.value, priority: priorityValidation.value };
+    // 0/пусто = «без приоритета» → в конец очереди (в БД сохраняется как 999)
+    const storePriority = priorityValidation.value === 0 ? 999 : priorityValidation.value;
+    const normalizedCategory = { ...category, score: scoreValidation.value, priority: storePriority };
     setCategoryDraft(normalizedCategory);
     setScoreInput(normalizedScoreText(scoreValidation.value));
+    setPriorityInput(normalizedPriorityText(storePriority));
     setSaving(true);
     setError(null);
     try {
@@ -535,9 +550,9 @@ export function CategoryManager({
       <form className="manager-form category-edit-form" noValidate onSubmit={(event) => { event.preventDefault(); void saveCategory(category, id); }}>
         <label className="manager-field"><span>{t("manager.name")}</span><input autoComplete="off" spellCheck={false} required maxLength={80} placeholder={t("manager.exampleStudy")} value={category.name} onChange={(event) => setCategoryDraft({ ...category, name: event.target.value })} /></label>
         <label className="manager-field"><span>{t("manager.parent")}</span><select className="with-chevron" value={category.parent_id ?? ""} onChange={(event) => { const parentId = event.target.value ? Number(event.target.value) : null; setCategoryDraft({ ...category, parent_id: parentId, inherit_color: parentId !== null && (id !== undefined ? category.inherit_color : true), inherit_score: parentId !== null && (id !== undefined ? category.inherit_score : true) }); }}><option value="">{t("manager.noParent")}</option>{manageable.filter((item) => item.id !== id && !(selectedCategory && item.full_path.startsWith(`${selectedCategory.full_path} > `))).map((item) => <option key={item.id} value={item.id}>{item.full_path}</option>)}</select></label>
-        <label className="manager-field"><span>{t("manager.type")}</span><select className="with-chevron" value={category.kind} onChange={(event) => { const kind = event.target.value as CategoryKind; const score = id === undefined && category.parent_id === null ? (kind === "useful" ? 10 : kind === "waste" ? -10 : 0) : category.score; const icon = id === undefined ? (kind === "useful" ? "briefcase" : kind === "waste" ? "skull" : "coffee") : category.icon; setCategoryDraft({ ...category, kind, score, icon }); setScoreInput(normalizedScoreText(score)); }}><option value="useful">{kindLabels.useful}</option><option value="neutral">{kindLabels.neutral}</option><option value="waste">{kindLabels.waste}</option></select></label>
+        <label className="manager-field"><span>{t("manager.type")}</span><select className="with-chevron" value={category.kind} onChange={(event) => { const kind = event.target.value as CategoryKind; const score = id === undefined && category.parent_id === null ? (kind === "useful" ? 10 : kind === "waste" ? -10 : 0) : category.score; const icon = id === undefined ? (kind === "useful" ? "briefcase" : kind === "waste" ? "thumbs-down" : "coffee") : category.icon; setCategoryDraft({ ...category, kind, score, icon }); setScoreInput(normalizedScoreText(score)); }}><option value="useful">{kindLabels.useful}</option><option value="neutral">{kindLabels.neutral}</option><option value="waste">{kindLabels.waste}</option></select></label>
         <label className="manager-field"><span>{t("manager.score")}</span><input type="text" inputMode="decimal" maxLength={5} disabled={category.inherit_score} value={scoreInput} aria-invalid={scoreValidation.error !== null} aria-describedby="category-score-error" onChange={(event) => setScoreInput(event.target.value)} onBlur={normalizeScore} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); stepScore(event.key === "ArrowUp" ? 1 : -1); }} />{scoreValidation.error !== null && <small id="category-score-error" className="manager-field-error">{t(scoreValidation.error)}</small>}</label>
-        <label className="manager-field"><span>{t("manager.priority")}</span><input type="text" inputMode="numeric" maxLength={4} value={priorityInput} aria-invalid={priorityValidation.error !== null} aria-describedby="category-priority-state" onChange={(event) => setPriorityInput(event.target.value)} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); const current = priorityValidation.error === null ? priorityValidation.value : category.priority; const next = Math.min(9999, Math.max(1, current + (event.key === "ArrowUp" ? 1 : -1))); setPriorityInput(String(next)); }} />{priorityValidation.error !== null && <small id="category-priority-state" className="manager-field-error">{t(priorityValidation.error)}</small>}</label>
+        <label className="manager-field"><span>{t("manager.priority")}</span><input type="text" inputMode="numeric" maxLength={2} placeholder="0" value={priorityInput} aria-invalid={priorityValidation.error !== null} aria-describedby="category-priority-state" onChange={(event) => setPriorityInput(event.target.value)} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); const current = priorityValidation.error === null ? priorityValidation.value : (category.priority >= 1 && category.priority <= 10 ? category.priority : 0); const next = Math.min(10, Math.max(0, current + (event.key === "ArrowUp" ? 1 : -1))); setPriorityInput(next === 0 ? "" : String(next)); }} />{priorityValidation.error !== null && <small id="category-priority-state" className="manager-field-error">{t(priorityValidation.error)}</small>}</label>
         <p className="category-model-hint">{t("manager.priorityHint")}</p>
         <p className="category-model-hint">{t("manager.kindScoreHint")}</p>
         <div className="manager-toggle-list">
@@ -626,7 +641,7 @@ export function CategoryManager({
                     <div className="category-tree-node" key={category.id} style={{ "--tree-indent": `${depth * 20}px` } as CSSProperties}>
                       <div className={`category-tree-row ${selectedCategoryId === category.id ? "is-selected" : ""}`}>
                         <button type="button" className="tree-disclosure" disabled={childCount === 0} aria-label={t("manager.toggleChildren", { category: category.name })} onClick={() => setCollapsed((current) => { const next = new Set(current); if (next.has(category.id)) next.delete(category.id); else next.add(category.id); return next; })}>{childCount ? (collapsed.has(category.id) ? "›" : "⌄") : "·"}</button>
-                        <span className="category-priority-badge" title={t("manager.priorityTitle")}>{category.priority}</span>
+                        <span className="category-priority-badge" title={t("manager.priorityTitle")}>{category.priority >= 1 && category.priority <= 10 ? category.priority : "−"}</span>
                         <CategoryMark icon={category.icon} color={category.effective_color} />
                         <button type="button" className="category-tree-main" title={category.full_path} onClick={() => selectCategory(category.id)}><strong>{category.name}</strong><small title={category.full_path}>{category.full_path}</small></button>
                         <span className={`category-score ${category.effective_score > 0 ? "is-positive" : category.effective_score < 0 ? "is-negative" : ""}`}>{scoreText(category.effective_score)}</span>
@@ -636,7 +651,7 @@ export function CategoryManager({
                   );
                 })}
               </div>
-              <div className="category-master-actions"><button type="button" onClick={() => { const nextPriority = Math.max(999, ...categories.map((category) => category.priority)) + 1; setCategoryDraft({ ...EMPTY_CATEGORY, priority: nextPriority }); setScoreInput(normalizedScoreText(EMPTY_CATEGORY.score)); setPriorityInput(String(nextPriority)); setView({ type: "newCategory" }); }}>{t("manager.addCategory")}</button><button type="button" className={view.type === "allRules" ? "is-selected" : ""} onClick={() => { setView({ type: "allRules" }); setRepaintEnabled(false); setOverwriteManual(false); }}>{t("manager.allRules")}</button></div>
+              <div className="category-master-actions"><button type="button" onClick={() => { setCategoryDraft({ ...EMPTY_CATEGORY, priority: 999 }); setScoreInput(normalizedScoreText(EMPTY_CATEGORY.score)); setPriorityInput(""); setView({ type: "newCategory" }); }}>{t("manager.addCategory")}</button><button type="button" className={view.type === "allRules" ? "is-selected" : ""} onClick={() => { setView({ type: "allRules" }); setRepaintEnabled(false); setOverwriteManual(false); }}>{t("manager.allRules")}</button></div>
             </aside>
 
             <main className="category-detail">

@@ -171,6 +171,15 @@ const CATEGORY_ICONS: &[&str] = &[
     "globe",
     "folder",
     "tag",
+    "heart",
+    "thumbs-down",
+    "circle-minus",
+    "circle-alert",
+    "ban",
+    "x-circle",
+    "zap",
+    "flame",
+    "target",
 ];
 
 fn validate_category_icon(icon: &str) -> Result<(), String> {
@@ -1812,6 +1821,12 @@ pub fn run() {
                     let _ = tray::save_mini_geometry(window.app_handle());
                     let _ = tray::enforce_mini_topmost(window);
                 }
+            }
+            // Перетащил виджет → сохраняем позицию, иначе после перезапуска она теряется
+            // (появляется не там, где оставил). save_mini_geometry сам пропустит сохранение
+            // для corner-закреплённого окна (позиция там — производная от угла).
+            tauri::WindowEvent::Moved(_) if window.label() == "mini" => {
+                let _ = tray::save_mini_geometry(window.app_handle());
             }
             _ => {}
         })

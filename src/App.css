@@ -342,7 +342,6 @@ button:focus-visible {
 .cumulative-legend i { display: inline-block; width: 18px; border-top: 2px solid var(--subtle); }
 .cumulative-legend .kind-useful i { border-color: var(--cat-useful); }
 .cumulative-legend .kind-waste i { border-color: var(--cat-waste); }
-.cumulative-legend .is-reference i { border-top-style: dashed; }
 .cumulative-plot { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; }
 .cumulative-plot svg { display: block; min-width: 620px; width: 100%; height: 100%; }
 .cumulative-y-tick line, .cumulative-x-tick line { stroke: var(--hl-low); stroke-width: 1; }
@@ -351,9 +350,8 @@ button:focus-visible {
 .cumulative-x-tick text { text-anchor: middle; }
 .cumulative-x-tick:first-of-type text { text-anchor: start; }
 .cumulative-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.cumulative-line.kind-useful, .cumulative-reference.kind-useful { stroke: var(--cat-useful); }
-.cumulative-line.kind-waste, .cumulative-reference.kind-waste { stroke: var(--cat-waste); }
-.cumulative-reference { stroke-width: 1.5; stroke-dasharray: 6 5; opacity: .72; }
+.cumulative-line.kind-useful { stroke: var(--cat-useful); }
+.cumulative-line.kind-waste { stroke: var(--cat-waste); }
 .cumulative-current { stroke: var(--surface); stroke-width: 2; }
 .cumulative-current.kind-useful { fill: var(--cat-useful); }
 .cumulative-current.kind-waste { fill: var(--cat-waste); }
@@ -508,7 +506,6 @@ button:focus-visible {
 .trends-legend .kind-useful i { background: var(--cat-useful); }
 .trends-legend .kind-neutral i { background: var(--cat-neutral); }
 .trends-legend .kind-waste i { background: var(--cat-waste); }
-.trends-legend .is-goal i { height: 0; border-top: 2px dashed var(--cat-useful); border-radius: 0; background: transparent; }
 .trends-legend .is-average i { height: 0; border-top: 2px solid var(--iris); border-radius: 0; background: transparent; }
 .afk-strip-card { padding: 16px 20px; box-shadow: none; }
 .afk-strip { display: grid; height: 98px; grid-template-columns: repeat(7, minmax(34px, 1fr)); gap: 10px; padding-top: 4px; }
@@ -536,7 +533,6 @@ button:focus-visible {
 .trends-day.is-active .trend-stack, .trends-day.is-active .trend-useful-bar { stroke: var(--text); stroke-width: 1.5; }
 .trends-day:focus { outline: none; }
 .trends-day:focus-visible .trends-hit-area { opacity: .08; }
-.trends-goal-line { fill: none; stroke: var(--cat-useful); stroke-width: 2; stroke-dasharray: 7 5; stroke-linejoin: round; pointer-events: none; }
 .trend-average-line { fill: none; stroke: var(--iris); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .trend-average-point { fill: var(--iris); stroke: var(--surface); stroke-width: 1.5; pointer-events: none; }
 .chart-tooltip { display: flex; min-height: 38px; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 4px; padding: 8px 12px; border: 1px solid var(--hl-low); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--hl-low) 50%, var(--surface)); color: var(--muted); font: 10px var(--font-mono); }

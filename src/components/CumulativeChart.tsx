@@ -82,7 +82,6 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
         <div className="cumulative-legend" aria-label={t("chart.legend")}>
           <span className="kind-useful"><i />{kindLabels.useful}</span>
           <span className="kind-waste"><i />{kindLabels.waste}</span>
-          <span className="is-reference"><i />{t("chart.goalLimit")}</span>
         </div>
       </div>
       <div
@@ -103,8 +102,6 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
               <text x={LEFT + hour / 24 * PLOT_WIDTH} y={HEIGHT - 10}>{String(hour).padStart(2, "0")}</text>
             </g>
           ))}
-          <line className="cumulative-reference kind-useful" x1={LEFT} x2={WIDTH - RIGHT} y1={y(usefulGoalMs)} y2={y(usefulGoalMs)} />
-          <line className="cumulative-reference kind-waste" x1={LEFT} x2={WIDTH - RIGHT} y1={y(wasteLimitMs)} y2={y(wasteLimitMs)} />
           <path className="cumulative-line kind-useful" d={path("useful_ms")} />
           <path className="cumulative-line kind-waste" d={path("waste_ms")} />
           {currentPoint && (

@@ -37,12 +37,6 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
   const slotWidth = PLOT_WIDTH / Math.max(visibleDays.length, 1);
   const barWidth = Math.min(range === 7 ? 72 : 20, slotWidth * 0.68);
   const x = (index: number) => LEFT + slotWidth * index + slotWidth / 2;
-  const goalPath = visibleDays.reduce((path, day, index) => {
-    const goalY = y(day.useful_goal_min * 60_000).toFixed(2);
-    const slotEnd = (LEFT + slotWidth * (index + 1)).toFixed(2);
-    if (index === 0) return `M ${LEFT} ${goalY} H ${slotEnd}`;
-    return `${path} V ${goalY} H ${slotEnd}`;
-  }, "");
   const yTicks = [0, yMax / 2, yMax];
   const usefulGoalLabel = t("trends.goalLabel", { label: kindLabels.useful });
 
@@ -68,7 +62,6 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
         <span className="kind-useful"><i />{kindLabels.useful}</span>
         <span className="kind-neutral"><i />{kindLabels.neutral}</span>
         <span className="kind-waste"><i />{kindLabels.waste}</span>
-        <span className="is-goal"><i />{usefulGoalLabel}</span>
       </div>
 
       <div
@@ -126,7 +119,6 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
               </g>
             );
           })}
-          <path className="trends-goal-line" d={goalPath} />
         </svg>
       </div>
 
