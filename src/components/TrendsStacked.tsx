@@ -10,6 +10,8 @@ interface TrendsStackedProps {
   onRangeChange: (range: 7 | 30) => void;
   formatDuration: (milliseconds: number) => string;
   kindLabels: KindLabels;
+  selectedDate: string | null;
+  onSelectDate: (date: string) => void;
 }
 
 const WIDTH = 1000;
@@ -21,12 +23,14 @@ const BOTTOM = 46;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 
-export function TrendsStacked({ days, range, onRangeChange, formatDuration, kindLabels }: TrendsStackedProps) {
+export function TrendsStacked({ days, range, onRangeChange, formatDuration, kindLabels, selectedDate, onSelectDate }: TrendsStackedProps) {
   const { lang, t } = useI18n();
   const visibleDays = days.slice(-range);
   const latestDay = visibleDays[visibleDays.length - 1];
-  const [activeDate, setActiveDate] = useState(latestDay?.local_date ?? "");
+  const [hoverDate, setHoverDate] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
+  // выбранный день: hover перекрывает закреплённый; после ухода курсора виден закреплённый (selectedDate)
+  const activeDate = hoverDate ?? selectedDate ?? latestDay?.local_date ?? "";
   const activeDay = visibleDays.find((day) => day.local_date === activeDate) ?? latestDay;
   const largestValue = Math.max(
     60 * 60_000,
@@ -94,17 +98,25 @@ export function TrendsStacked({ days, range, onRangeChange, formatDuration, kind
             ].join("\n");
             return (
               <g
-                className={`trends-day ${activeDay?.local_date === day.local_date ? "is-active" : ""}`}
+                className={`trends-day ${day.local_date === activeDate ? "is-active" : ""}`}
                 key={day.local_date}
                 role="button"
                 tabIndex={0}
                 aria-label={tooltip.split("\n").join(". ")}
-                onFocus={() => setActiveDate(day.local_date)}
-                onMouseEnter={() => setActiveDate(day.local_date)}
+                onFocus={() => setHoverDate(day.local_date)}
+                onMouseEnter={() => setHoverDate(day.local_date)}
+                onMouseLeave={() => setHoverDate(null)}
                 onMouseMove={(event) => setTooltip({ x: event.clientX, y: event.clientY, visible: true })}
-                onClick={() => setActiveDate(day.local_date)}
+                onClick={() => {
+                  setHoverDate(day.local_date);
+                  setTooltip((current) => ({ ...current, visible: false }));
+                  onSelectDate(day.local_date);
+                }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") setActiveDate(day.local_date);
+                  if (event.key === "Enter" || event.key === " ") {
+                    setHoverDate(day.local_date);
+                    onSelectDate(day.local_date);
+                  }
                 }}
               >
                 <rect className="trends-hit-area" x={x(index) - slotWidth / 2} y={TOP} width={slotWidth} height={PLOT_HEIGHT} />

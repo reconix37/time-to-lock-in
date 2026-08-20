@@ -1342,9 +1342,12 @@ function DashboardView() {
                 onRangeChange={setTrendsRange}
                 formatDuration={formatDuration}
                 kindLabels={kindLabels}
+                selectedDate={dayCumulativeDate}
+                onSelectDate={(date) => {
+                  setDayCumulativeDate(date);
+                  setDayCalendarOpen(false);
+                }}
               />
-              <AfkStrip days={afkSeries} formatDuration={formatDuration} />
-              <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} kindLabels={kindLabels} />
               <div className="card trends-day-card">
                 <div className="card-heading trends-heading">
                   <div><span className="eyebrow">{t("trends.dayEyebrow")}</span><h2>{t("trends.dayTitle")}</h2></div>
@@ -1367,7 +1370,7 @@ function DashboardView() {
                       <DayCalendar
                         selected={dayCumulativeDate}
                         today={todayLocalDate}
-                        onSelect={setDayCumulativeDate}
+                        onSelect={(date) => { setDayCumulativeDate(date); setDayCalendarOpen(false); }}
                         onClose={() => setDayCalendarOpen(false)}
                       />
                     </div>
@@ -1379,6 +1382,8 @@ function DashboardView() {
                   <CumulativeChart data={dayCumulative} formatDuration={formatDuration} kindLabels={kindLabels} fullDay={dayCumulativeDate !== todayLocalDate} />
                 ) : null}
               </div>
+              <AfkStrip days={afkSeries} formatDuration={formatDuration} />
+              <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} kindLabels={kindLabels} />
             </>
           )}
         </section>

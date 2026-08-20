@@ -66,13 +66,13 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
     ...visiblePoints.flatMap((point) => [point.useful_ms, point.waste_ms]),
     60_000,
   );
-  const yMax = largestValue * 1.12;
+  const yMax = largestValue * 1.05;
   const x = (point: CumulativePoint) => LEFT + pointHour(point) / 24 * PLOT_WIDTH;
   const y = (value: number) => TOP + (1 - value / yMax) * PLOT_HEIGHT;
   const path = (key: "useful_ms" | "waste_ms") => visiblePoints
     .map((point, index) => `${index === 0 ? "M" : "L"} ${x(point).toFixed(2)} ${y(point[key]).toFixed(2)}`)
     .join(" ");
-  const yTicks = [0, yMax / 2, yMax];
+  const yTicks = [yMax * 0.25, yMax * 0.5, yMax * 0.75];
   const handleMouseMove = (event: ReactMouseEvent<SVGRectElement>) => {
     const svg = event.currentTarget.ownerSVGElement;
     if (svg === null || visiblePoints.length === 0) return;
