@@ -29,6 +29,11 @@ interface LiveSegment {
 
 type MiniCorner = "tl" | "tr" | "bl" | "br";
 
+// В спрятанном виде (tuck) таб торчит из выбранного угла экрана, но это
+// ПРОТИВОПОЛОЖНЫЙ угол самого окна (окно сдвигается так, что его дальний
+// угол остаётся в экранном угле). Ручку рисуем именно там.
+const TUCK_DIAGONAL: Record<MiniCorner, MiniCorner> = { tl: "br", tr: "bl", bl: "tr", br: "tl" };
+
 interface MiniState {
   pinned: boolean;
   corner: MiniCorner | null;
@@ -143,6 +148,7 @@ export function MiniView() {
   const [corner, setCorner] = useState<MiniCorner | null>(null);
   const [clickThrough, setClickThrough] = useState(false);
   const [cornerTuck, setCornerTuck] = useState(false);
+  const [tucked, setTucked] = useState(false);
   const [layout, setLayout] = useState<MiniLayout>(defaultMiniLayout);
   const [editingLayout, setEditingLayout] = useState(false);
   const [dayCumulative, setDayCumulative] = useState<TodayCumulative | null>(null);
@@ -288,6 +294,14 @@ export function MiniView() {
       window.removeEventListener("keydown", closePopoversOnEscape);
     };
   }, [settingsOpen, cornerOpen]);
+
+  // Частичный click-through: верхняя «шапка» окна остаётся кликабельной даже при
+  // «кликах сквозь». Кликабельную полосу расширяем под открытые панели (бровь/настройки).
+  useEffect(() => {
+    if (!clickThrough) return;
+    const height = settingsOpen ? 320 : browOpen ? 110 : 72;
+    void invoke("set_mini_hit_band", { height });
+  }, [clickThrough, settingsOpen, browOpen]);
 
   async function togglePin(event: React.MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -487,14 +501,26 @@ export function MiniView() {
   const scheduleTuck = () => {
     if (!cornerTuck || !corner || clickThrough || settingsOpen || cornerOpen) return;
     if (tuckTimerRef.current !== null) window.clearTimeout(tuckTimerRef.current);
-    tuckTimerRef.current = window.setTimeout(() => void invoke("tuck_mini_position", { tucked: true }), 800);
+    tuckTimerRef.current = window.setTimeout(() => {
+      void invoke("tuck_mini_position", { tucked: true });
+      setTucked(true);
+    }, 800);
   };
   const revealTuck = () => {
     if (tuckTimerRef.current !== null) {
       window.clearTimeout(tuckTimerRef.current);
       tuckTimerRef.current = null;
     }
-    if (cornerTuck && corner && !clickThrough) void invoke("tuck_mini_position", { tucked: false });
+    if (cornerTuck && corner && !clickThrough) {
+      void invoke("tuck_mini_position", { tucked: false });
+      setTucked(false);
+    }
+  };
+  // «потянуть за ухо»: клик по табу в углу вытягивает виджет и отключает авто-прятание
+  const untuckWidget = () => {
+    setCornerTuck(false);
+    setTucked(false);
+    void invoke("set_mini_tuck", { tucked: false }).catch(() => undefined);
   };
   const actualCurrentApp = paused
     ? t("mini.trackingOff")
@@ -789,6 +815,18 @@ export function MiniView() {
             {corner !== null && clickThrough && <small>{t("mini.tuckClickThroughFirst")}</small>}
           </label>
         </section>
+      )}
+      {tucked && corner && (
+        <button
+          type="button"
+          className={`mini-tuck-handle corner-${TUCK_DIAGONAL[corner]}`}
+          aria-label={t("mini.tuckShow")}
+          title={t("mini.tuckShow")}
+          onClick={(event) => {
+            event.stopPropagation();
+            untuckWidget();
+          }}
+        ><MiniIcon name="chevron" /></button>
       )}
       <span className="mini-resize-grip" aria-hidden="true" />
     </main>

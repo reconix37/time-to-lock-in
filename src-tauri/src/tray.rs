@@ -16,7 +16,70 @@ const MINI_MIN_HEIGHT: f64 = 228.0;
 const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
-const MINI_CORNER_MARGIN: i32 = 4;
+const MINI_CORNER_MARGIN: i32 = 0;
+
+/// Частичный «клики сквозь» (Windows): окно в режиме click-through остаётся
+/// кликабельным только в верхней полосе («шапка» + меню брови), остальное —
+/// прозрачно для мыши. Через Win32 subclass + WM_NCHITTEST возвращаем HTCLIENT
+/// в полосе и HTTRANSPARENT за её пределами.
+#[cfg(target_os = "windows")]
+mod click_through {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::Controls::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        ScreenToClient, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
+    };
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static BAND_PX: AtomicU32 = AtomicU32::new(72);
+
+    unsafe extern "system" fn mini_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        uidsubclass: usize,
+        dwrefdata: usize,
+    ) -> LRESULT {
+        if msg == WM_NCHITTEST && ENABLED.load(Ordering::SeqCst) {
+            let signed = |v: i32| if v >= 0x8000 { v - 0x10000 } else { v };
+            let x = signed((lparam.0 & 0xffff) as i32);
+            let y = signed(((lparam.0 >> 16) & 0xffff) as i32);
+            let mut pt = POINT { x, y };
+            if ScreenToClient(hwnd, &mut pt).as_bool() {
+                let band = BAND_PX.load(Ordering::SeqCst) as i32;
+                if (0..=band).contains(&pt.y) {
+                    return LRESULT(HTCLIENT as isize);
+                }
+            }
+            return LRESULT(HTTRANSPARENT as isize);
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam, uidsubclass, dwrefdata)
+    }
+
+    pub fn apply(hwnd: HWND, enabled: bool, band_logical: f64, scale: f64) {
+        BAND_PX.store(
+            (band_logical * scale).round().max(0.0) as u32,
+            Ordering::SeqCst,
+        );
+        ENABLED.store(enabled, Ordering::SeqCst);
+        unsafe {
+            if enabled {
+                let _ = SetWindowSubclass(hwnd, Some(mini_proc), 1, 0);
+            } else {
+                let _ = RemoveWindowSubclass(hwnd, Some(mini_proc), 1);
+            }
+        }
+    }
+
+    pub fn set_band(band_logical: f64, scale: f64) {
+        BAND_PX.store(
+            (band_logical * scale).round().max(0.0) as u32,
+            Ordering::SeqCst,
+        );
+    }
+}
 
 #[derive(Serialize)]
 pub struct MiniState {
@@ -483,7 +546,7 @@ pub fn set_mini_resizable(app: &AppHandle, resizable: bool) -> Result<(), String
         .map_err(|error| error.to_string())
 }
 
-const MINI_TUCK_PEEK: i32 = 24;
+const MINI_TUCK_PEEK: i32 = 36;
 
 fn mini_tuck_active(connection: &rusqlite::Connection) -> Result<bool, String> {
     let corner = db::setting(connection, "mini_corner")?.unwrap_or_default();
@@ -505,8 +568,57 @@ pub fn apply_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), St
             move_mini_to_corner(&mini, &corner, false)?;
         }
     }
+    apply_click_through_window(&mini, enabled)
+}
+
+/// На Windows — частичный hit-test (кликабельна только «шапка»), иначе полный click-through.
+#[cfg(target_os = "windows")]
+fn apply_click_through_window(mini: &WebviewWindow, enabled: bool) -> Result<(), String> {
+    let hwnd = mini_hwnd(mini)?;
+    let scale = mini.scale_factor().map_err(|error| error.to_string())?;
+    let band = if enabled { 72.0 } else { 0.0 };
+    click_through::apply(hwnd, enabled, band, scale);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_click_through_window(mini: &WebviewWindow, enabled: bool) -> Result<(), String> {
     mini.set_ignore_cursor_events(enabled)
         .map_err(|error| error.to_string())
+}
+
+/// Фронт при открытии выпадающих панелей (настройки и т.п.) расширяет кликабельную полосу
+/// выше дефолтной «шапки», чтобы кнопки попапа были доступны при click-through.
+pub fn set_mini_hit_band(app: &AppHandle, height: f64) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let scale = mini.scale_factor().map_err(|error| error.to_string())?;
+        if height > 0.0 {
+            click_through::set_band(height, scale);
+        }
+    }
+    let _ = &mini;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn mini_hwnd(mini: &WebviewWindow) -> Result<windows::Win32::Foundation::HWND, String> {
+    use raw_window_handle::HasWindowHandle;
+    let handle = mini
+        .window()
+        .window_handle()
+        .map_err(|error| error.to_string())?;
+    let raw = handle.as_raw();
+    if let raw_window_handle::RawWindowHandle::Win32(win) = raw {
+        Ok(windows::Win32::Foundation::HWND(
+            win.hwnd.get() as *mut core::ffi::c_void
+        ))
+    } else {
+        Err("mini-window is not a Win32 window".to_string())
+    }
 }
 
 pub fn sync_click_through_checked() {
@@ -591,28 +703,42 @@ fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Re
     let origin = *monitor.position();
     let screen_size = *monitor.size();
     let size = window.inner_size().map_err(|error| error.to_string())?;
-    let width_logical =
-        size.width as f64 / window.scale_factor().map_err(|error| error.to_string())?;
-    let height_logical =
-        size.height as f64 / window.scale_factor().map_err(|error| error.to_string())?;
-    let margin = if tucked { 0 } else { MINI_CORNER_MARGIN };
-    let (left, top) = if tucked {
-        // видимый пятачок 24×24 в углу, остальное — за краем экрана
-        (
-            origin.x - (width_logical as i32 - MINI_TUCK_PEEK),
-            origin.y - (height_logical as i32 - MINI_TUCK_PEEK),
-        )
+    let screen_w = screen_size.width as i32;
+    let screen_h = screen_size.height as i32;
+    let w = size.width as i32;
+    let h = size.height as i32;
+    let position = if tucked {
+        // Таб 36×36 торчит из выбранного угла экрана, остальное окно — за краем.
+        // Для каждого угла — свой сдвиг, чтобы таб был в том же углу, что и пин.
+        match corner {
+            "tl" => {
+                PhysicalPosition::new(origin.x - w + MINI_TUCK_PEEK, origin.y - h + MINI_TUCK_PEEK)
+            }
+            "tr" => PhysicalPosition::new(
+                origin.x + screen_w - MINI_TUCK_PEEK,
+                origin.y - h + MINI_TUCK_PEEK,
+            ),
+            "bl" => PhysicalPosition::new(
+                origin.x - w + MINI_TUCK_PEEK,
+                origin.y + screen_h - MINI_TUCK_PEEK,
+            ),
+            "br" => PhysicalPosition::new(
+                origin.x + screen_w - MINI_TUCK_PEEK,
+                origin.y + screen_h - MINI_TUCK_PEEK,
+            ),
+            _ => return Err("invalid mini-window corner".to_string()),
+        }
     } else {
-        (origin.x + margin, origin.y + margin)
-    };
-    let right = origin.x + screen_size.width.saturating_sub(size.width) as i32 - margin;
-    let bottom = origin.y + screen_size.height.saturating_sub(size.height) as i32 - margin;
-    let position = match corner {
-        "tl" => PhysicalPosition::new(left, top),
-        "tr" => PhysicalPosition::new(right, top),
-        "bl" => PhysicalPosition::new(left, bottom),
-        "br" => PhysicalPosition::new(right, bottom),
-        _ => return Err("invalid mini-window corner".to_string()),
+        let margin = MINI_CORNER_MARGIN;
+        let right = origin.x + screen_w.saturating_sub(w) - margin;
+        let bottom = origin.y + screen_h.saturating_sub(h) - margin;
+        match corner {
+            "tl" => PhysicalPosition::new(origin.x + margin, origin.y + margin),
+            "tr" => PhysicalPosition::new(right, origin.y + margin),
+            "bl" => PhysicalPosition::new(origin.x + margin, bottom),
+            "br" => PhysicalPosition::new(right, bottom),
+            _ => return Err("invalid mini-window corner".to_string()),
+        }
     };
     window
         .set_position(position)

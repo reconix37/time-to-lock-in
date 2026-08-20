@@ -1877,6 +1877,11 @@ fn tuck_mini_position(tucked: bool, app: tauri::AppHandle) -> Result<(), String>
 }
 
 #[tauri::command]
+fn set_mini_hit_band(height: f64, app: tauri::AppHandle) -> Result<(), String> {
+    tray::set_mini_hit_band(&app, height)
+}
+
+#[tauri::command]
 fn reset_mini_geometry(app: tauri::AppHandle) -> Result<(), String> {
     tray::reset_mini_geometry(&app)
 }
@@ -2089,6 +2094,7 @@ pub fn run() {
             resize_mini,
             set_mini_resizable,
             tuck_mini_position,
+            set_mini_hit_band,
             reset_mini_geometry,
             pin_mini_corner,
             start_mini_drag,
