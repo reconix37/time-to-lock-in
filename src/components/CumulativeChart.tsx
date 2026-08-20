@@ -25,7 +25,7 @@ interface CumulativeChartProps {
   fullDay?: boolean;
 }
 
-const WIDTH = 760;
+const WIDTH = 560;
 const HEIGHT = 260;
 const LEFT = 52;
 const RIGHT = 18;
@@ -33,6 +33,10 @@ const TOP = 24;
 const BOTTOM = 34;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
+
+// Часовые деления для белых «палок» на оси X (каждые 2 часа)
+const X_GRID_HOURS = Array.from({ length: 13 }, (_, index) => index * 2);
+const X_LABEL_HOURS = [0, 6, 12, 18, 24];
 
 function pointHour(point: CumulativePoint): number {
   if (!point.is_current) return point.hour;
@@ -44,6 +48,8 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
   const { lang, t } = useI18n();
   const [activePoint, setActivePoint] = useState<CumulativePoint>();
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
+  const [hoverX, setHoverX] = useState<number | null>(null);
+  const [pinnedPoint, setPinnedPoint] = useState<CumulativePoint | undefined>(undefined);
   const currentPoint = fullDay ? undefined : data.points.find((point) => point.is_current);
   const dayPoints = fullDay ? data.points.filter((point) => !point.is_current) : data.points;
   const visiblePoints = fullDay
@@ -77,8 +83,17 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
       Math.abs(x(point) - svgX) < Math.abs(x(nearest) - svgX) ? point : nearest,
     );
     setActivePoint(nearestPoint);
+    setHoverX(x(nearestPoint));
     setTooltip({ x: event.clientX, y: event.clientY, visible: true });
   };
+
+  const handleClick = () => {
+    // клик закрепляет метку времени; повторный клик по той же точке снимает её
+    setPinnedPoint((current) => (current === activePoint || activePoint === undefined ? undefined : activePoint));
+  };
+
+  const hourLabel = (point: CumulativePoint) =>
+    new Intl.DateTimeFormat(localeForLang(lang), { hour: "2-digit", minute: "2-digit" }).format(point.timestamp_ms);
 
   return (
     <section className="card cumulative-card" aria-labelledby="cumulative-title">
@@ -91,7 +106,10 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
       </div>
       <div
         className="cumulative-plot"
-        onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
+        onMouseLeave={() => {
+          setTooltip((current) => ({ ...current, visible: false }));
+          setHoverX(null);
+        }}
         onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
       >
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={t("chart.cumulativeLabel", { usefulLabel: kindLabels.useful, useful: formatDuration(headlinePoint?.useful_ms ?? 0), wasteLabel: kindLabels.waste, waste: formatDuration(headlinePoint?.waste_ms ?? 0) })}>
@@ -101,11 +119,18 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
               <text x={LEFT - 8} y={y(tick) + 4}>{formatDuration(tick)}</text>
             </g>
           ))}
-          {[0, 6, 12, 18, 24].map((hour) => (
-            <g className="cumulative-x-tick" key={hour}>
-              <line x1={LEFT + hour / 24 * PLOT_WIDTH} x2={LEFT + hour / 24 * PLOT_WIDTH} y1={TOP} y2={HEIGHT - BOTTOM} />
-              <text x={LEFT + hour / 24 * PLOT_WIDTH} y={HEIGHT - 10}>{String(hour).padStart(2, "0")}</text>
-            </g>
+          {X_GRID_HOURS.map((hour) => (
+            <line
+              key={hour}
+              className="cumulative-x-grid"
+              x1={LEFT + hour / 24 * PLOT_WIDTH}
+              x2={LEFT + hour / 24 * PLOT_WIDTH}
+              y1={TOP}
+              y2={HEIGHT - BOTTOM}
+            />
+          ))}
+          {X_LABEL_HOURS.map((hour) => (
+            <text key={hour} className="cumulative-x-label" x={LEFT + hour / 24 * PLOT_WIDTH} y={HEIGHT - 10}>{String(hour).padStart(2, "0")}</text>
           ))}
           <path className="cumulative-line kind-useful" d={path("useful_ms")} />
           <path className="cumulative-line kind-waste" d={path("waste_ms")} />
@@ -115,6 +140,17 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
               <circle className="cumulative-current kind-waste" cx={x(currentPoint)} cy={y(currentPoint.waste_ms)} r="4" />
             </>
           )}
+          {pinnedPoint && (
+            <g className="cumulative-pin">
+              <line x1={x(pinnedPoint)} x2={x(pinnedPoint)} y1={TOP} y2={HEIGHT - BOTTOM} />
+              <text x={x(pinnedPoint)} y={HEIGHT - 16}>{hourLabel(pinnedPoint)}</text>
+            </g>
+          )}
+          {hoverX !== null && (
+            <g className="cumulative-crosshair">
+              <line x1={hoverX} x2={hoverX} y1={TOP} y2={HEIGHT - BOTTOM} />
+            </g>
+          )}
           <rect
             className="chart-hit-area"
             x={LEFT}
@@ -122,6 +158,7 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
             width={PLOT_WIDTH}
             height={PLOT_HEIGHT}
             onMouseMove={handleMouseMove}
+            onClick={handleClick}
           />
         </svg>
       </div>

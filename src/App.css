@@ -342,13 +342,16 @@ button:focus-visible {
 .cumulative-legend i { display: inline-block; width: 18px; border-top: 2px solid var(--subtle); }
 .cumulative-legend .kind-useful i { border-color: var(--cat-useful); }
 .cumulative-legend .kind-waste i { border-color: var(--cat-waste); }
-.cumulative-plot { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; }
-.cumulative-plot svg { display: block; min-width: 620px; width: 100%; height: 100%; }
-.cumulative-y-tick line, .cumulative-x-tick line { stroke: var(--hl-low); stroke-width: 1; }
-.cumulative-y-tick text, .cumulative-x-tick text { fill: var(--subtle); font: 10px var(--font-mono); }
-.cumulative-y-tick text { text-anchor: end; }
-.cumulative-x-tick text { text-anchor: middle; }
-.cumulative-x-tick:first-of-type text { text-anchor: start; }
+.cumulative-plot { min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.cumulative-plot svg { display: block; min-width: 0; width: 100%; height: 100%; }
+.cumulative-y-tick line { stroke: var(--hl-low); stroke-width: 1; }
+.cumulative-y-tick text { fill: var(--subtle); font: 10px var(--font-mono); text-anchor: end; }
+.cumulative-x-grid { stroke: color-mix(in srgb, var(--text) 16%, transparent); stroke-width: 1; }
+.cumulative-x-label { fill: var(--subtle); font: 10px var(--font-mono); text-anchor: middle; }
+.cumulative-x-label:first-of-type { text-anchor: start; }
+.cumulative-crosshair line { stroke: color-mix(in srgb, var(--text) 45%, transparent); stroke-width: 1; stroke-dasharray: 3 3; }
+.cumulative-pin line { stroke: var(--iris); stroke-width: 1.5; }
+.cumulative-pin text { fill: var(--iris); font: 10px var(--font-mono); text-anchor: middle; }
 .cumulative-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .cumulative-line.kind-useful { stroke: var(--cat-useful); }
 .cumulative-line.kind-waste { stroke: var(--cat-waste); }
