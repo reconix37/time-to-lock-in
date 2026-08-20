@@ -2414,7 +2414,8 @@ mod tests {
         }
 
         let current_ms = local_ms(&connection, "2026-08-10 14:30:00");
-        let cumulative = today_cumulative(&connection, current_ms).expect("cumulative series");
+        let cumulative =
+            today_cumulative(&connection, current_ms, None).expect("cumulative series");
         let at_hour = |hour: i64| {
             cumulative
                 .points
@@ -2445,6 +2446,41 @@ mod tests {
     }
 
     #[test]
+    fn cumulative_today_respects_local_date_override_after_day_end() {
+        let connection = score_schema();
+        connection
+            .execute(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Dev', '#000000', 'useful', 0)",
+                [],
+            )
+            .expect("category");
+        connection
+            .execute(
+                "INSERT INTO segments (ts_start, ts_end, app, category_id, status)
+                 VALUES (?1, ?2, 'example.exe', 1, 'active')",
+                params![
+                    local_ms(&connection, "2026-08-10 09:00:00"),
+                    local_ms(&connection, "2026-08-10 09:30:00"),
+                ],
+            )
+            .expect("segment");
+        // current_ms = полночь следующего дня. Без override local_day уехал бы на 11-е,
+        // и сегмент 10-го не попал бы в график (баг «пустой Кривой дня»).
+        let day_end = local_ms(&connection, "2026-08-11 00:00:00");
+        let cumulative =
+            today_cumulative(&connection, day_end, Some("2026-08-10")).expect("cumulative series");
+        let current_point = cumulative
+            .points
+            .iter()
+            .find(|point| point.is_current)
+            .expect("current point");
+        assert_eq!(current_point.useful_ms, 1_800_000);
+        assert_eq!(current_point.waste_ms, 0);
+        assert_eq!(cumulative.useful_goal_min, 120);
+    }
+
+    #[test]
     fn cumulative_today_clips_midnight_and_ignores_non_observed_statuses() {
         let connection = score_schema();
         connection
@@ -2471,9 +2507,12 @@ mod tests {
                 .expect("segment");
         }
 
-        let cumulative =
-            today_cumulative(&connection, local_ms(&connection, "2026-08-10 01:30:00"))
-                .expect("cumulative series");
+        let cumulative = today_cumulative(
+            &connection,
+            local_ms(&connection, "2026-08-10 01:30:00"),
+            None,
+        )
+        .expect("cumulative series");
 
         assert_eq!(cumulative.points.len(), 26);
         assert_eq!(

@@ -151,7 +151,6 @@ export function MiniView() {
     setBrowOpen(true);
   };
   const scheduleCloseBrow = () => {
-    if (settingsOpen || cornerOpen) return;
     if (browTimerRef.current !== null) window.clearTimeout(browTimerRef.current);
     browTimerRef.current = window.setTimeout(() => setBrowOpen(false), 280);
   };
@@ -653,24 +652,64 @@ export function MiniView() {
             })}
           </div>
         ) : (
-          layout.blocks.filter((block) => block.enabled).map((block) => (
-            <div key={block.id} className={`mini-block block-${block.id} span-${block.size}`}>
-              {block.id === "score" && <MiniScoreHero scoring={scoring} />}
-              {block.id === "categories" && <MiniTopCategories scoring={scoring} />}
-              {block.id === "verdict" && (progress && verdict ? (
-                <section className="mini-verdict" aria-label={t("mini.dayProgress")}><EllipsizedText text={t(verdict.key, verdict.vars)} /></section>
-              ) : <div className="mini-loading" aria-label={t("common.loading")} />)}
-              {block.id === "current" && (
-                <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
-                  <span className="mini-now-label">{t("mini.nowLabel")}</span>
-                  <EllipsizedText className="mini-current-app" text={currentApp} />
-                  {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
-                  {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
-                </section>
-              )}
-              {block.id === "chart" && <MiniActivityChart data={dayCumulative} />}
-            </div>
-          ))
+          (() => {
+            // Вердикт Луны: пара «категории слева + скор справа» закреплена сверху,
+            // остальные блоки идут потоком, график — отдельной full-width строкой.
+            const enabled = layout.blocks.filter((block) => block.enabled);
+            const pairIds = ["categories", "score"] as const;
+            const pair = pairIds
+              .map((id) => enabled.find((block) => block.id === id))
+              .filter((block): block is (typeof enabled)[number] => block !== undefined);
+            const flow = enabled.filter((block) => block.id !== "categories" && block.id !== "score");
+            const renderBlock = (id: MiniBlockId) => {
+              if (id === "score") return <MiniScoreHero scoring={scoring} />;
+              if (id === "categories") return <MiniTopCategories scoring={scoring} />;
+              if (id === "verdict") {
+                if (!progress || !verdict) return <div className="mini-loading" aria-label={t("common.loading")} />;
+                const goalMs = progress.today.useful_goal_min * 60_000;
+                return (
+                  <section className="mini-verdict" aria-label={t("mini.dayProgress")}>
+                    <EllipsizedText text={t(verdict.key, verdict.vars)} />
+                    {goalMs > 0 && (
+                      <div className="mini-goal" title={t("mini.goalTooltip", { goal: localizedDuration(goalMs, t) })}>
+                        <div className="mini-goal-rail"><i style={{ width: `${Math.min((progress.today.useful_ms / goalMs) * 100, 100)}%` }} /></div>
+                        <span className="mini-goal-copy">{t("mini.goalProgress", { useful: localizedDuration(progress.today.useful_ms, t), goal: localizedDuration(goalMs, t) })}</span>
+                      </div>
+                    )}
+                  </section>
+                );
+              }
+              if (id === "current") {
+                return (
+                  <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
+                    <span className="mini-now-label">{t("mini.nowLabel")}</span>
+                    <EllipsizedText className="mini-current-app" text={currentApp} />
+                    {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
+                    {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
+                  </section>
+                );
+              }
+              return <MiniActivityChart data={dayCumulative} />;
+            };
+            return (
+              <>
+                {pair.length > 0 && (
+                  <div className="mini-pair">
+                    {pair.map((block) => (
+                      <div key={block.id} className={`mini-block block-${block.id}`}>{renderBlock(block.id)}</div>
+                    ))}
+                  </div>
+                )}
+                {flow.length > 0 && (
+                  <div className="mini-flow">
+                    {flow.map((block) => (
+                      <div key={block.id} className={`mini-block block-${block.id}${block.id === "chart" ? " mini-block--chart" : ""}`}>{renderBlock(block.id)}</div>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()
         )}
       </section>
 
