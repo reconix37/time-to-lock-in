@@ -944,6 +944,28 @@ fn get_today_cumulative() -> Result<TodayCumulative, String> {
 }
 
 #[tauri::command]
+fn get_day_cumulative(local_date: String) -> Result<TodayCumulative, String> {
+    let connection = db::open()?;
+    let (_, day_end_ms) = db::local_date_bounds(&connection, &local_date)?;
+    let cumulative = db::today_cumulative(&connection, day_end_ms)?;
+    Ok(TodayCumulative {
+        points: cumulative
+            .points
+            .into_iter()
+            .map(|point| CumulativePoint {
+                timestamp_ms: point.timestamp_ms,
+                hour: point.hour,
+                useful_ms: point.useful_ms,
+                waste_ms: point.waste_ms,
+                is_current: point.is_current,
+            })
+            .collect(),
+        useful_goal_min: cumulative.useful_goal_min,
+        waste_limit_min: cumulative.waste_limit_min,
+    })
+}
+
+#[tauri::command]
 fn get_today_stats() -> Result<TodayStats, String> {
     let connection = db::open()?;
     connection
@@ -1983,6 +2005,7 @@ pub fn run() {
             get_today_stats,
             get_today_scoring,
             get_today_cumulative,
+            get_day_cumulative,
             get_progress_overview,
             get_daily_series,
             get_afk_series,

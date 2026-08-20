@@ -21,7 +21,7 @@ import { CategoryMark } from "./components/CategoryIcon";
 import { TrendsStacked } from "./components/TrendsStacked";
 import { TrendsTrend } from "./components/TrendsTrend";
 import type { ProgressOverview } from "./progress";
-import type { AfkDay, DailySeriesDay } from "./trends";
+import { formatLocalDate, type AfkDay, type DailySeriesDay } from "./trends";
 import {
   renderChallengePng,
   renderDayPrintPng,
@@ -191,6 +191,9 @@ function DashboardView() {
   const [progress, setProgress] = useState<ProgressOverview | null>(null);
   const [cumulative, setCumulative] = useState<TodayCumulative | null>(null);
   const [dailySeries, setDailySeries] = useState<DailySeriesDay[]>([]);
+  const [dayCumulativeDate, setDayCumulativeDate] = useState<string>("");
+  const [dayCumulative, setDayCumulative] = useState<TodayCumulative | null>(null);
+  const [dayCumulativeLoading, setDayCumulativeLoading] = useState(false);
   const [afkSeries, setAfkSeries] = useState<AfkDay[]>([]);
   const [dayPrint, setDayPrint] = useState<DayPrintData | null>(null);
   const [dayPrintDates, setDayPrintDates] = useState<string[]>([]);
@@ -277,6 +280,7 @@ function DashboardView() {
       setProgress(nextProgress);
       setCumulative(nextCumulative);
       setDailySeries(nextDailySeries);
+      setDayCumulativeDate((current) => current || (nextDailySeries.length > 0 ? nextDailySeries[nextDailySeries.length - 1].local_date : ""));
       setAfkSeries(nextAfkSeries);
       setStats(nextProgress.today);
       setApps(nextApps);
@@ -296,6 +300,28 @@ function DashboardView() {
       setLoading(false);
     }
   }, [dayPrintDate, t]);
+
+  useEffect(() => {
+    if (dayCumulativeDate === "") return;
+    setDayCumulativeLoading(true);
+    let active = true;
+    void invoke<TodayCumulative>("get_day_cumulative", { localDate: dayCumulativeDate })
+      .then((data) => {
+        if (active) {
+          setDayCumulative(data);
+          setDayCumulativeLoading(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setDayCumulative(null);
+          setDayCumulativeLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [dayCumulativeDate]);
 
   useEffect(() => {
     void loadDashboard();
@@ -1317,6 +1343,21 @@ function DashboardView() {
               />
               <AfkStrip days={afkSeries} formatDuration={formatDuration} />
               <TrendsTrend sourceDays={dailySeries} formatDuration={formatDuration} kindLabels={kindLabels} />
+              <div className="card trends-day-card">
+                <div className="card-heading trends-heading">
+                  <div><span className="eyebrow">{t("trends.dayEyebrow")}</span><h2>{t("trends.dayTitle")}</h2></div>
+                </div>
+                <div className="trends-day-picker" aria-label={t("trends.dayPickerLabel")}>
+                  <button type="button" onClick={() => setDayCumulativeDate((date) => shiftLocalDate(date, -1))} aria-label={t("trends.prevDay")} title={t("trends.prevDay")}>‹</button>
+                  <span className="mono-meta">{dayCumulativeDate ? formatLocalDate(dayCumulativeDate, { weekday: "long", day: "numeric", month: "long" }) : "—"}</span>
+                  <button type="button" onClick={() => setDayCumulativeDate((date) => shiftLocalDate(date, 1))} aria-label={t("trends.nextDay")} title={t("trends.nextDay")}>›</button>
+                </div>
+                {dayCumulativeLoading ? (
+                  <div className="card trends-skeleton skeleton" aria-label={t("dashboard.trendsLoading")} />
+                ) : dayCumulative ? (
+                  <CumulativeChart data={dayCumulative} formatDuration={formatDuration} kindLabels={kindLabels} fullDay={dayCumulativeDate !== todayLocalDate} />
+                ) : null}
+              </div>
             </>
           )}
         </section>
@@ -1673,6 +1714,18 @@ function DashboardView() {
     </main>
   );
 }
+
+function shiftLocalDate(localDate: string, delta: number): string {
+  const [year, month, day] = localDate.split("-").map(Number);
+  const date = new Date(year, month - 1, day + delta);
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${mm}-${dd}`;
+}
+const todayLocalDate = (() => {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+})();
 
 function App() {
   return (

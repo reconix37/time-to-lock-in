@@ -1453,6 +1453,18 @@ pub fn afk_duration_for_day(connection: &Connection, local_date: &str) -> Result
         .map_err(|error| error.to_string())
 }
 
+pub fn local_date_bounds(connection: &Connection, local_date: &str) -> Result<(i64, i64), String> {
+    connection
+        .query_row(
+            "SELECT
+                CAST(strftime('%s', ?1 || ' 00:00:00', 'utc') AS INTEGER) * 1000 AS day_start_ms,
+                CAST(strftime('%s', ?1 || ' 00:00:00', '+1 day', 'utc') AS INTEGER) * 1000 AS day_end_ms",
+            [local_date],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn today_cumulative(
     connection: &Connection,
     current_ms: i64,

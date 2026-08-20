@@ -499,6 +499,15 @@ button:focus-visible {
 .trends-section-heading p { max-width: 520px; margin: 0; color: var(--muted); font-size: 13px; text-align: right; }
 .trends-skeleton { min-height: 430px; }
 .trends-card { padding: 20px; box-shadow: none; }
+.trends-day-card { padding: 20px; box-shadow: none; }
+.trends-day-picker { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 4px 0 12px; }
+.trends-day-picker button {
+  display: inline-grid; place-items: center; width: 26px; height: 26px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+  color: var(--muted); font: 600 16px var(--font-sans); cursor: pointer; user-select: none;
+}
+.trends-day-picker button:hover { color: var(--text); border-color: var(--iris); background: var(--hl-low); }
+.trends-day-picker .mono-meta { min-width: 150px; text-align: center; }
 .trends-heading { align-items: center; margin-bottom: 8px; }
 .trends-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: var(--muted); font: 10px var(--font-mono); }
 .trends-legend span { display: inline-flex; align-items: center; gap: 6px; }

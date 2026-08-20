@@ -22,6 +22,7 @@ interface CumulativeChartProps {
   data: TodayCumulative;
   formatDuration: (milliseconds: number) => string;
   kindLabels: KindLabels;
+  fullDay?: boolean;
 }
 
 const WIDTH = 760;
@@ -39,14 +40,18 @@ function pointHour(point: CumulativePoint): number {
   return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
 }
 
-export function CumulativeChart({ data, formatDuration, kindLabels }: CumulativeChartProps) {
+export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = false }: CumulativeChartProps) {
   const { lang, t } = useI18n();
   const [activePoint, setActivePoint] = useState<CumulativePoint>();
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
-  const currentPoint = data.points.find((point) => point.is_current);
-  const visiblePoints = data.points.filter((point) =>
-    point.is_current || currentPoint === undefined || point.timestamp_ms <= currentPoint.timestamp_ms,
-  );
+  const currentPoint = fullDay ? undefined : data.points.find((point) => point.is_current);
+  const dayPoints = fullDay ? data.points.filter((point) => !point.is_current) : data.points;
+  const visiblePoints = fullDay
+    ? dayPoints
+    : data.points.filter((point) =>
+        point.is_current || currentPoint === undefined || point.timestamp_ms <= currentPoint.timestamp_ms,
+      );
+  const headlinePoint = currentPoint ?? (dayPoints.length > 0 ? dayPoints[dayPoints.length - 1] : undefined);
   const usefulGoalMs = data.useful_goal_min * 60_000;
   const wasteLimitMs = data.waste_limit_min * 60_000;
   const largestValue = Math.max(
@@ -89,7 +94,7 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
         onMouseLeave={() => setTooltip((current) => ({ ...current, visible: false }))}
         onScroll={() => setTooltip((current) => ({ ...current, visible: false }))}
       >
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={t("chart.cumulativeLabel", { usefulLabel: kindLabels.useful, useful: formatDuration(currentPoint?.useful_ms ?? 0), wasteLabel: kindLabels.waste, waste: formatDuration(currentPoint?.waste_ms ?? 0) })}>
+        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={t("chart.cumulativeLabel", { usefulLabel: kindLabels.useful, useful: formatDuration(headlinePoint?.useful_ms ?? 0), wasteLabel: kindLabels.waste, waste: formatDuration(headlinePoint?.waste_ms ?? 0) })}>
           {yTicks.map((tick) => (
             <g className="cumulative-y-tick" key={tick}>
               <line x1={LEFT} x2={WIDTH - RIGHT} y1={y(tick)} y2={y(tick)} />
@@ -131,8 +136,8 @@ export function CumulativeChart({ data, formatDuration, kindLabels }: Cumulative
         )}
       </ChartTooltip>
       <div className="cumulative-summary">
-        <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(currentPoint?.useful_ms ?? 0)}</strong> · {t("chart.goalValue", { goal: data.useful_goal_min })}</span>
-        <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(currentPoint?.waste_ms ?? 0)}</strong> · {t("chart.limitValue", { limit: data.waste_limit_min })}</span>
+        <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(headlinePoint?.useful_ms ?? 0)}</strong> · {t("chart.goalValue", { goal: data.useful_goal_min })}</span>
+        <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(headlinePoint?.waste_ms ?? 0)}</strong> · {t("chart.limitValue", { limit: data.waste_limit_min })}</span>
       </div>
     </section>
   );
