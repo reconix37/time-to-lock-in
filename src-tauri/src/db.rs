@@ -1468,11 +1468,12 @@ pub fn local_date_bounds(connection: &Connection, local_date: &str) -> Result<(i
 pub fn today_cumulative(
     connection: &Connection,
     current_ms: i64,
+    local_date_override: Option<&str>,
 ) -> Result<TodayCumulativeRecord, String> {
     let mut statement = connection
         .prepare(
             "WITH RECURSIVE context AS (
-                SELECT datetime(?1 / 1000, 'unixepoch', 'localtime', 'start of day') AS local_day,
+                SELECT COALESCE(?2, datetime(?1 / 1000, 'unixepoch', 'localtime', 'start of day')) AS local_day,
                        ?1 AS current_ms
              ), bounds AS (
                 SELECT current_ms,
@@ -1541,7 +1542,7 @@ pub fn today_cumulative(
         )
         .map_err(|error| error.to_string())?;
     let points = statement
-        .query_map([current_ms], |row| {
+        .query_map([current_ms, local_date_override], |row| {
             Ok(CumulativePointRecord {
                 timestamp_ms: row.get(0)?,
                 hour: row.get(1)?,
@@ -1557,10 +1558,10 @@ pub fn today_cumulative(
         .query_row(
             "SELECT useful_goal_min, waste_limit_min
              FROM goal_history
-             WHERE effective_local_date <= date(?1 / 1000, 'unixepoch', 'localtime')
+             WHERE effective_local_date <= COALESCE(?2, date(?1 / 1000, 'unixepoch', 'localtime'))
              ORDER BY effective_local_date DESC
              LIMIT 1",
-            [current_ms],
+            [current_ms, local_date_override],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|error| error.to_string())?;

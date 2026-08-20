@@ -925,7 +925,7 @@ fn get_today_segments() -> Result<Vec<Segment>, String> {
 #[tauri::command]
 fn get_today_cumulative() -> Result<TodayCumulative, String> {
     let connection = db::open()?;
-    let cumulative = db::today_cumulative(&connection, db::now_ms())?;
+    let cumulative = db::today_cumulative(&connection, db::now_ms(), None)?;
     Ok(TodayCumulative {
         points: cumulative
             .points
@@ -947,7 +947,7 @@ fn get_today_cumulative() -> Result<TodayCumulative, String> {
 fn get_day_cumulative(local_date: String) -> Result<TodayCumulative, String> {
     let connection = db::open()?;
     let (_, day_end_ms) = db::local_date_bounds(&connection, &local_date)?;
-    let cumulative = db::today_cumulative(&connection, day_end_ms)?;
+    let cumulative = db::today_cumulative(&connection, day_end_ms, Some(local_date.as_str()))?;
     Ok(TodayCumulative {
         points: cumulative
             .points
