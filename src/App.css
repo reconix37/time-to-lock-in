@@ -355,9 +355,6 @@ button:focus-visible {
 .cumulative-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .cumulative-line.kind-useful { stroke: var(--cat-useful); }
 .cumulative-line.kind-waste { stroke: var(--cat-waste); }
-.cumulative-current { stroke: var(--surface); stroke-width: 2; }
-.cumulative-current.kind-useful { fill: var(--cat-useful); }
-.cumulative-current.kind-waste { fill: var(--cat-waste); }
 .chart-hit-area { fill: var(--surface); opacity: 0; }
 .cumulative-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; margin-top: 4px; font: 10px var(--font-mono); }
 .cumulative-summary span { color: var(--muted); }

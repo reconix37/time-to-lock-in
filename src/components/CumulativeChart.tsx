@@ -83,7 +83,8 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
       Math.abs(x(point) - svgX) < Math.abs(x(nearest) - svgX) ? point : nearest,
     );
     setActivePoint(nearestPoint);
-    setHoverX(x(nearestPoint));
+    // кросхейр следует строго за мышью, не прыгая по точкам (зажат в границы графика)
+    setHoverX(Math.min(Math.max(svgX, LEFT), WIDTH - RIGHT));
     setTooltip({ x: event.clientX, y: event.clientY, visible: true });
   };
 
@@ -134,12 +135,6 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
           ))}
           <path className="cumulative-line kind-useful" d={path("useful_ms")} />
           <path className="cumulative-line kind-waste" d={path("waste_ms")} />
-          {currentPoint && (
-            <>
-              <circle className="cumulative-current kind-useful" cx={x(currentPoint)} cy={y(currentPoint.useful_ms)} r="4" />
-              <circle className="cumulative-current kind-waste" cx={x(currentPoint)} cy={y(currentPoint.waste_ms)} r="4" />
-            </>
-          )}
           {pinnedPoint && (
             <g className="cumulative-pin">
               <line x1={x(pinnedPoint)} x2={x(pinnedPoint)} y1={TOP} y2={HEIGHT - BOTTOM} />
