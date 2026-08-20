@@ -21,7 +21,7 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-.dashboard-shell { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.dashboard-shell { max-width: 1120px; margin: 0 auto; padding: 20px; }
 
 .topbar {
   display: flex;
@@ -360,9 +360,11 @@ button:focus-visible {
 .cumulative-summary span { color: var(--muted); }
 .cumulative-summary strong { color: var(--text); font-weight: 500; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
+/* How time grew — крупнее: выше карточка, чтобы график был заметным, а не плоской полоской.
+   Сетка остаётся плотной (без пустых пролётов под правой колонкой). */
 .cumulative-card, .cumulative-skeleton, .timeline-card { grid-column: span 8; }
 .apps-card, .dashboard-stack { grid-column: span 4; }
-.cumulative-card, .cumulative-skeleton, .apps-card { height: 280px; min-height: 280px; max-height: 280px; }
+.cumulative-card, .cumulative-skeleton, .apps-card { height: 320px; min-height: 320px; max-height: 320px; }
 .dashboard-stack { display: grid; min-height: 380px; grid-template-rows: auto auto minmax(0, 1fr); gap: 20px; }
 .dashboard-stack .stats-card { min-height: 0; }
 .card { border: var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow); }
@@ -743,9 +745,16 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
   min-height: 0;
   align-content: start;
   gap: 4px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   container-type: size;
 }
+/* в низкой высоте добавленный график не режем и не прячем — тело скроллится,
+   блоки виджетов всегда доступны (иначе «добавил график — лейаут сломался») */
+.mini-body::-webkit-scrollbar { width: 6px; }
+.mini-body::-webkit-scrollbar-track { background: transparent; }
+.mini-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .mini-body.is-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, auto); overflow: hidden; }
 .mini-pair {
   display: grid;
@@ -765,9 +774,9 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-block--score { text-align: right; justify-items: end; }
 .mini-block--chart { grid-column: 1 / -1; }
 /* Приоритет при малой высоте (вердикт Луны): сохраняем пару + current,
-   вытесняем verdict, затем сворачиваем chart. Footer всегда остаётся. */
+   вытесняем verdict. График не прячем насильно — тело скроллится (см. .mini-body),
+   добавленный блок всегда доступен. */
 @container (max-height: 244px) {
-  .mini-block--chart { display: none; }
   .mini-verdict { min-height: 20px; padding-block: 4px; }
 }
 @container (max-height: 196px) {

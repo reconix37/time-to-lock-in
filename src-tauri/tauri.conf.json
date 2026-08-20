@@ -12,14 +12,14 @@
   "app": {
     "windows": [
       {
-        "title": "Time To Lock In",
-        "label": "main",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 640,
-        "center": true,
-        "visible": false
+       "title": "Time To Lock In",
+       "label": "main",
+       "width": 1160,
+       "height": 760,
+       "minWidth": 960,
+       "minHeight": 640,
+       "center": true,
+       "visible": false
       },
       {
         "title": "TTLI",

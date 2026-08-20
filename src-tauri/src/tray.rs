@@ -734,12 +734,16 @@ fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Re
         }
     } else {
         let margin = MINI_CORNER_MARGIN;
+        // Невидимая resize-рамка Windows у frameless-окна «съедает» ~15-20px слева,
+        // из-за чего контент виджета не доезжает до левого края монитора (жалоба C1).
+        // Компенсируем левую границу, чтобы контент вставал впритык к краю.
+        let left_nudge = 16;
         let right = origin.x + screen_w.saturating_sub(w) - margin;
         let bottom = origin.y + screen_h.saturating_sub(h) - margin;
         match corner {
-            "tl" => PhysicalPosition::new(origin.x + margin, origin.y + margin),
+            "tl" => PhysicalPosition::new(origin.x + margin - left_nudge, origin.y + margin),
             "tr" => PhysicalPosition::new(right, origin.y + margin),
-            "bl" => PhysicalPosition::new(origin.x + margin, bottom),
+            "bl" => PhysicalPosition::new(origin.x + margin - left_nudge, bottom),
             "br" => PhysicalPosition::new(right, bottom),
             _ => return Err("invalid mini-window corner".to_string()),
         }

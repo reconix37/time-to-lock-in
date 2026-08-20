@@ -1534,7 +1534,8 @@ pub fn today_cumulative(
                 LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
              )
              SELECT timestamp_ms, hour, useful_ms, waste_ms, is_current
-             FROM boundary_points
+             FROM boundary_points, bounds
+             WHERE boundary_points.timestamp_ms <= bounds.current_ms
              UNION ALL
              SELECT timestamp_ms, hour, useful_ms, waste_ms, is_current
              FROM current_point

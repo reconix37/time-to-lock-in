@@ -223,11 +223,16 @@ export function MiniView() {
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
         waste: settings.kind_label_waste ?? defaultKindLabels.waste,
       });
-      // режим «Компактно» на старте: точный размер + блокировка ресайза (иначе пустая геометрия с компакт-контентом)
-      if (miniSettings.mode === "compact" && miniState.resizable) {
+      // режим «Компактно» на старте: точный размер + переменная геометрия.
+      // Ресайз НЕ глушим: юзер должен всегда мочь растянуть/сжать виджет мышью
+      // (иначе «куда пропал ресайз»). Адаптив сам перестроит строки под любой размер.
+      // Отдельно чиним застрявший resizable=false из прошлых версий (не в corner-lock).
+      if (miniSettings.mode === "compact") {
         const required = requiredMiniSize("compact", miniSettings.textSize);
         void invoke("resize_mini", { width: required.width, height: required.height, force: true });
-        void invoke("set_mini_resizable", { resizable: false });
+        if (matchesMiniCorner(miniState.corner) === false) {
+          void invoke("set_mini_resizable", { resizable: true });
+        }
       }
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
@@ -343,7 +348,8 @@ export function MiniView() {
     try {
       const required = requiredMiniSize(nextMode, textSize);
       await invoke("resize_mini", { width: required.width, height: required.height, force: nextMode === "compact" });
-      if (!corner) await invoke("set_mini_resizable", { resizable: nextMode !== "compact" });
+      // ресайз не глушим в «Компактно» — юзер всегда может тянуть края
+      if (!corner) await invoke("set_mini_resizable", { resizable: true });
       await saveSetting("mini_mode", nextMode);
       setMode(nextMode);
     } catch {
