@@ -449,13 +449,18 @@ export function MiniView() {
   }, []);
 
   const reorderFlow = useCallback((movingId: MiniBlockId, flowIndex: number) => {
-    const nonPair = layout.blocks.filter((block) => block.id !== "categories" && block.id !== "score");
-    const moving = nonPair.find((block) => block.id === movingId);
-    if (!moving || flowIndex < 0 || flowIndex >= nonPair.length) return;
-    const rest = nonPair.filter((block) => block.id !== movingId);
+    const visibleFlow = layout.blocks.filter(
+      (block) => block.enabled && block.id !== "categories" && block.id !== "score",
+    );
+    const moving = visibleFlow.find((block) => block.id === movingId);
+    if (!moving || flowIndex < 0 || flowIndex >= visibleFlow.length) return;
+    const rest = visibleFlow.filter((block) => block.id !== movingId);
     rest.splice(flowIndex, 0, moving);
     const pair = layout.blocks.filter((block) => block.id === "categories" || block.id === "score");
-    saveLayout({ ...layout, blocks: [...pair, ...rest] });
+    const disabledFlow = layout.blocks.filter(
+      (block) => !block.enabled && block.id !== "categories" && block.id !== "score",
+    );
+    saveLayout({ ...layout, blocks: [...pair, ...rest, ...disabledFlow] });
   }, [layout, saveLayout]);
 
   const onWindowDragMove = useCallback((event: PointerEvent) => {

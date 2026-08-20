@@ -390,9 +390,14 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     mini.unminimize().map_err(|error| error.to_string())?;
     clamp_mini_window(&mini)?;
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    if valid_mini_corner(&corner) {
+        move_mini_to_corner(&mini, &corner, corner_tuck)?;
+    }
     mini.show().map_err(|error| error.to_string())?;
     mini.set_focus().map_err(|error| error.to_string())?;
-    let connection = db::open()?;
     let opacity = saved_mini_opacity(&connection)?;
     apply_mini_opacity(&mini, opacity)?;
     enforce_mini_topmost(&mini.as_ref().window())?;

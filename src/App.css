@@ -365,7 +365,7 @@ button:focus-visible {
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
 .cumulative-card, .cumulative-skeleton, .timeline-card { grid-column: span 8; }
 .apps-card, .dashboard-stack { grid-column: span 4; }
-.cumulative-card, .cumulative-skeleton, .apps-card { height: 300px; min-height: 280px; max-height: 300px; }
+.cumulative-card, .cumulative-skeleton, .apps-card { height: 280px; min-height: 280px; max-height: 280px; }
 .dashboard-stack { display: grid; min-height: 380px; grid-template-rows: auto auto minmax(0, 1fr); gap: 20px; }
 .dashboard-stack .stats-card { min-height: 0; }
 .card { border: var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow); }
@@ -503,6 +503,7 @@ button:focus-visible {
 .trends-skeleton { min-height: 430px; }
 .trends-card { padding: 20px; box-shadow: none; }
 .trends-day-card { padding: 20px; box-shadow: none; }
+.trends-day-card .cumulative-card { height: 280px; min-height: 280px; max-height: 280px; }
 .trends-day-picker {
   position: relative;
   display: flex; align-items: center; justify-content: center; gap: 14px; margin: 4px 0 12px;
