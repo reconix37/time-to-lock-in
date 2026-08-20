@@ -1262,6 +1262,9 @@ fn create_rule(
     if !matches!(match_type.as_str(), "exe" | "title" | "domain" | "any") {
         return Err("invalid match type".to_string());
     }
+    let mut match_type = match_type;
+    let mut match_mode = match_mode;
+    let mut case_insensitive = case_insensitive;
     let mut normalized = rules::normalize_pattern(&pattern);
     let mut conditions = normalized_conditions(conditions);
     if let Some(first) = conditions.first() {
@@ -1358,6 +1361,9 @@ fn update_rule(
         return Err("Без категории нельзя привязать".to_string());
     }
 
+    let mut match_type = match_type;
+    let mut match_mode = match_mode;
+    let mut case_insensitive = case_insensitive;
     let mut normalized = rules::normalize_pattern(&pattern);
     let mut conditions = normalized_conditions(conditions);
     if let Some(first) = conditions.first() {
