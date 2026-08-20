@@ -7,7 +7,7 @@ import { localizedDuration } from "./duration";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
-import { parseMiniSettings, applyMiniPreset, defaultMiniLayout, serializeMiniLayout, MINI_BLOCK_IDS, type MiniBlockId, type MiniLayout, type MiniMode, type MiniTextSize } from "./miniSettings";
+import { parseMiniSettings, applyMiniPreset, defaultMiniLayout, serializeMiniLayout, MINI_BLOCK_IDS, type MiniBlockId, type MiniBlockCfg, type MiniLayout, type MiniMode, type MiniTextSize } from "./miniSettings";
 import { getMiniVerdict } from "./miniVerdict";
 import { MiniActivityChart } from "./components/MiniActivityChart";
 import type { TodayCumulative } from "./components/CumulativeChart";
@@ -173,6 +173,9 @@ export function MiniView() {
   const cornerButtonRef = useRef<HTMLButtonElement | null>(null);
   const cornerPopoverRef = useRef<HTMLElement | null>(null);
   const tuckTimerRef = useRef<number | null>(null);
+  // живой редактор layout: drag-перестановка блоков потока
+  const flowRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ id: MiniBlockId; last: number | null; moved: boolean } | null>(null);
   const modeRef = useRef<MiniMode>(mode);
   const textSizeRef = useRef<MiniTextSize>(textSize);
   modeRef.current = mode;
@@ -418,16 +421,6 @@ export function MiniView() {
     }
   }, []);
 
-  const moveBlock = useCallback((id: MiniBlockId, delta: number) => {
-    const index = layout.blocks.findIndex((block) => block.id === id);
-    const target = index + delta;
-    if (index < 0 || target < 0 || target >= layout.blocks.length) return;
-    const blocks = [...layout.blocks];
-    const [moving] = blocks.splice(index, 1);
-    blocks.splice(target, 0, moving);
-    saveLayout({ ...layout, blocks });
-  }, [layout, saveLayout]);
-
   const toggleBlockEnabled = useCallback((id: MiniBlockId) => {
     saveLayout({
       ...layout,
@@ -441,6 +434,53 @@ export function MiniView() {
       blocks: layout.blocks.map((block) => (block.id === id ? { ...block, size: block.size === 1 ? 2 : 1 } : block)),
     });
   }, [layout, saveLayout]);
+
+  // --- живой canvas-редактор: drag-перестановка блоков потока внутри реального виджета ---
+  const computeFlowIndex = useCallback((clientY: number): number => {
+    const container = flowRef.current;
+    if (!container) return -1;
+    const dragId = dragRef.current?.id;
+    const blocks = Array.from(container.querySelectorAll<HTMLElement>("[data-mini-id]"));
+    const target = blocks.find(
+      (block) => block.dataset.miniId !== dragId && clientY < block.getBoundingClientRect().top + block.getBoundingClientRect().height / 2,
+    );
+    if (!target) return blocks.length - (dragId ? 1 : 0);
+    return blocks.indexOf(target);
+  }, []);
+
+  const reorderFlow = useCallback((movingId: MiniBlockId, flowIndex: number) => {
+    const nonPair = layout.blocks.filter((block) => block.id !== "categories" && block.id !== "score");
+    const moving = nonPair.find((block) => block.id === movingId);
+    if (!moving || flowIndex < 0 || flowIndex >= nonPair.length) return;
+    const rest = nonPair.filter((block) => block.id !== movingId);
+    rest.splice(flowIndex, 0, moving);
+    const pair = layout.blocks.filter((block) => block.id === "categories" || block.id === "score");
+    saveLayout({ ...layout, blocks: [...pair, ...rest] });
+  }, [layout, saveLayout]);
+
+  const onWindowDragMove = useCallback((event: PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    drag.moved = true;
+    const index = computeFlowIndex(event.clientY);
+    if (index >= 0 && index !== drag.last) {
+      drag.last = index;
+      reorderFlow(drag.id, index);
+    }
+  }, [computeFlowIndex, reorderFlow]);
+
+  const endBlockDrag = useCallback(() => {
+    window.removeEventListener("pointermove", onWindowDragMove);
+    window.removeEventListener("pointerup", endBlockDrag);
+    dragRef.current = null;
+  }, [onWindowDragMove]);
+
+  const beginBlockDrag = useCallback((id: MiniBlockId) => {
+    if (dragRef.current !== null) endBlockDrag();
+    dragRef.current = { id, last: null, moved: false };
+    window.addEventListener("pointermove", onWindowDragMove);
+    window.addEventListener("pointerup", endBlockDrag);
+  }, [endBlockDrag, onWindowDragMove]);
 
   const startEditingLayout = useCallback(() => {
     setSettingsOpen(false);
@@ -552,6 +592,95 @@ export function MiniView() {
         wasteLabel: kindLabels.waste,
       })
     : null;
+
+  // Живой рендер тела: в режиме редактирования те же реальные блоки, но каждый —
+  // кликабельная плитка (drag переставить / скрыть / ресайз). Видно, что меняешь.
+  const renderBody = (editing: boolean) => {
+    const enabled = layout.blocks.filter((block) => block.enabled);
+    const pairIds = ["categories", "score"] as const;
+    const pair = pairIds
+      .map((id) => enabled.find((block) => block.id === id))
+      .filter((block): block is MiniBlockCfg => block !== undefined);
+    const flow = enabled.filter((block) => block.id !== "categories" && block.id !== "score");
+    const renderBlock = (id: MiniBlockId) => {
+      if (id === "score") return <MiniScoreHero scoring={scoring} />;
+      if (id === "categories") return <MiniTopCategories scoring={scoring} />;
+      if (id === "verdict") {
+        if (!progress || !verdict) return <div className="mini-loading" aria-label={t("common.loading")} />;
+        const goalMs = progress.today.useful_goal_min * 60_000;
+        return (
+          <section className="mini-verdict" aria-label={t("mini.dayProgress")}>
+            <EllipsizedText text={t(verdict.key, verdict.vars)} />
+            {goalMs > 0 && (
+              <div className="mini-goal" title={t("mini.goalTooltip", { goal: localizedDuration(goalMs, t) })}>
+                <div className="mini-goal-rail"><i style={{ width: `${Math.min((progress.today.useful_ms / goalMs) * 100, 100)}%` }} /></div>
+                <span className="mini-goal-copy">{t("mini.goalProgress", { useful: localizedDuration(progress.today.useful_ms, t), goal: localizedDuration(goalMs, t) })}</span>
+              </div>
+            )}
+          </section>
+        );
+      }
+      if (id === "current") {
+        return (
+          <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
+            <span className="mini-now-label">{t("mini.nowLabel")}</span>
+            <EllipsizedText className="mini-current-app" text={currentApp} />
+            {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
+            {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
+          </section>
+        );
+      }
+      return <MiniActivityChart data={dayCumulative} />;
+    };
+    const chrome = (id: MiniBlockId, pinned: boolean) => {
+      if (!editing) return null;
+      return (
+        <div className="mini-block-edit">
+          {pinned
+            ? <span className="mini-edit-pinned" title={t("mini.blockPinned")}>{t("mini.blockPinnedMark")}</span>
+            : (
+              <button
+                type="button"
+                className="mini-edit-drag"
+                aria-label={t("mini.dragBlock")}
+                title={t("mini.dragBlock")}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  event.preventDefault();
+                  beginBlockDrag(id);
+                }}
+              >⠿</button>
+            )}
+          <button type="button" className="mini-edit-hide" aria-label={t("mini.hideBlock")} title={t("mini.hideBlock")} onClick={(event) => { event.stopPropagation(); toggleBlockEnabled(id); }}>✕</button>
+          <button type="button" className={`mini-edit-size${layout.blocks.find((b) => b.id === id)?.size === 2 ? " is-wide" : ""}`} aria-label={t("mini.sizeWide")} title={t("mini.sizeWide")} onClick={(event) => { event.stopPropagation(); toggleBlockSize(id); }}>▭</button>
+        </div>
+      );
+    };
+    return (
+      <>
+        {pair.length > 0 && (
+          <div className="mini-pair">
+            {pair.map((block) => (
+              <div key={block.id} data-mini-id={block.id} className={`mini-block block-${block.id}${editing ? " is-editing" : ""}`}>
+                {renderBlock(block.id)}
+                {chrome(block.id, true)}
+              </div>
+            ))}
+          </div>
+        )}
+        {flow.length > 0 && (
+          <div ref={flowRef} className="mini-flow">
+            {flow.map((block) => (
+              <div key={block.id} data-mini-id={block.id} className={`mini-block block-${block.id}${editing ? " is-editing" : ""}${block.id === "chart" ? " mini-block--chart" : ""}`}>
+                {renderBlock(block.id)}
+                {chrome(block.id, false)}
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
 
   return (
     <main
@@ -674,95 +803,35 @@ export function MiniView() {
         </nav>
       )}
 
-      <section className={`mini-body is-layout${editingLayout ? " is-editing" : ""}`}>
+      <section className={`mini-body is-layout${editingLayout ? " is-edit-layout" : ""}`}>
         {editingLayout ? (
-          <div className="mini-layout-editor" role="group" aria-label={t("mini.layoutTitle")}>
+          <div className="mini-layout-editor live" role="group" aria-label={t("mini.layoutTitle")}>
             <div className="mini-layout-editor-head">
               <strong>{t("mini.layoutTitle")}</strong>
+              <div className="mini-layout-edit-actions">
+                <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "compact"))}>{t("mini.presetCompact")}</button>
+                <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "detailed"))}>{t("mini.presetDetailed")}</button>
+                <button type="button" className="is-reset" onClick={() => saveLayout(defaultMiniLayout())}>{t("mini.layoutReset")}</button>
+              </div>
+            </div>
+            <p className="mini-layout-canvas-hint">{t("mini.layoutCanvasHint")}</p>
+            {renderBody(true)}
+            {(() => {
+              const hidden = MINI_BLOCK_IDS.filter((id) => !(layout.blocks.find((b) => b.id === id)?.enabled));
+              return hidden.length > 0 ? (
+                <div className="mini-hidden-strip" role="group" aria-label={t("mini.hiddenBlocks")}>
+                  {hidden.map((id) => (
+                    <button key={id} type="button" onClick={() => toggleBlockEnabled(id)}>+ {t(`mini.block.${id}`)}</button>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+            <div className="mini-layout-editor-foot">
               <button type="button" className="mini-layout-done" onClick={finishEditingLayout}>{t("mini.layoutDone")}</button>
             </div>
-            <div className="mini-layout-presets">
-              <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "compact"))}>{t("mini.presetCompact")}</button>
-              <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "detailed"))}>{t("mini.presetDetailed")}</button>
-              <button type="button" onClick={() => saveLayout(defaultMiniLayout())}>{t("mini.layoutReset")}</button>
-            </div>
-            {MINI_BLOCK_IDS.map((id) => {
-              const block = layout.blocks.find((item) => item.id === id);
-              const index = layout.blocks.findIndex((item) => item.id === id);
-              if (block === undefined || index < 0) return null;
-              return (
-                <div className="mini-layout-row" key={id}>
-                  <span className="mini-layout-name">{t(`mini.block.${id}`)}</span>
-                  <button type="button" className="mini-layout-arrow" disabled={index === 0} aria-label={t("mini.moveUp")} title={t("mini.moveUp")} onClick={() => moveBlock(id, -1)}>↑</button>
-                  <button type="button" className="mini-layout-arrow" disabled={index === layout.blocks.length - 1} aria-label={t("mini.moveDown")} title={t("mini.moveDown")} onClick={() => moveBlock(id, 1)}>↓</button>
-                  <button type="button" className={`mini-layout-size${block.size === 2 ? " is-active" : ""}`} aria-pressed={block.size === 2} aria-label={t("mini.sizeWide")} title={t("mini.sizeWide")} onClick={() => toggleBlockSize(id)}>▮</button>
-                  <label className="mini-layout-enable" aria-label={t("mini.enableBlock")}>
-                    <input type="checkbox" checked={block.enabled} onChange={() => toggleBlockEnabled(id)} />
-                    <span aria-hidden="true">✓</span>
-                  </label>
-                </div>
-              );
-            })}
           </div>
         ) : (
-          (() => {
-            // Вердикт Луны: пара «категории слева + скор справа» закреплена сверху,
-            // остальные блоки идут потоком, график — отдельной full-width строкой.
-            const enabled = layout.blocks.filter((block) => block.enabled);
-            const pairIds = ["categories", "score"] as const;
-            const pair = pairIds
-              .map((id) => enabled.find((block) => block.id === id))
-              .filter((block): block is (typeof enabled)[number] => block !== undefined);
-            const flow = enabled.filter((block) => block.id !== "categories" && block.id !== "score");
-            const renderBlock = (id: MiniBlockId) => {
-              if (id === "score") return <MiniScoreHero scoring={scoring} />;
-              if (id === "categories") return <MiniTopCategories scoring={scoring} />;
-              if (id === "verdict") {
-                if (!progress || !verdict) return <div className="mini-loading" aria-label={t("common.loading")} />;
-                const goalMs = progress.today.useful_goal_min * 60_000;
-                return (
-                  <section className="mini-verdict" aria-label={t("mini.dayProgress")}>
-                    <EllipsizedText text={t(verdict.key, verdict.vars)} />
-                    {goalMs > 0 && (
-                      <div className="mini-goal" title={t("mini.goalTooltip", { goal: localizedDuration(goalMs, t) })}>
-                        <div className="mini-goal-rail"><i style={{ width: `${Math.min((progress.today.useful_ms / goalMs) * 100, 100)}%` }} /></div>
-                        <span className="mini-goal-copy">{t("mini.goalProgress", { useful: localizedDuration(progress.today.useful_ms, t), goal: localizedDuration(goalMs, t) })}</span>
-                      </div>
-                    )}
-                  </section>
-                );
-              }
-              if (id === "current") {
-                return (
-                  <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
-                    <span className="mini-now-label">{t("mini.nowLabel")}</span>
-                    <EllipsizedText className="mini-current-app" text={currentApp} />
-                    {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
-                    {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
-                  </section>
-                );
-              }
-              return <MiniActivityChart data={dayCumulative} />;
-            };
-            return (
-              <>
-                {pair.length > 0 && (
-                  <div className="mini-pair">
-                    {pair.map((block) => (
-                      <div key={block.id} className={`mini-block block-${block.id}`}>{renderBlock(block.id)}</div>
-                    ))}
-                  </div>
-                )}
-                {flow.length > 0 && (
-                  <div className="mini-flow">
-                    {flow.map((block) => (
-                      <div key={block.id} className={`mini-block block-${block.id}${block.id === "chart" ? " mini-block--chart" : ""}`}>{renderBlock(block.id)}</div>
-                    ))}
-                  </div>
-                )}
-              </>
-            );
-          })()
+          renderBody(false)
         )}
       </section>
 

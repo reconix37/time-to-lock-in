@@ -790,6 +790,31 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-layout-enable input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .mini-layout-enable span { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: transparent; font-size: 11px; }
 .mini-layout-enable input:checked + span { color: var(--surface); background: var(--iris); border-color: var(--iris); }
+/* --- живой canvas-редактор (live) --- */
+.mini-body.is-edit-layout { align-content: start; }
+.mini-layout-editor.live { overflow: auto; padding: 6px 10px; gap: 5px; }
+.mini-layout-editor.live::-webkit-scrollbar { width: 6px; }
+.mini-layout-editor.live::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.mini-layout-editor.live .mini-layout-editor-head { gap: 6px; flex-wrap: wrap; }
+.mini-layout-edit-actions { display: flex; gap: 4px; }
+.mini-layout-edit-actions button { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: var(--radius-sm); padding: 2px 8px; font-size: var(--mini-font-label); cursor: pointer; }
+.mini-layout-edit-actions button:hover { border-color: var(--iris); color: var(--text); }
+.mini-layout-edit-actions .is-reset { border-color: #d1504a; color: #d1504a; }
+.mini-layout-edit-actions .is-reset:hover { border-color: #d1504a; background: rgba(209, 80, 74, 0.12); }
+.mini-layout-canvas-hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.mini-layout-editor-foot { display: flex; justify-content: flex-end; }
+.mini-body.is-edit-layout .mini-pair, .mini-body.is-edit-layout .mini-flow { gap: 5px; }
+.mini-block.is-editing { position: relative; outline: 1px dashed var(--border); outline-offset: 1px; border-radius: var(--radius-sm); }
+.mini-block-edit { position: absolute; top: 3px; right: 3px; display: flex; gap: 3px; z-index: 3; }
+.mini-block-edit button { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; }
+.mini-block-edit button:hover { color: var(--text); border-color: var(--iris); }
+.mini-edit-drag { cursor: grab; }
+.mini-edit-hide:hover { color: #d1504a; border-color: #d1504a; }
+.mini-edit-size.is-wide { color: var(--iris); border-color: var(--iris); }
+.mini-edit-pinned { display: inline-grid; place-items: center; width: 18px; height: 18px; font-size: 11px; color: var(--muted); }
+.mini-hidden-strip { display: flex; flex-wrap: wrap; gap: 4px; border-top: 1px dashed var(--border); padding-top: 4px; }
+.mini-hidden-strip button { border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: var(--radius-sm); padding: 1px 6px; font-size: var(--mini-font-label); cursor: pointer; }
+.mini-hidden-strip button:hover { color: var(--iris); border-color: var(--iris); }
 .mini-settings-customize { border: 1px solid var(--iris); color: var(--iris); background: var(--surface); border-radius: var(--radius-sm); padding: 4px 8px; font-size: var(--mini-font-label); cursor: pointer; }
 
 .mini-score-hero {

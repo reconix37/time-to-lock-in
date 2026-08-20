@@ -26,10 +26,9 @@ const MINI_CORNER_MARGIN: i32 = 0;
 mod click_through {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-    use windows::Win32::UI::Controls::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        ScreenToClient, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
-    };
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{HTCLIENT, HTTRANSPARENT, WM_NCHITTEST};
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static BAND_PX: AtomicU32 = AtomicU32::new(72);
@@ -55,7 +54,7 @@ mod click_through {
             }
             return LRESULT(HTTRANSPARENT as isize);
         }
-        DefSubclassProc(hwnd, msg, wparam, lparam, uidsubclass, dwrefdata)
+        DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 
     pub fn apply(hwnd: HWND, enabled: bool, band_logical: f64, scale: f64) {
@@ -607,8 +606,8 @@ pub fn set_mini_hit_band(app: &AppHandle, height: f64) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn mini_hwnd(mini: &WebviewWindow) -> Result<windows::Win32::Foundation::HWND, String> {
     use raw_window_handle::HasWindowHandle;
-    let handle = mini
-        .window()
+    let window_ref = mini.as_ref().window();
+    let handle = window_ref
         .window_handle()
         .map_err(|error| error.to_string())?;
     let raw = handle.as_raw();
