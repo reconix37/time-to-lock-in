@@ -1542,7 +1542,7 @@ pub fn today_cumulative(
         )
         .map_err(|error| error.to_string())?;
     let points = statement
-        .query_map([current_ms, local_date_override], |row| {
+        .query_map(params![current_ms, local_date_override], |row| {
             Ok(CumulativePointRecord {
                 timestamp_ms: row.get(0)?,
                 hour: row.get(1)?,
@@ -1561,7 +1561,7 @@ pub fn today_cumulative(
              WHERE effective_local_date <= COALESCE(?2, date(?1 / 1000, 'unixepoch', 'localtime'))
              ORDER BY effective_local_date DESC
              LIMIT 1",
-            [current_ms, local_date_override],
+            params![current_ms, local_date_override],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|error| error.to_string())?;
