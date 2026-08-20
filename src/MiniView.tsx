@@ -63,7 +63,7 @@ function EllipsizedText({ className, text }: { className?: string; text: string 
   return <span ref={ref} className={className} aria-label={text} title={truncated ? text : undefined}>{text}</span>;
 }
 
-function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "click" | "chevron" }) {
+function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "click" | "chevron" | "dashboard" }) {
   if (name === "corner") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 8.3 9.7 3.8a2.1 2.1 0 0 1 3 3l-5.9 5.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4" /></svg>;
   }
@@ -78,6 +78,9 @@ function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "cl
   }
   if (name === "hide") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" /></svg>;
+  }
+  if (name === "dashboard") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 7.6 8 3l5.2 4.6M4 6.4v6.6h8V6.4M6.4 13V9.6h3.2V13" /></svg>;
   }
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.9 2.2h2.2l.4 1.5 1.2.7 1.5-.5 1.1 1.9-1.1 1.1v1.4l1.1 1.1-1.1 1.9-1.5-.5-1.2.7-.4 1.5H6.9l-.4-1.5-1.2-.7-1.5.5-1.1-1.9 1.1-1.1V6.9L2.7 5.8l1.1-1.9 1.5.5 1.2-.7z" /><circle cx="8" cy="7.6" r="1.7" /></svg>;
 }
@@ -536,7 +539,6 @@ export function MiniView() {
           event.stopPropagation();
           if (event.button === 0 && !corner) void invoke("start_mini_drag");
         }}
-        onMouseEnter={openBrow}
         onMouseLeave={scheduleCloseBrow}
       >
         <div className="mini-header-status">
@@ -544,8 +546,37 @@ export function MiniView() {
           <span className="mini-brand">TTLI</span>
           {clickThrough && <span className="mini-privacy-badge mini-click-through-badge" title={t("mini.clickThroughHint")}>{t("mini.clickThroughBadge")}</span>}
         </div>
-        <span className="mini-brow-handle" aria-hidden="true" title={t("mini.browReveal")}><MiniIcon name="chevron" /></span>
-        <div className="mini-header-controls">
+        <button
+          type="button"
+          className="mini-brow-handle"
+          aria-label={t("mini.browReveal")}
+          title={t("mini.browReveal")}
+          onMouseEnter={openBrow}
+          onMouseLeave={scheduleCloseBrow}
+          onClick={(event) => event.stopPropagation()}
+        ><MiniIcon name="chevron" /></button>
+      </header>
+
+      {browOpen && (
+        <nav
+          className="mini-brow-panel"
+          onMouseEnter={openBrow}
+          onMouseLeave={scheduleCloseBrow}
+          aria-label={t("mini.browActions")}
+        >
+          <button
+            type="button"
+            className="mini-icon-button"
+            aria-label={t("mini.dashboard")}
+            title={t("mini.dashboard")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setBrowOpen(false);
+              void invoke("show_dashboard");
+            }}
+          ><MiniIcon name="dashboard" /></button>
           <button
             ref={cornerButtonRef}
             type="button"
@@ -555,7 +586,11 @@ export function MiniView() {
             title={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => void toggleCornerPopover(event)}
+            onClick={(event) => {
+              event.stopPropagation();
+              setBrowOpen(false);
+              void toggleCornerPopover(event);
+            }}
           >{corner ? t(`mini.corner.${corner}`) : <MiniIcon name="corner" />}</button>
           <button
             type="button"
@@ -566,19 +601,11 @@ export function MiniView() {
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              setBrowOpen(false);
               void invoke("hide_mini");
             }}
           ><MiniIcon name="hide" /></button>
-        </div>
-      </header>
-
-      {browOpen && (
-        <nav
-          className="mini-brow-panel"
-          onMouseEnter={openBrow}
-          onMouseLeave={scheduleCloseBrow}
-          aria-label={t("mini.browActions")}
-        >
+          <span className="mini-brow-sep" aria-hidden="true" />
           <button
             type="button"
             className={`mini-icon-button${pinned ? " is-active" : ""}`}
@@ -720,9 +747,6 @@ export function MiniView() {
           <EllipsizedText className="mini-productive" text={t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })} />
           <EllipsizedText className="mini-accounted" text={accountedText} />
           <EllipsizedText className="mini-rank" text={rankText} />
-        </div>
-        <div className="mini-footer-buttons">
-          <button type="button" onClick={() => void invoke("show_dashboard")}>{t("mini.dashboard")}</button>
         </div>
       </footer>
 
