@@ -1514,6 +1514,41 @@ fn get_settings() -> Result<HashMap<String, String>, String> {
     Ok(settings)
 }
 
+fn validate_mini_layout(value: &serde_json::Value) -> bool {
+    let Some(blocks) = value.get("blocks").and_then(|blocks| blocks.as_array()) else {
+        return false;
+    };
+    if blocks.is_empty() {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for block in blocks {
+        let Some(id) = block.get("id").and_then(|id| id.as_str()) else {
+            return false;
+        };
+        if !matches!(id, "score" | "categories" | "verdict" | "current" | "chart") {
+            return false;
+        }
+        if !seen.insert(id) {
+            return false;
+        }
+        if block
+            .get("enabled")
+            .and_then(|enabled| enabled.as_bool())
+            .is_none()
+        {
+            return false;
+        }
+        let Some(size) = block.get("size").and_then(|size| size.as_u64()) else {
+            return false;
+        };
+        if size != 1 && size != 2 {
+            return false;
+        }
+    }
+    true
+}
+
 #[tauri::command]
 fn set_setting(key: String, value: String, app: tauri::AppHandle) -> Result<(), String> {
     let valid = match key.as_str() {
@@ -1546,6 +1581,9 @@ fn set_setting(key: String, value: String, app: tauri::AppHandle) -> Result<(), 
                         .chars()
                         .all(|character| ('a'..='p').contains(&character)))
         }
+        "mini_layout" => serde_json::from_str::<serde_json::Value>(&value)
+            .map(|parsed| validate_mini_layout(&parsed))
+            .unwrap_or(false),
         _ => false,
     };
     if !valid {

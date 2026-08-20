@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseMiniSettings } from "../src/miniSettings.ts";
+import { parseMiniSettings, defaultMiniLayout } from "../src/miniSettings.ts";
 
 test("parses persisted mini settings for both settings surfaces", () => {
   assert.deepEqual(parseMiniSettings({
@@ -21,6 +21,7 @@ test("parses persisted mini settings for both settings surfaces", () => {
     cornerPinned: false,
     clickThrough: true,
     cornerTuck: true,
+    layout: defaultMiniLayout(),
   });
 });
 
@@ -34,6 +35,7 @@ test("uses safe defaults for missing or invalid mini settings", () => {
     cornerPinned: false,
     clickThrough: false,
     cornerTuck: false,
+    layout: defaultMiniLayout(),
   });
   assert.equal(parseMiniSettings({ mini_opacity: "85.5" }).opacity, 100);
   assert.equal(parseMiniSettings({ mini_opacity: "105" }).opacity, 100);

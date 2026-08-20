@@ -7,8 +7,10 @@ import { localizedDuration } from "./duration";
 import type { ProgressOverview } from "./progress";
 import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
-import { parseMiniSettings, type MiniMode, type MiniTextSize } from "./miniSettings";
+import { parseMiniSettings, applyMiniPreset, defaultMiniLayout, serializeMiniLayout, MINI_BLOCK_IDS, type MiniBlockId, type MiniLayout, type MiniMode, type MiniTextSize } from "./miniSettings";
 import { getMiniVerdict } from "./miniVerdict";
+import { MiniActivityChart } from "./components/MiniActivityChart";
+import type { TodayCumulative } from "./components/CumulativeChart";
 
 type CategoryKind = "useful" | "neutral" | "waste";
 
@@ -138,6 +140,9 @@ export function MiniView() {
   const [corner, setCorner] = useState<MiniCorner | null>(null);
   const [clickThrough, setClickThrough] = useState(false);
   const [cornerTuck, setCornerTuck] = useState(false);
+  const [layout, setLayout] = useState<MiniLayout>(defaultMiniLayout);
+  const [editingLayout, setEditingLayout] = useState(false);
+  const [dayCumulative, setDayCumulative] = useState<TodayCumulative | null>(null);
   const [browOpen, setBrowOpen] = useState(false);
   const browTimerRef = useRef<number | null>(null);
   // «бровь»: панель управления выезжает по hover'у, чтобы не занимать место и не мешать ресайзу окна.
@@ -198,6 +203,10 @@ export function MiniView() {
       setOpacity(miniSettings.opacity);
       setClickThrough(miniSettings.clickThrough);
       setCornerTuck(miniSettings.cornerTuck);
+      setLayout(miniSettings.layout);
+      if (miniSettings.layout.blocks.some((block) => block.id === "chart" && block.enabled)) {
+        void invoke<TodayCumulative>("get_today_cumulative").then(setDayCumulative).catch(() => undefined);
+      }
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
@@ -384,6 +393,46 @@ export function MiniView() {
       setCornerTuck(previous);
     }
   }
+
+  const saveLayout = useCallback((next: MiniLayout) => {
+    setLayout(next);
+    void invoke("set_setting", { key: "mini_layout", value: serializeMiniLayout(next) });
+    if (next.blocks.some((block) => block.id === "chart" && block.enabled)) {
+      void invoke<TodayCumulative>("get_today_cumulative").then(setDayCumulative).catch(() => undefined);
+    }
+  }, []);
+
+  const moveBlock = useCallback((id: MiniBlockId, delta: number) => {
+    const index = layout.blocks.findIndex((block) => block.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= layout.blocks.length) return;
+    const blocks = [...layout.blocks];
+    const [moving] = blocks.splice(index, 1);
+    blocks.splice(target, 0, moving);
+    saveLayout({ ...layout, blocks });
+  }, [layout, saveLayout]);
+
+  const toggleBlockEnabled = useCallback((id: MiniBlockId) => {
+    saveLayout({
+      ...layout,
+      blocks: layout.blocks.map((block) => (block.id === id ? { ...block, enabled: !block.enabled } : block)),
+    });
+  }, [layout, saveLayout]);
+
+  const toggleBlockSize = useCallback((id: MiniBlockId) => {
+    saveLayout({
+      ...layout,
+      blocks: layout.blocks.map((block) => (block.id === id ? { ...block, size: block.size === 1 ? 2 : 1 } : block)),
+    });
+  }, [layout, saveLayout]);
+
+  const startEditingLayout = useCallback(() => {
+    setSettingsOpen(false);
+    if (clickThrough) void changeClickThrough(false);
+    setEditingLayout(true);
+  }, [clickThrough]);
+
+  const finishEditingLayout = useCallback(() => setEditingLayout(false), []);
 
   async function resetGeometry() {
     try {
@@ -573,22 +622,56 @@ export function MiniView() {
         </nav>
       )}
 
-      <section className="mini-body">
-        <MiniScoreHero scoring={scoring} />
-        <MiniTopCategories scoring={scoring} />
-
-        {progress && verdict ? (
-          <section className="mini-verdict" aria-label={t("mini.dayProgress")}>
-            <EllipsizedText text={t(verdict.key, verdict.vars)} />
-          </section>
-        ) : <div className="mini-loading" aria-label={t("common.loading")} />}
-
-        <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
-          <span className="mini-now-label">{t("mini.nowLabel")}</span>
-          <EllipsizedText className="mini-current-app" text={currentApp} />
-          {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
-          {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
-        </section>
+      <section className={`mini-body is-layout${editingLayout ? " is-editing" : ""}`}>
+        {editingLayout ? (
+          <div className="mini-layout-editor" role="group" aria-label={t("mini.layoutTitle")}>
+            <div className="mini-layout-editor-head">
+              <strong>{t("mini.layoutTitle")}</strong>
+              <button type="button" className="mini-layout-done" onClick={finishEditingLayout}>{t("mini.layoutDone")}</button>
+            </div>
+            <div className="mini-layout-presets">
+              <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "compact"))}>{t("mini.presetCompact")}</button>
+              <button type="button" onClick={() => saveLayout(applyMiniPreset(layout, "detailed"))}>{t("mini.presetDetailed")}</button>
+              <button type="button" onClick={() => saveLayout(defaultMiniLayout())}>{t("mini.layoutReset")}</button>
+            </div>
+            {MINI_BLOCK_IDS.map((id) => {
+              const block = layout.blocks.find((item) => item.id === id);
+              const index = layout.blocks.findIndex((item) => item.id === id);
+              if (block === undefined || index < 0) return null;
+              return (
+                <div className="mini-layout-row" key={id}>
+                  <span className="mini-layout-name">{t(`mini.block.${id}`)}</span>
+                  <button type="button" className="mini-layout-arrow" disabled={index === 0} aria-label={t("mini.moveUp")} title={t("mini.moveUp")} onClick={() => moveBlock(id, -1)}>↑</button>
+                  <button type="button" className="mini-layout-arrow" disabled={index === layout.blocks.length - 1} aria-label={t("mini.moveDown")} title={t("mini.moveDown")} onClick={() => moveBlock(id, 1)}>↓</button>
+                  <button type="button" className={`mini-layout-size${block.size === 2 ? " is-active" : ""}`} aria-pressed={block.size === 2} aria-label={t("mini.sizeWide")} title={t("mini.sizeWide")} onClick={() => toggleBlockSize(id)}>▮</button>
+                  <label className="mini-layout-enable" aria-label={t("mini.enableBlock")}>
+                    <input type="checkbox" checked={block.enabled} onChange={() => toggleBlockEnabled(id)} />
+                    <span aria-hidden="true">✓</span>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          layout.blocks.filter((block) => block.enabled).map((block) => (
+            <div key={block.id} className={`mini-block block-${block.id} span-${block.size}`}>
+              {block.id === "score" && <MiniScoreHero scoring={scoring} />}
+              {block.id === "categories" && <MiniTopCategories scoring={scoring} />}
+              {block.id === "verdict" && (progress && verdict ? (
+                <section className="mini-verdict" aria-label={t("mini.dayProgress")}><EllipsizedText text={t(verdict.key, verdict.vars)} /></section>
+              ) : <div className="mini-loading" aria-label={t("common.loading")} />)}
+              {block.id === "current" && (
+                <section className={`mini-current tone-${currentTone}`} aria-label={t("mini.currentContext")}>
+                  <span className="mini-now-label">{t("mini.nowLabel")}</span>
+                  <EllipsizedText className="mini-current-app" text={currentApp} />
+                  {privacyNow && <button type="button" className="mini-privacy-badge" title={t("mini.privacyBadgeHint")} onClick={() => void changePrivacy(false)}>{t("mini.nowHiddenBadge")}</button>}
+                  {currentCategory && !privacyNow && <EllipsizedText className={`mini-category-badge kind-${liveSegment?.category_kind ?? "neutral"}`} text={currentCategory} />}
+                </section>
+              )}
+              {block.id === "chart" && <MiniActivityChart data={dayCumulative} />}
+            </div>
+          ))
+        )}
       </section>
 
       {error && <p className="mini-error">{error}</p>}
@@ -621,6 +704,7 @@ export function MiniView() {
             <label className="mini-settings-check"><input type="checkbox" checked={showMiniAtLaunch || corner !== null} disabled={corner !== null} onChange={(event) => void changeLaunchVisibility(event.target.checked)} /><span>{corner ? t("mini.settingsLaunchCorner") : t("mini.settingsLaunch")}</span></label>
             <label className="mini-settings-opacity"><span>{t("mini.settingsOpacity")}</span><output>{opacity}%</output><input type="range" min="60" max="100" step="5" value={opacity} onChange={(event) => void changeOpacity(Number(event.target.value))} /></label>
             <label className="mini-settings-check" title={t("mini.clickThroughHint")}><input type="checkbox" checked={clickThrough} onChange={(event) => void changeClickThrough(event.target.checked)} /><span>{t("mini.clickThrough")}</span></label>
+            <button type="button" className="mini-settings-customize" onClick={startEditingLayout}>{t("mini.customizeWidget")}</button>
             <div className="mini-settings-window-actions">
               <button type="button" onClick={() => void invoke("hide_mini")}>{t("mini.hideToTray")}</button>
             </div>
