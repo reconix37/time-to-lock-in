@@ -1,4 +1,4 @@
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import type { KindLabels } from "../share";
 import { ChartTooltip } from "./ChartTooltip";
 import { localeForLang } from "../i18n";
@@ -23,14 +23,16 @@ interface CumulativeChartProps {
   formatDuration: (milliseconds: number) => string;
   kindLabels: KindLabels;
   fullDay?: boolean;
+  /** Доп. контент под сводкой — наполняет карточку (Today переносит категории дня сюда). */
+  footer?: ReactNode;
 }
 
 const WIDTH = 560;
-const HEIGHT = 260;
-const LEFT = 52;
-const RIGHT = 18;
-const TOP = 24;
-const BOTTOM = 34;
+const HEIGHT = 300;
+const LEFT = 50;
+const RIGHT = 16;
+const TOP = 18;
+const BOTTOM = 32;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 
@@ -44,7 +46,7 @@ function pointHour(point: CumulativePoint): number {
   return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
 }
 
-export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = false }: CumulativeChartProps) {
+export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = false, footer }: CumulativeChartProps) {
   const { lang, t } = useI18n();
   const [activePoint, setActivePoint] = useState<CumulativePoint>();
   const [tooltip, setTooltip] = useState({ x: 0, y: 0, visible: false });
@@ -171,6 +173,7 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
         <span className="kind-useful">{kindLabels.useful} <strong>{formatDuration(headlinePoint?.useful_ms ?? 0)}</strong> · {t("chart.goalValue", { goal: data.useful_goal_min })}</span>
         <span className="kind-waste">{kindLabels.waste} <strong>{formatDuration(headlinePoint?.waste_ms ?? 0)}</strong> · {t("chart.limitValue", { limit: data.waste_limit_min })}</span>
       </div>
+      {footer}
     </section>
   );
 }

@@ -1089,7 +1089,25 @@ function DashboardView() {
         {loading || !cumulative ? (
           <div className="card cumulative-skeleton skeleton" aria-label={t("dashboard.chartLoading")} />
         ) : (
-          <CumulativeChart data={cumulative} formatDuration={formatDuration} kindLabels={kindLabels} />
+          <CumulativeChart
+            data={cumulative}
+            formatDuration={formatDuration}
+            kindLabels={kindLabels}
+            footer={scoring && scoring.top_categories.length > 0 ? (
+              <div className="cumulative-footer">
+                <span className="cumulative-footer-title">{t("dashboard.categories")}</span>
+                <div className="cumulative-footer-list">
+                  {scoring.top_categories.slice(0, 4).map((category) => (
+                    <span className="cumulative-footer-chip" key={category.category_id} title={`${category.full_path} · ${formatDuration(category.duration_ms)}`}>
+                      <span className="cumulative-footer-time">{formatDuration(category.duration_ms)}</span>
+                      <CategoryMark icon={category.icon} color={category.effective_color} compact />
+                      <span className="cumulative-footer-name">{category.full_path}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : undefined}
+          />
         )}
 
         <section className={`card apps-card ${selectedApp ? "has-selection" : ""}`}>
@@ -1244,21 +1262,6 @@ function DashboardView() {
 
         <aside className="dashboard-stack">
           {scoring && <ScorePanel data={scoring} />}
-
-          {scoring && (
-            <section className="card top-categories-card">
-              <div className="card-heading"><div><span className="eyebrow">{t("score.topCategories")}</span><h2>{t("dashboard.categories")}</h2></div></div>
-              <div className="top-category-list">
-                {scoring.top_categories.map((category) => (
-                  <div className="top-category-row" key={category.category_id} title={category.full_path}>
-                    <CategoryMark icon={category.icon} color={category.effective_color} />
-                    <span>{category.full_path}</span>
-                    <strong>{formatDuration(category.duration_ms)}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
 
           <section className="card stats-card">
             <div className="card-heading"><div><span className="eyebrow">{t("dashboard.balance")}</span><h2>{t("dashboard.whereTimeWent")}</h2></div></div>

@@ -178,12 +178,18 @@ export function MiniView() {
   const dragRef = useRef<{ id: MiniBlockId; last: number | null; moved: boolean } | null>(null);
   const modeRef = useRef<MiniMode>(mode);
   const textSizeRef = useRef<MiniTextSize>(textSize);
+  const cornerRef = useRef<MiniCorner | null>(null);
   modeRef.current = mode;
   textSizeRef.current = textSize;
 
   const applyMiniState = useCallback((state: MiniState) => {
     setPinned(state.pinned);
-    setCorner(matchesMiniCorner(state.corner) && !state.resizable ? state.corner : null);
+    // Угол — производная от сохранённого mini_corner в БД, НЕ от resizable:
+    // окно при закреплении остаётся ресайзящимся (сужение/растяжение доступны),
+    // а позиция держится в углу через re-anchor. (v0.2.36)
+    const nextCorner = matchesMiniCorner(state.corner) ? state.corner : null;
+    cornerRef.current = nextCorner;
+    setCorner(nextCorner);
   }, []);
 
   const syncMiniState = useCallback(async () => {
@@ -223,17 +229,9 @@ export function MiniView() {
         neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
         waste: settings.kind_label_waste ?? defaultKindLabels.waste,
       });
-      // режим «Компактно» на старте: точный размер + переменная геометрия.
-      // Ресайз НЕ глушим: юзер должен всегда мочь растянуть/сжать виджет мышью
-      // (иначе «куда пропал ресайз»). Адаптив сам перестроит строки под любой размер.
-      // Отдельно чиним застрявший resizable=false из прошлых версий (не в corner-lock).
-      if (miniSettings.mode === "compact") {
-        const required = requiredMiniSize("compact", miniSettings.textSize);
-        void invoke("resize_mini", { width: required.width, height: required.height, force: true });
-        if (matchesMiniCorner(miniState.corner) === false) {
-          void invoke("set_mini_resizable", { resizable: true });
-        }
-      }
+      // режим размера применяется ОДИН раз при переключении (changeMode/changeTextSize)
+      // и на старте — НЕ в 5-сек таймере (иначе мышиный ресайз сводится на нет,
+      // виджет дёргается и «уезжает»). Текущий размер окна = источник истины. (v0.2.36)
       document.documentElement.dataset.theme = settings.theme === "dark" ? "dark" : "";
       setError(null);
     } catch (reason: unknown) {
@@ -257,6 +255,8 @@ export function MiniView() {
     };
     void getCurrentWindow().onResized(() => {
       saveGeometry();
+      // при закреплении в угол держим окно прижатым: каждый ресайз — re-anchor
+      if (cornerRef.current) void invoke("reanchor_mini_corner").catch(() => undefined);
     }).then((unlisten) => {
       if (active) stopResizeListener = unlisten;
       else unlisten();
@@ -348,8 +348,9 @@ export function MiniView() {
     try {
       const required = requiredMiniSize(nextMode, textSize);
       await invoke("resize_mini", { width: required.width, height: required.height, force: nextMode === "compact" });
-      // ресайз не глушим в «Компактно» — юзер всегда может тянуть края
-      if (!corner) await invoke("set_mini_resizable", { resizable: true });
+      // окно всегда остаётся ресайзящимся мышью (сужение/растяжение), в т.ч. в углу —
+      // позиция держится re-anchor'ом. Замок на ресайз убран. (v0.2.36)
+      await invoke("set_mini_resizable", { resizable: true });
       await saveSetting("mini_mode", nextMode);
       setMode(nextMode);
     } catch {

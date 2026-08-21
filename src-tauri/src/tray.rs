@@ -339,8 +339,8 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
         let corner_pinned = valid_mini_corner(&corner);
         if corner_pinned {
             move_mini_to_corner(&mini, &corner, corner_tuck)?;
-            mini.set_resizable(false)
-                .map_err(|error| error.to_string())?;
+            // окно остаётся ресайзящимся (сужение/растяжение доступны даже в углу),
+            // позиция держится в углу через re-anchor после каждого ресайза. (v0.2.36)
         }
         if should_restore_mini(visible, onboarding_done, tray_only, corner_pinned) {
             mini.unminimize().map_err(|error| error.to_string())?;
@@ -452,8 +452,9 @@ pub fn get_mini_state(app: &AppHandle) -> Result<MiniState, String> {
     let position = mini.inner_position().map_err(|error| error.to_string())?;
     let connection = db::open()?;
     let saved_corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
-    let corner = (!resizable && matches!(saved_corner.as_str(), "tl" | "tr" | "bl" | "br"))
-        .then_some(saved_corner);
+    // Угол — производная от сохранённого mini_corner в БД, не от resizable:
+    // окно при закреплении остаётся ресайзящимся, флаг угла живёт в настройках. (v0.2.36)
+    let corner = matches!(saved_corner.as_str(), "tl" | "tr" | "bl" | "br").then_some(saved_corner);
     Ok(MiniState {
         pinned: mini.is_always_on_top().map_err(|error| error.to_string())?,
         corner,
@@ -781,32 +782,36 @@ pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
-    let previous_position = mini.inner_position().map_err(|error| error.to_string())?;
-    let previous_resizable = mini.is_resizable().map_err(|error| error.to_string())?;
     let connection = db::open()?;
     let active_corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
     if active_corner == corner {
-        mini.set_resizable(true)
-            .map_err(|error| error.to_string())?;
-        if let Err(error) = db::set_setting(&connection, "mini_corner", "") {
-            let _ = mini.set_resizable(previous_resizable);
-            return Err(error);
-        }
+        // распин: очистить угол; окно уже ресайзящееся — resizable не трогаем
+        db::set_setting(&connection, "mini_corner", "")?;
         let _ = db::set_setting(&connection, "mini_corner_tuck", "0");
         return Ok(());
     }
     let tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
     move_mini_to_corner(&mini, corner, tuck)?;
-    if let Err(error) = mini.set_resizable(false) {
-        let _ = mini.set_position(previous_position);
-        return Err(error.to_string());
-    }
+    // окно остаётся ресайзящимся (сужение/растяжение доступны даже в углу) —
+    // позиция держится у края через re-anchor после каждого ресайза. (v0.2.36)
     if let Err(error) = db::set_setting(&connection, "mini_corner", corner) {
-        let _ = mini.set_position(previous_position);
-        let _ = mini.set_resizable(previous_resizable);
         return Err(error);
     }
     Ok(())
+}
+
+/// Повторное прижатие окна к закреплённому углу (после произвольного ресайза мышью).
+pub fn reanchor_mini_corner(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    if !valid_mini_corner(&corner) {
+        return Ok(());
+    }
+    let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    move_mini_to_corner(&mini, &corner, corner_tuck)
 }
 
 fn place_mini_at_default(window: &WebviewWindow) -> Result<(), String> {

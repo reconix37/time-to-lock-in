@@ -359,6 +359,13 @@ button:focus-visible {
 .cumulative-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; margin-top: 4px; font: 10px var(--font-mono); }
 .cumulative-summary span { color: var(--muted); }
 .cumulative-summary strong { color: var(--text); font-weight: 500; }
+/* Категории дня внизу карточки графика (Today): перенос снизу наверх, наполняет поле. */
+.cumulative-footer { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--hl-low); }
+.cumulative-footer-title { display: block; margin-bottom: 6px; color: var(--subtle); font: 600 10px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
+.cumulative-footer-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.cumulative-footer-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 3px 8px; border: var(--border); border-radius: var(--radius-pill); background: var(--hl-low); color: var(--muted); font: 11px var(--font-sans); }
+.cumulative-footer-chip .cumulative-footer-time { flex: 0 0 auto; color: var(--subtle); font: 10px var(--font-mono); }
+.cumulative-footer-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
 /* How time grew — крупнее: выше карточка, чтобы график был заметным, а не плоской полоской.
    Сетка остаётся плотной (без пустых пролётов под правой колонкой). */

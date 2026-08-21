@@ -1892,6 +1892,11 @@ fn pin_mini_corner(corner: String, app: tauri::AppHandle) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn reanchor_mini_corner(app: tauri::AppHandle) -> Result<(), String> {
+    tray::reanchor_mini_corner(&app)
+}
+
+#[tauri::command]
 fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "mini" {
         return Err("dragging is only available for the mini-window".to_string());
@@ -2097,6 +2102,7 @@ pub fn run() {
             set_mini_hit_band,
             reset_mini_geometry,
             pin_mini_corner,
+            reanchor_mini_corner,
             start_mini_drag,
             get_autostart,
             set_autostart,
