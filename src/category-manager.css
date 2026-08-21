@@ -49,6 +49,7 @@
 .category-special-main strong, .category-special-main small { display: block; }
 .category-special-main small { margin-top: 2px; color: var(--subtle); font-size: 10px; }
 .category-master-actions { display: grid; flex: none; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border-top: 1px solid var(--hl-low); }
+.category-master-note { grid-column: 1 / -1; margin: 2px 0 0; color: var(--subtle); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 
 .category-master-actions button, .category-detail-tabs button, .category-back, .rule-card-actions button { min-height: 32px; padding: 6px 10px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
 .category-master-actions button:hover, .category-master-actions button.is-selected, .category-detail-tabs button:hover, .category-detail-tabs button.is-selected, .rule-card-actions button:hover { background: var(--hl-low); color: var(--iris); }

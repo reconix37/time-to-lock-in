@@ -207,6 +207,7 @@ export function CategoryManager({
   const [error, setError] = useState<string | null>(null);
   const [repaintEnabled, setRepaintEnabled] = useState(false);
   const [overwriteManual, setOverwriteManual] = useState(false);
+  const [transferNote, setTransferNote] = useState<string | null>(null);
   const previewRequest = useRef(0);
   const historyPreviewRequest = useRef(0);
 
@@ -503,6 +504,29 @@ export function CategoryManager({
     }
   }
 
+  async function exportCategories() {
+    setTransferNote(null);
+    try {
+      const saved = await invoke<boolean>("export_categories");
+      if (saved) setTransferNote(t("manager.exportDone"));
+      else setTransferNote(t("manager.exportCancelled"));
+    } catch (reason: unknown) {
+      setTransferNote(t("manager.exportFailed", { message: typeof reason === "string" ? reason : t("error.exportCategories") }));
+    }
+  }
+
+  async function importCategories() {
+    setTransferNote(null);
+    try {
+      const outcome = await invoke<{ added: string[]; skipped: string[]; failed: string[] }>("import_categories");
+      const message = t("manager.importDone", { added: outcome.added.length, skipped: outcome.skipped.length });
+      setTransferNote(outcome.failed.length > 0 ? `${message} · ${outcome.failed.join(", ")}` : message);
+      await onDashboardRefresh();
+    } catch (reason: unknown) {
+      setTransferNote(t("manager.importFailed", { message: typeof reason === "string" ? reason : t("error.importCategories") }));
+    }
+  }
+
   async function replayHistory() {
     if (!repaintEnabled || !window.confirm(t("manager.confirmRepaintAll"))) return;
     setSaving(true);
@@ -729,7 +753,7 @@ export function CategoryManager({
                   );
                 })}
               </div>
-              <div className="category-master-actions"><button type="button" onClick={() => { setCategoryDraft({ ...EMPTY_CATEGORY, priority: 999 }); setScoreInput(normalizedScoreText(EMPTY_CATEGORY.score)); setPriorityInput(""); setView({ type: "newCategory" }); }}>{t("manager.addCategory")}</button><button type="button" className={view.type === "allRules" ? "is-selected" : ""} onClick={() => { setView({ type: "allRules" }); setRepaintEnabled(false); setOverwriteManual(false); }}>{t("manager.allRules")}</button></div>
+              <div className="category-master-actions"><button type="button" onClick={() => { setCategoryDraft({ ...EMPTY_CATEGORY, priority: 999 }); setScoreInput(normalizedScoreText(EMPTY_CATEGORY.score)); setPriorityInput(""); setView({ type: "newCategory" }); }}>{t("manager.addCategory")}</button><button type="button" className={view.type === "allRules" ? "is-selected" : ""} onClick={() => { setView({ type: "allRules" }); setRepaintEnabled(false); setOverwriteManual(false); }}>{t("manager.allRules")}</button><button type="button" onClick={() => void exportCategories()}>{t("manager.export")}</button><button type="button" onClick={() => void importCategories()}>{t("manager.import")}</button>{transferNote && <p className="category-master-note" role="status">{transferNote}</p>}</div>
             </aside>
 
             <main className="category-detail">

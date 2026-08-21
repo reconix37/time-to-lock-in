@@ -7,7 +7,7 @@ mod tray;
 mod watcher;
 
 use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -1065,6 +1065,210 @@ fn delete_category(id: i64) -> Result<(), String> {
     db::delete_category(id)
 }
 
+#[derive(Serialize)]
+struct ExportCategoryEntry {
+    full_path: String,
+    name: String,
+    color: String,
+    icon: String,
+    kind: String,
+    score: f64,
+    priority: i64,
+    inherit_color: bool,
+    inherit_score: bool,
+}
+
+#[derive(Deserialize)]
+struct ImportCategoryEntry {
+    #[serde(default)]
+    full_path: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    icon: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    score: f64,
+    #[serde(default)]
+    priority: i64,
+    #[serde(default)]
+    inherit_color: bool,
+    #[serde(default)]
+    inherit_score: bool,
+}
+
+#[derive(Deserialize)]
+struct ImportCategoriesFile {
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    categories: Vec<ImportCategoryEntry>,
+}
+
+#[derive(Serialize)]
+struct CategoryImportOutcome {
+    added: Vec<String>,
+    skipped: Vec<String>,
+    failed: Vec<String>,
+}
+
+/// Очищает путь: нормализует сегменты (" A >  B " → "A > B").
+fn clean_category_path(path: &str) -> String {
+    path.split('>')
+        .map(|segment| segment.trim())
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
+/// Ищет родителя категории в дереве; корень → None.
+fn parent_category_id(path: &str, by_path: &HashMap<String, i64>) -> Option<i64> {
+    let segments: Vec<&str> = path
+        .split('>')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.len() <= 1 {
+        return None;
+    }
+    let parent = segments[..segments.len() - 1].join(" > ");
+    by_path.get(&parent).copied()
+}
+
+#[tauri::command]
+async fn export_categories(app: tauri::AppHandle) -> Result<bool, String> {
+    let connection = db::open()?;
+    let categories = db::list_categories(&connection)?
+        .into_iter()
+        .map(|category| ExportCategoryEntry {
+            full_path: category.full_path,
+            name: category.name,
+            color: category.color,
+            icon: category.icon,
+            kind: category.kind,
+            score: category.score,
+            priority: category.priority,
+            inherit_color: category.inherit_color,
+            inherit_score: category.inherit_score,
+        })
+        .collect::<Vec<_>>();
+    let payload = serde_json::json!({
+        "format": "ttli-categories",
+        "categories": categories.iter().map(|category| serde_json::json!({
+            "full_path": category.full_path,
+            "name": category.name,
+            "color": category.color,
+            "icon": category.icon,
+            "kind": category.kind,
+            "score": category.score,
+            "priority": category.priority,
+            "inherit_color": category.inherit_color,
+            "inherit_score": category.inherit_score,
+        })).collect::<Vec<_>>(),
+    });
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_file_name("ttli-categories.json")
+        .blocking_save_file();
+    let Some(path) = selected else {
+        return Ok(false);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    std::fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn import_categories(app: tauri::AppHandle) -> Result<CategoryImportOutcome, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
+    let Some(path) = selected else {
+        return Ok(CategoryImportOutcome {
+            added: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+        });
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let raw = std::fs::read(&path).map_err(|error| error.to_string())?;
+    if raw.len() > 2 * 1024 * 1024 {
+        return Err("Файл слишком большой".to_string());
+    }
+    let parsed: ImportCategoriesFile = serde_json::from_slice(&raw)
+        .map_err(|error| format!("Не распознан файл категорий: {error}"))?;
+    if parsed.format.as_deref() != Some("ttli-categories") {
+        return Err("Это не файл категорий Time To Lock In".to_string());
+    }
+    let mut entries = parsed.categories;
+    // Родители создаются раньше детей.
+    entries.sort_by_key(|entry| entry.full_path.matches('>').count());
+
+    let connection = db::open()?;
+    let mut by_path: HashMap<String, i64> = db::list_categories(&connection)?
+        .into_iter()
+        .map(|category| (category.full_path.clone(), category.id))
+        .collect();
+
+    let mut outcome = CategoryImportOutcome {
+        added: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+    };
+    for entry in entries {
+        let path = clean_category_path(&entry.full_path);
+        if path.is_empty() {
+            continue;
+        }
+        if by_path.contains_key(&path) {
+            outcome.skipped.push(path);
+            continue;
+        }
+        if !matches!(entry.kind.as_str(), "useful" | "neutral" | "waste") {
+            outcome
+                .failed
+                .push(format!("{path} (неверный тип \"{}\")", entry.kind));
+            continue;
+        }
+        let parent_id = parent_category_id(&path, &by_path);
+        if path.contains('>') && parent_id.is_none() {
+            outcome.failed.push(format!("{path} (родитель не найден)"));
+            continue;
+        }
+        let icon = crate::category_icon_or_fallback(entry.icon.clone());
+        match db::create_category(db::CategoryValues {
+            name: &entry.name,
+            color: if entry.color.len() == 7 && entry.color.starts_with('#') {
+                &entry.color
+            } else {
+                "#9893a5"
+            },
+            icon: &icon,
+            kind: &entry.kind,
+            parent_id,
+            score: entry.score,
+            inherit_color: entry.inherit_color,
+            inherit_score: entry.inherit_score,
+            priority: entry.priority,
+        }) {
+            Ok(record) => {
+                by_path.insert(path.clone(), record.id);
+                outcome.added.push(path);
+            }
+            Err(error) => outcome.failed.push(format!("{path} ({error})")),
+        }
+    }
+    Ok(outcome)
+}
+
 #[tauri::command]
 fn get_rules() -> Result<Vec<Rule>, String> {
     let connection = db::open()?;
@@ -2073,6 +2277,8 @@ pub fn run() {
             create_category,
             update_category,
             delete_category,
+            export_categories,
+            import_categories,
             get_rules,
             create_rule,
             update_rule,
