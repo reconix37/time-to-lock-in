@@ -1,6 +1,6 @@
 [package]
 name = "time-to-lock-in"
-version = "0.2.36"
+version = "0.2.37"
 description = "Local-first Windows time tracker with meme ranks and shareable challenge cards. No cloud, no accounts."
 authors = ["reconix37"]
 edition = "2021"

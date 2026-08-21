@@ -4318,7 +4318,7 @@ dependencies = [
 
 [[package]]
 name = "time-to-lock-in"
-version = "0.2.36"
+version = "0.2.37"
 dependencies = [
  "axum",
  "raw-window-handle",
