@@ -335,7 +335,7 @@ button:focus-visible {
 .share-actions .share-primary { border-color: transparent; background: var(--love); color: var(--bg); }
 .share-actions .share-primary:hover { background: var(--love-hover); }
 .share-actions > span { color: var(--muted); font-size: 12px; }
-.cumulative-card { display: flex; min-height: 0; flex-direction: column; padding: 20px; box-shadow: none; }
+.cumulative-card { display: flex; min-height: 0; flex-direction: column; padding: 14px 18px 12px; box-shadow: none; }
 .cumulative-heading { align-items: center; margin-bottom: 8px; }
 .cumulative-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; color: var(--muted); font: 10px var(--font-mono); }
 .cumulative-legend span { display: flex; align-items: center; gap: 5px; }
@@ -345,14 +345,14 @@ button:focus-visible {
 .cumulative-plot { min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 .cumulative-plot svg { display: block; min-width: 0; width: 100%; height: 100%; }
 .cumulative-y-tick line { stroke: var(--hl-low); stroke-width: 1; }
-.cumulative-y-tick text { fill: var(--subtle); font: 10px var(--font-mono); text-anchor: end; }
+.cumulative-y-tick text { fill: var(--subtle); font: 11px var(--font-mono); text-anchor: end; }
 .cumulative-x-grid { stroke: color-mix(in srgb, var(--text) 16%, transparent); stroke-width: 1; }
-.cumulative-x-label { fill: var(--subtle); font: 10px var(--font-mono); text-anchor: middle; }
+.cumulative-x-label { fill: var(--subtle); font: 11px var(--font-mono); text-anchor: middle; }
 .cumulative-x-label:first-of-type { text-anchor: start; }
-.cumulative-crosshair line { stroke: color-mix(in srgb, var(--text) 45%, transparent); stroke-width: 1; stroke-dasharray: 3 3; }
+.cumulative-crosshair line { stroke: color-mix(in srgb, var(--text) 60%, transparent); stroke-width: 1.25; stroke-dasharray: 3 3; }
 .cumulative-pin line { stroke: var(--iris); stroke-width: 1.5; }
-.cumulative-pin text { fill: var(--iris); font: 10px var(--font-mono); text-anchor: middle; }
-.cumulative-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.cumulative-pin text { fill: var(--iris); font: 11px var(--font-mono); text-anchor: middle; }
+.cumulative-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .cumulative-line.kind-useful { stroke: var(--cat-useful); }
 .cumulative-line.kind-waste { stroke: var(--cat-waste); }
 .chart-hit-area { fill: var(--surface); opacity: 0; }
@@ -371,7 +371,8 @@ button:focus-visible {
    Сетка остаётся плотной (без пустых пролётов под правой колонкой). */
 .cumulative-card, .cumulative-skeleton, .timeline-card { grid-column: span 8; }
 .apps-card, .dashboard-stack { grid-column: span 4; }
-.cumulative-card, .cumulative-skeleton, .apps-card { height: 320px; min-height: 320px; max-height: 320px; }
+.cumulative-card, .cumulative-skeleton { height: 360px; min-height: 360px; max-height: 360px; }
+.apps-card { height: 320px; min-height: 320px; max-height: 320px; }
 .dashboard-stack { display: grid; min-height: 380px; grid-template-rows: auto auto minmax(0, 1fr); gap: 20px; }
 .dashboard-stack .stats-card { min-height: 0; }
 .card { border: var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow); }
@@ -509,7 +510,7 @@ button:focus-visible {
 .trends-skeleton { min-height: 430px; }
 .trends-card { padding: 20px; box-shadow: none; }
 .trends-day-card { padding: 20px; box-shadow: none; }
-.trends-day-card .cumulative-card { height: 280px; min-height: 280px; max-height: 280px; }
+.trends-day-card .cumulative-card { height: 300px; min-height: 300px; max-height: 300px; }
 .trends-day-picker {
   position: relative;
   display: flex; align-items: center; justify-content: center; gap: 14px; margin: 4px 0 12px;

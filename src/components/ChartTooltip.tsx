@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 interface ChartTooltipProps {
@@ -13,22 +13,23 @@ const VIEWPORT_MARGIN = 8;
 
 export function ChartTooltip({ x, y, visible, children }: ChartTooltipProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: x + CURSOR_OFFSET, top: y + CURSOR_OFFSET });
 
+  // Позицию пишем напрямую в style узла — движение курсора не вызывает ре-рендер React
+  // (при прежнем подходе setPosition на каждый mousemove ронял производительность кросхэйра).
   useLayoutEffect(() => {
     const tooltip = tooltipRef.current;
-    if (!visible || tooltip === null) return;
+    if (tooltip === null) return;
 
-    const { width, height } = tooltip.getBoundingClientRect();
-    const left = x + CURSOR_OFFSET + width <= window.innerWidth - VIEWPORT_MARGIN
+    const left = x + CURSOR_OFFSET + tooltip.offsetWidth <= window.innerWidth - VIEWPORT_MARGIN
       ? x + CURSOR_OFFSET
-      : Math.max(VIEWPORT_MARGIN, x - CURSOR_OFFSET - width);
-    const top = y + CURSOR_OFFSET + height <= window.innerHeight - VIEWPORT_MARGIN
+      : Math.max(VIEWPORT_MARGIN, x - CURSOR_OFFSET - tooltip.offsetWidth);
+    const top = y + CURSOR_OFFSET + tooltip.offsetHeight <= window.innerHeight - VIEWPORT_MARGIN
       ? y + CURSOR_OFFSET
-      : Math.max(VIEWPORT_MARGIN, y - CURSOR_OFFSET - height);
+      : Math.max(VIEWPORT_MARGIN, y - CURSOR_OFFSET - tooltip.offsetHeight);
 
-    setPosition({ left, top });
-  }, [children, visible, x, y]);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  }, [x, y, visible, children]);
 
   if (!visible || typeof document === "undefined") return null;
 
@@ -36,7 +37,7 @@ export function ChartTooltip({ x, y, visible, children }: ChartTooltipProps) {
     <div
       ref={tooltipRef}
       className="chart-tooltip chart-tooltip-floating"
-      style={{ left: position.left, top: position.top }}
+      style={{ left: x, top: y }}
       aria-hidden="true"
     >
       {children}
