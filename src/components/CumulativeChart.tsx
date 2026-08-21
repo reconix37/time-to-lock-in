@@ -71,7 +71,16 @@ export function CumulativeChart({ data, formatDuration, kindLabels, fullDay = fa
   const yMax = largestValue * 1.05;
   const x = (point: CumulativePoint) => LEFT + pointHour(point) / 24 * PLOT_WIDTH;
   const y = (value: number) => TOP + (1 - value / yMax) * PLOT_HEIGHT;
-  const path = (key: "useful_ms" | "waste_ms") => visiblePoints
+  // На текущем дне кривую не тянем к current_point по пустому плато: если между концом
+  // последнего сегмента и «сейчас» нет деятельности, часовые точки дают одинаковые значения
+  // и строят горизонтальный хвост от максимума к current. Обрезаем повторяющиеся концевые
+  // точки (лесенка-плато внутри дня и прошлые дни не трогаем — только tail текущего дня).
+  const trimTrailingFlat = (key: "useful_ms" | "waste_ms") => {
+    const list = [...visiblePoints];
+    while (list.length > 1 && list[list.length - 1][key] === list[list.length - 2][key]) list.pop();
+    return list;
+  };
+  const path = (key: "useful_ms" | "waste_ms") => (fullDay ? visiblePoints : trimTrailingFlat(key))
     .map((point, index) => `${index === 0 ? "M" : "L"} ${x(point).toFixed(2)} ${y(point[key]).toFixed(2)}`)
     .join(" ");
   const yTicks = [yMax * 0.25, yMax * 0.5, yMax * 0.75];
