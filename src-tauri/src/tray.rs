@@ -21,141 +21,6 @@ const MINI_BROW_COLLAPSED_HEIGHT: f64 = 36.0;
 const MINI_BROW_HEIGHT: f64 = 72.0;
 static MINI_BROW_EXPANDED: AtomicBool = AtomicBool::new(false);
 
-/// Частичный «клики сквозь» (Windows): окно в режиме click-through остаётся
-/// кликабельным только в верхней полосе («шапка» + меню брови), остальное —
-/// прозрачно для мыши. Через Win32 subclass + WM_NCHITTEST возвращаем HTCLIENT
-/// в полосе и HTTRANSPARENT за её пределами.
-#[cfg(target_os = "windows")]
-mod click_through {
-    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM};
-    use windows::Win32::Graphics::Gdi::ScreenToClient;
-    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GetClassNameW, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
-    };
-
-    static ENABLED: AtomicBool = AtomicBool::new(false);
-    static BAND_PX: AtomicU32 = AtomicU32::new(72);
-    static PARENT_HWND: AtomicIsize = AtomicIsize::new(0);
-    const SUBCLASS_ID: usize = 1;
-
-    unsafe extern "system" fn mini_proc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-        _uidsubclass: usize,
-        _dwrefdata: usize,
-    ) -> LRESULT {
-        if msg == WM_NCHITTEST && ENABLED.load(Ordering::SeqCst) {
-            let signed = |v: i32| if v >= 0x8000 { v - 0x10000 } else { v };
-            let x = signed((lparam.0 & 0xffff) as i32);
-            let y = signed(((lparam.0 >> 16) & 0xffff) as i32);
-            let mut pt = POINT { x, y };
-            let parent = HWND(PARENT_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void);
-            if ScreenToClient(parent, &mut pt).as_bool() {
-                let band = BAND_PX.load(Ordering::SeqCst) as i32;
-                if (0..=band).contains(&pt.y) {
-                    return LRESULT(HTCLIENT as isize);
-                }
-            }
-            return LRESULT(HTTRANSPARENT as isize);
-        }
-        DefSubclassProc(hwnd, msg, wparam, lparam)
-    }
-
-    fn child_class(hwnd: HWND) -> String {
-        let mut buffer = [0_u16; 256];
-        let length = unsafe { GetClassNameW(hwnd, &mut buffer) };
-        String::from_utf16_lossy(&buffer[..length.max(0) as usize])
-    }
-
-    fn is_webview_child(hwnd: HWND) -> bool {
-        let class = child_class(hwnd);
-        class.starts_with("Chrome_WidgetWin_") || class == "Chrome_RenderWidgetHostHWND"
-    }
-
-    unsafe extern "system" fn collect_child(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let children = &mut *(lparam.0 as *mut Vec<HWND>);
-        children.push(hwnd);
-        true.into()
-    }
-
-    fn child_windows(parent: HWND) -> Vec<HWND> {
-        let mut children = Vec::new();
-        let context = LPARAM((&mut children as *mut Vec<HWND>) as isize);
-        unsafe {
-            let _ = EnumChildWindows(parent, Some(collect_child), context);
-        }
-        children
-    }
-
-    fn remove_subclasses(parent: HWND, children: &[HWND]) {
-        unsafe {
-            let _ = RemoveWindowSubclass(parent, Some(mini_proc), SUBCLASS_ID);
-            for &child in children {
-                let _ = RemoveWindowSubclass(child, Some(mini_proc), SUBCLASS_ID);
-            }
-        }
-    }
-
-    pub fn apply(parent: HWND, enabled: bool, band_logical: f64, scale: f64) -> Result<(), String> {
-        BAND_PX.store(
-            (band_logical * scale).round().max(0.0) as u32,
-            Ordering::SeqCst,
-        );
-        PARENT_HWND.store(parent.0 as isize, Ordering::SeqCst);
-        ENABLED.store(enabled, Ordering::SeqCst);
-
-        let children = child_windows(parent);
-        if !enabled {
-            remove_subclasses(parent, &children);
-            return Ok(());
-        }
-
-        unsafe {
-            let _ = SetWindowSubclass(parent, Some(mini_proc), SUBCLASS_ID, 0);
-        }
-
-        let webview_children: Vec<HWND> = children
-            .iter()
-            .copied()
-            .filter(|hwnd| is_webview_child(*hwnd))
-            .collect();
-        let targets = if webview_children.is_empty() {
-            // На неизвестной версии WebView2 цепляем все дочерние HWND: реальный
-            // input-target всё равно находится среди потомков mini-window.
-            &children
-        } else {
-            &webview_children
-        };
-        let attached = targets
-            .iter()
-            .filter(|&&hwnd| unsafe {
-                SetWindowSubclass(hwnd, Some(mini_proc), SUBCLASS_ID, 0).as_bool()
-            })
-            .count();
-
-        if attached == 0 {
-            ENABLED.store(false, Ordering::SeqCst);
-            remove_subclasses(parent, &children);
-            return Err("mini WebView2 child HWND is unavailable".to_string());
-        }
-
-        // WS_EX_TRANSPARENT намеренно не ставим: стиль действует на весь HWND
-        // и сделает недоступной верхнюю полосу с кнопкой выключения режима.
-        Ok(())
-    }
-
-    pub fn set_band(band_logical: f64, scale: f64) {
-        BAND_PX.store(
-            (band_logical * scale).round().max(0.0) as u32,
-            Ordering::SeqCst,
-        );
-    }
-}
-
 #[derive(Serialize)]
 pub struct MiniState {
     pinned: bool,
@@ -475,6 +340,12 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
         db::setting(&connection, "mini_click_through")?.as_deref() == Some("1");
     let opacity = saved_mini_opacity(&connection)?;
     drop(connection);
+    let restore_mini = should_restore_mini(
+        visible,
+        onboarding_done,
+        tray_only,
+        valid_mini_corner(&corner),
+    );
 
     if let Some(mini) = app.get_webview_window("mini") {
         if !pinned {
@@ -482,30 +353,29 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
         clamp_mini_window(&mini)?;
-        let corner_pinned = valid_mini_corner(&corner);
-        if corner_pinned {
+        if valid_mini_corner(&corner) {
             #[cfg(target_os = "windows")]
             let corner_tuck = corner_tuck && !click_through_enabled;
             move_mini_to_corner(&mini, &corner, corner_tuck)?;
             // окно остаётся ресайзящимся (сужение/растяжение доступны даже в углу),
             // позиция держится в углу через re-anchor после каждого ресайза. (v0.2.36)
         }
-        if should_restore_mini(visible, onboarding_done, tray_only, corner_pinned) {
+        if restore_mini {
             mini.unminimize().map_err(|error| error.to_string())?;
             mini.show().map_err(|error| error.to_string())?;
             show_mini_brow(app)?;
         }
-        apply_mini_opacity(&mini, opacity)?;
         #[cfg(target_os = "windows")]
         if let Err(error) = apply_click_through_window(&mini, click_through_enabled) {
             // WebView2 может создать дочерний HWND чуть позже; не роняем приложение,
             // чтобы режим можно было выключить через запасной пункт в трее.
             eprintln!("restore click-through failed: {error}");
         }
+        apply_mini_opacity(&mini, opacity)?;
         enforce_mini_topmost(&mini.as_ref().window())?;
     }
     if let Some(main) = app.get_webview_window("main") {
-        if onboarding_done {
+        if onboarding_done || restore_mini {
             main.hide().map_err(|error| error.to_string())?;
         } else {
             // Первый запуск — показать дашборд (окно создаётся скрытым, видимость управляется здесь)
@@ -563,9 +433,9 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
     mini.show().map_err(|error| error.to_string())?;
     mini.set_focus().map_err(|error| error.to_string())?;
     let opacity = saved_mini_opacity(&connection)?;
-    apply_mini_opacity(&mini, opacity)?;
     #[cfg(target_os = "windows")]
     apply_click_through_window(&mini, click_through_enabled)?;
+    apply_mini_opacity(&mini, opacity)?;
     enforce_mini_topmost(&mini.as_ref().window())?;
     show_mini_brow(app)?;
     db::set_setting(&connection, "mini_visible", "1")
@@ -750,64 +620,44 @@ pub fn apply_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), St
     let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
-    // «клики сквозь» + tuck несовместимы: hover-reveal не работает, окно станет недосягаемым
-    if enabled {
-        let connection = db::open()?;
-        if mini_tuck_active(&connection)? {
-            let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
-            move_mini_to_corner(&mini, &corner, false)?;
-            sync_mini_brow(app)?;
-        }
+    // В click-through спрятанное за краем окно было бы недосягаемо.
+    let connection = db::open()?;
+    if mini_tuck_active(&connection)? {
+        let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+        move_mini_to_corner(&mini, &corner, !enabled)?;
     }
-    apply_click_through_window(&mini, enabled)
+    apply_click_through_window(&mini, enabled)?;
+    apply_mini_opacity(&mini, saved_mini_opacity(&connection)?)
 }
 
-/// На Windows — частичный hit-test (кликабельна только «шапка»), иначе полный click-through.
-#[cfg(target_os = "windows")]
 fn apply_click_through_window(mini: &WebviewWindow, enabled: bool) -> Result<(), String> {
-    let parent = mini_hwnd(mini)?;
-    let scale = mini.scale_factor().map_err(|error| error.to_string())?;
-    let band = if enabled { 72.0 } else { 0.0 };
-    click_through::apply(parent, enabled, band, scale)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn apply_click_through_window(mini: &WebviewWindow, enabled: bool) -> Result<(), String> {
+    // Тело виджета полностью пропускает клики. Отдельная mini-brow остаётся
+    // интерактивной, поэтому режим всегда можно выключить без меню трея.
     mini.set_ignore_cursor_events(enabled)
         .map_err(|error| error.to_string())
 }
 
-/// Фронт при открытии выпадающих панелей (настройки и т.п.) расширяет кликабельную полосу
-/// выше дефолтной «шапки», чтобы кнопки попапа были доступны при click-through.
-pub fn set_mini_hit_band(app: &AppHandle, height: f64) -> Result<(), String> {
-    let mini = app
-        .get_webview_window("mini")
-        .ok_or_else(|| "mini-window is unavailable".to_string())?;
-    #[cfg(target_os = "windows")]
-    {
-        let scale = mini.scale_factor().map_err(|error| error.to_string())?;
-        if height > 0.0 {
-            click_through::set_band(height, scale);
-        }
+pub fn activate_existing_instance(app: &AppHandle) {
+    let show_mini_on_launch = db::open()
+        .and_then(|connection| {
+            let onboarding_done = db::setting(&connection, "onboarding_done")?.as_deref() == Some("1");
+            let visible = db::setting(&connection, "mini_visible")?.as_deref() == Some("1");
+            let tray_only = db::setting(&connection, "tray_only")?.as_deref() != Some("0");
+            let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+            Ok(should_restore_mini(visible, onboarding_done, tray_only, valid_mini_corner(&corner)))
+        })
+        .unwrap_or(false);
+    if !show_mini_on_launch {
+        show_dashboard(app);
+        return;
     }
-    let _ = &mini;
-    Ok(())
-}
 
-#[cfg(target_os = "windows")]
-fn mini_hwnd(mini: &WebviewWindow) -> Result<windows::Win32::Foundation::HWND, String> {
-    use raw_window_handle::HasWindowHandle;
-    let window_ref = mini.as_ref().window();
-    let handle = window_ref
-        .window_handle()
-        .map_err(|error| error.to_string())?;
-    let raw = handle.as_raw();
-    if let raw_window_handle::RawWindowHandle::Win32(win) = raw {
-        Ok(windows::Win32::Foundation::HWND(
-            win.hwnd.get() as *mut core::ffi::c_void
-        ))
-    } else {
-        Err("mini-window is not a Win32 window".to_string())
+    if let Err(error) = show_mini(app) {
+        eprintln!("show mini on second launch failed: {error}");
+        return;
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
     }
 }
 
@@ -831,6 +681,7 @@ pub fn toggle_mini_click_through(app: &AppHandle) -> Result<(), String> {
         "mini_click_through",
         if next { "1" } else { "0" },
     )?;
+    let _ = sync_mini_brow(app);
     sync_click_through_checked();
     Ok(())
 }
@@ -843,6 +694,7 @@ pub fn set_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), Stri
         "mini_click_through",
         if enabled { "1" } else { "0" },
     )?;
+    let _ = sync_mini_brow(app);
     sync_click_through_checked();
     Ok(())
 }
@@ -1361,6 +1213,7 @@ mod tests {
         assert!(should_restore_mini(false, true, true, true));
         assert!(!should_restore_mini(false, true, true, false));
         assert!(!should_restore_mini(false, false, true, true));
+        assert!(should_restore_mini(true, false, false, false));
         assert!(valid_mini_corner("br"));
         assert!(!valid_mini_corner("bottom-right"));
     }

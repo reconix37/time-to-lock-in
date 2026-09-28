@@ -28,6 +28,8 @@ struct EventPayload {
     domain: Option<String>,
     title: String,
     #[serde(default)]
+    browser: String,
+    #[serde(default)]
     media_playing: bool,
 }
 
@@ -127,6 +129,7 @@ async fn event(
         || payload.title.is_empty()
         || payload.title.chars().count() > 500
         || domain.chars().count() > 253
+        || !matches!(payload.browser.as_str(), "" | "chrome" | "edge")
     {
         return cors_response(StatusCode::UNPROCESSABLE_ENTITY, Body::empty(), &origin);
     }
@@ -135,6 +138,7 @@ async fn event(
     hasher.update(payload.ts.to_string());
     hasher.update(payload.title.as_bytes());
     hasher.update(domain.as_bytes());
+    hasher.update(payload.browser.as_bytes());
     hasher.update([u8::from(payload.media_playing)]);
     let key: [u8; 32] = hasher.finalize().into();
     let is_new = match state.seen.lock() {
@@ -160,6 +164,7 @@ async fn event(
                 ts: payload.ts,
                 domain,
                 title: payload.title,
+                browser: payload.browser,
                 media_playing: payload.media_playing,
             })
             .is_err()

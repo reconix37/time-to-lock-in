@@ -16,6 +16,7 @@ pub struct BrowserEvent {
     pub ts: i64,
     pub domain: String,
     pub title: String,
+    pub browser: String,
     pub media_playing: bool,
 }
 
@@ -109,6 +110,20 @@ fn activity_status(forced_away: bool, idle: bool, media_playing: bool) -> &'stat
 fn is_fresh_browser_event(event: &BrowserEvent, now: i64) -> bool {
     let age = now.saturating_sub(event.ts);
     (0..=BROWSER_EVENT_MAX_AGE_MS).contains(&age)
+}
+
+fn browser_event_matches(event: &BrowserEvent, app: &str, window_title: &str, now: i64) -> bool {
+    if !is_fresh_browser_event(event, now) {
+        return false;
+    }
+    if (app.eq_ignore_ascii_case("chrome.exe") && event.browser == "edge")
+        || (app.eq_ignore_ascii_case("msedge.exe") && event.browser == "chrome")
+    {
+        return false;
+    }
+    let event_title = normalize_title(&event.title).to_lowercase();
+    let window_title = window_title.to_lowercase();
+    window_title.is_empty() || window_title.contains(&event_title)
 }
 
 fn resolve_chromium_media_playing(
@@ -325,7 +340,7 @@ fn same_local_date(connection: &Connection, first: i64, second: i64) -> bool {
 #[cfg(windows)]
 mod platform {
     use super::{
-        activity_status, has_media_marker, is_chromium_browser, is_fresh_browser_event,
+        activity_status, browser_event_matches, has_media_marker, is_chromium_browser,
         normalize_title, resolve_chromium_media_playing, ActivityState, BrowserEvent,
     };
     use crate::db;
@@ -374,7 +389,7 @@ mod platform {
 
         let (domain, fused_title, media_playing) = if is_chromium_browser(&app_lower) {
             browser_event
-                .filter(|event| is_fresh_browser_event(event, now))
+                .filter(|event| browser_event_matches(event, &app_lower, &title, now))
                 .map(|event| {
                     (
                         event.domain.clone(),
@@ -475,7 +490,8 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::{
-        activity_status, has_media_marker, is_chromium_browser, is_task_switcher, normalize_title,
+        activity_status, browser_event_matches, has_media_marker, is_chromium_browser,
+        is_task_switcher, normalize_title,
         resolve_chromium_media_playing, ActivityState, BrowserEvent, BROWSER_EVENT_MAX_AGE_MS,
     };
 
@@ -484,8 +500,17 @@ mod tests {
             ts,
             domain: "youtube.com".to_string(),
             title: title.to_string(),
+            browser: "chrome".to_string(),
             media_playing,
         }
+    }
+
+    #[test]
+    fn browser_event_must_match_the_foreground_browser_and_tab() {
+        let event = browser_event(1_000, "Video", false);
+        assert!(browser_event_matches(&event, "chrome.exe", "Video - Google Chrome", 1_001));
+        assert!(!browser_event_matches(&event, "msedge.exe", "Video - Microsoft Edge", 1_001));
+        assert!(!browser_event_matches(&event, "chrome.exe", "Mail - Google Chrome", 1_001));
     }
 
     #[test]

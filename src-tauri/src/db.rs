@@ -35,6 +35,7 @@ const TITLE_NOISE_WORDS: &[&str] = &[
     "film",
     "movie",
     "series",
+    "of",
     "in",
     "good",
     "quality",
@@ -862,6 +863,30 @@ pub fn rules_revision(connection: &Connection) -> Result<i64, String> {
         .unwrap_or(0))
 }
 
+pub fn public_xp_through(
+    connection: &Connection,
+    local_date: &str,
+    inclusive: bool,
+) -> Result<i64, String> {
+    // XP считается по сумме полезного времени за день: округление по каждой
+    // категории отдельно теряло минуты при переключении между категориями.
+    connection
+        .query_row(
+            "SELECT COALESCE(SUM(useful_ms / 60000), 0)
+             FROM (
+                 SELECT SUM(ds.duration_ms) AS useful_ms
+                 FROM daily_stats ds
+                 JOIN categories c ON c.id = ds.category_id
+                 WHERE c.kind = 'useful'
+                   AND (ds.local_date < ?1 OR (?2 = 1 AND ds.local_date = ?1))
+                 GROUP BY ds.local_date
+             )",
+            params![local_date, if inclusive { 1 } else { 0 }],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn refresh_daily_stats(transaction: &Transaction<'_>, local_date: &str) -> Result<(), String> {
     transaction
         .execute(
@@ -1635,13 +1660,32 @@ pub fn mini_hourly(
 #[cfg(test)]
 mod tests {
     use super::{
-        afk_series, daily_series, import_challenge, list_categories, mini_hourly,
-        preview_reclassify_history, progress_series, reclassify_history, refresh_daily_stats,
+        afk_series, classification_match_stats, daily_series, import_challenge, list_categories, mini_hourly,
+        preview_reclassify_history, progress_series, public_xp_through, reclassify_history,
+        refresh_daily_stats,
         segment_local_dates, set_setting, today_cumulative, today_scoring, upsert_exe_rule,
         validate_category_tree, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
-        MIGRATION_005, MIGRATION_006,
+        MIGRATION_005, MIGRATION_006, MIGRATION_008,
     };
     use rusqlite::{params, Connection};
+
+    #[test]
+    fn public_xp_combines_useful_categories_before_rounding() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection.execute_batch(MIGRATION_001).expect("schema");
+        connection
+            .execute_batch(
+                "INSERT INTO categories (id, name, color, kind, created_at)
+                 VALUES (1, 'Work', '#286983', 'useful', 0),
+                        (2, 'Study', '#56949f', 'useful', 0);
+                 INSERT INTO daily_stats (local_date, category_id, duration_ms, xp)
+                 VALUES ('2026-01-01', 1, 30000, 0),
+                        ('2026-01-01', 2, 30000, 0);",
+            )
+            .expect("fixtures");
+        assert_eq!(public_xp_through(&connection, "2026-01-01", true).expect("xp"), 1);
+        assert_eq!(public_xp_through(&connection, "2026-01-01", false).expect("xp"), 0);
+    }
 
     #[test]
     fn upserts_exe_rule_case_insensitively() {
@@ -1913,7 +1957,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -2515,7 +2559,7 @@ mod tests {
         )
         .expect("cumulative series");
 
-        assert_eq!(cumulative.points.len(), 26);
+        assert_eq!(cumulative.points.len(), 3);
         assert_eq!(
             cumulative
                 .points

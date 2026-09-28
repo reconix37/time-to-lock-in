@@ -363,14 +363,7 @@ fn get_progress_overview() -> Result<ProgressOverview, String> {
         .find(|day| day.local_date == today_date)
         .cloned()
         .ok_or_else(|| "today is outside the progress calendar".to_string())?;
-    let historical_xp = connection
-        .query_row(
-            "SELECT COALESCE(SUM(xp), 0) FROM daily_stats
-             WHERE local_date < date('now', 'localtime')",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error| error.to_string())?;
+    let historical_xp = db::public_xp_through(&connection, &today_date, false)?;
     let lifetime_xp = historical_xp + today.useful_ms / 60_000;
     let today_afk_ms = db::afk_duration_for_day(&connection, &today_date)?;
     let (current_rank, current_rank_threshold, next) = rank_for_xp(lifetime_xp);
@@ -526,22 +519,9 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
     let passed = useful_passed && waste_passed && observed_passed;
     let public_xp = useful_ms / 60_000;
     let lifetime_xp = if local_date == today.as_str() {
-        connection
-            .query_row(
-                "SELECT COALESCE(SUM(xp), 0) FROM daily_stats WHERE local_date < ?1",
-                [local_date],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| error.to_string())?
-            + public_xp
+        db::public_xp_through(connection, local_date, false)? + public_xp
     } else {
-        connection
-            .query_row(
-                "SELECT COALESCE(SUM(xp), 0) FROM daily_stats WHERE local_date <= ?1",
-                [local_date],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| error.to_string())?
+        db::public_xp_through(connection, local_date, true)?
     };
     let (rank, _, _) = rank_for_xp(lifetime_xp);
     let hourly_rate = db::setting(connection, "hourly_rate")?
@@ -2199,7 +2179,7 @@ pub fn run() {
     {
         // Single-instance должен быть первым плагином: только primary запускает сервисы.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            tray::show_dashboard(app);
+            tray::activate_existing_instance(app);
         }));
     }
 

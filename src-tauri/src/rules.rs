@@ -643,6 +643,11 @@ mod tests {
                     category_id INTEGER NOT NULL, priority INTEGER NOT NULL,
                     match_mode TEXT NOT NULL, case_insensitive INTEGER NOT NULL
                  );
+                 CREATE TABLE rule_conditions (
+                    rule_id INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+                    match_type TEXT NOT NULL, pattern TEXT NOT NULL,
+                    match_mode TEXT NOT NULL, case_insensitive INTEGER NOT NULL
+                 );
                  INSERT INTO settings VALUES ('rules_revision', '1');
                  INSERT INTO rules VALUES (1, 'title', 'Blender', 4, 0, 'legacy', 1);",
             )

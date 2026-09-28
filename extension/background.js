@@ -35,6 +35,7 @@ function tabEvent(tab) {
       ts: Date.now(),
       domain: truncate(parsedUrl.hostname.toLowerCase(), 253),
       title: truncate(tab.title, 500),
+      browser: browserName(),
       media_playing: Boolean(tab.audible),
     };
   } catch {

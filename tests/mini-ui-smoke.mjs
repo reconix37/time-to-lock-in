@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import net from "node:net";
+import { join } from "node:path";
 
-const baseUrl = process.env.TTLI_TEST_URL ?? "http://127.0.0.1:4173";
-const chromePath = process.env.TTLI_CHROMIUM ?? "/snap/bin/chromium";
+const baseUrl = process.env.TTLI_TEST_URL ?? "http://127.0.0.1:1420";
+const chromeCandidates = process.platform === "win32"
+  ? [
+      join(process.env.PROGRAMFILES ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+      join(process.env["PROGRAMFILES(X86)"] ?? "", "Microsoft", "Edge", "Application", "msedge.exe"),
+      join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+  : ["/snap/bin/chromium", "/usr/bin/chromium", "/usr/bin/google-chrome"];
+const chromePath = process.env.TTLI_CHROMIUM ?? chromeCandidates.find(existsSync);
+if (!chromePath || !existsSync(chromePath)) {
+  throw new Error("Chromium not found; set TTLI_CHROMIUM to the browser executable");
+}
 const languages = ["ru", "ua", "en"];
 const textSizes = ["normal", "large"];
 const viewports = [[300, 228], [340, 252], [390, 280], [480, 340]];
