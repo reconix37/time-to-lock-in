@@ -639,7 +639,7 @@ button:focus-visible {
   --mini-score-row: 58px;
   --mini-top-row: 72px;
   --mini-now-row: 28px;
-  --mini-footer-row: 32px;
+  --mini-footer-row: 72px;
   position: relative;
   display: grid;
   width: 100vw;
@@ -680,7 +680,7 @@ body.is-mini-brow #root { min-height: 0; }
   --mini-score-row: 70px;
   --mini-top-row: 76px;
   --mini-now-row: 32px;
-  --mini-footer-row: 40px;
+  --mini-footer-row: 78px;
 }
 
 .mini-drag-strip {
@@ -694,10 +694,8 @@ body.is-mini-brow #root { min-height: 0; }
   letter-spacing: .06em;
   text-transform: uppercase;
   user-select: none;
-  cursor: grab;
+  cursor: default;
 }
-
-.mini-drag-strip:active { cursor: grabbing; }
 .mini-header-status, .mini-header-controls { display: flex; min-width: 0; align-items: center; }
 .mini-header-status { gap: 7px; }
 .mini-header-controls { margin-right: -6px; }
@@ -723,6 +721,7 @@ body.is-mini-brow #root { min-height: 0; }
   color: var(--muted);
   cursor: pointer;
 }
+.mini-brow-shell { touch-action: none; }
 .mini-brow-handle svg {
   width: 18px;
   height: 18px;
@@ -737,13 +736,12 @@ body.is-mini-brow #root { min-height: 0; }
 .mini-brow-panel {
   position: absolute;
   top: 22px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   z-index: 7;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px 6px;
+  display: grid;
+  gap: 3px;
+  padding: 4px 8px;
   border: var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -751,9 +749,14 @@ body.is-mini-brow #root { min-height: 0; }
   animation: mini-brow-in 0.12s ease;
 }
 @keyframes mini-brow-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
+.mini-brow-actions { display: flex; align-items: center; justify-content: space-between; gap: 2px; min-width: 0; }
+.mini-brow-settings { display: grid; gap: 5px; padding: 5px 2px 2px; border-top: 1px solid var(--hl-low); }
+.mini-brow-settings .mini-settings-opacity { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; color: var(--text); font: var(--mini-font-control) var(--font-mono); }
+.mini-brow-settings .mini-settings-opacity input { grid-column: 1 / -1; width: 100%; accent-color: var(--iris); }
+.mini-brow-settings button { justify-self: start; padding: 2px 7px; border: var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; }
 .mini-brow-panel .mini-icon-button { color: var(--muted); }
 .mini-brow-panel .mini-icon-button:hover { color: var(--text); background: var(--hl-low); }
 .mini-brow-panel .mini-brow-off-button {
@@ -794,7 +797,7 @@ body.is-mini-brow #root { min-height: 0; }
 .mini-body::-webkit-scrollbar { width: 6px; }
 .mini-body::-webkit-scrollbar-track { background: transparent; }
 .mini-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-.mini-body.is-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, auto); overflow: hidden; }
+.mini-body.is-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .mini-pair {
   display: grid;
   min-width: 0;
@@ -807,6 +810,7 @@ body.is-mini-brow #root { min-height: 0; }
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: minmax(min-content, auto);
   gap: 4px;
+  align-content: space-between;
 }
 .mini-block { min-width: 0; height: auto; overflow-wrap: anywhere; }
 .mini-block__text { min-width: 0; white-space: normal; }
@@ -957,11 +961,14 @@ body.is-mini-brow #root { min-height: 0; }
 .mini-privacy-badge:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .mini-click-through-badge { margin-left: 4px; }
 
-.mini-actions { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 2px 12px; border-top: 1px solid var(--hl-low); }
-.mini-footer-stats { display: grid; min-width: 0; gap: 1px; }
+.mini-actions { display: grid; min-width: 0; align-items: center; padding: 8px 12px; border-top: 1px solid var(--hl-low); background: color-mix(in srgb, var(--iris) 5%, var(--surface)); }
+.mini-footer-stats { display: grid; min-width: 0; grid-template-columns: 1fr auto; align-items: end; gap: 3px 8px; }
 .mini-footer-stats > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-accounted, .mini-rank { color: var(--muted); font: var(--mini-font-label)/var(--mini-line-label) var(--font-mono); font-variant-numeric: tabular-nums; }
-.mini-productive { color: var(--text); font: var(--mini-font-label)/var(--mini-line-label) var(--font-mono); font-variant-numeric: tabular-nums; }
+.mini-productive { grid-row: 1 / 3; display: grid; align-self: center; min-width: 0; color: var(--text); font: 500 var(--mini-font-label)/1.1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.mini-productive strong { color: var(--iris); font: 700 clamp(23px, 7vw, 32px)/1 var(--font-mono); letter-spacing: -.05em; }
+.mini-productive span { color: var(--muted); }
+.mini-accounted, .mini-rank { text-align: right; }
 .mini-rank { display: none; }
 .mini-footer-buttons { display: flex; gap: 4px; }
 .mini-actions button { min-width: 0; height: 24px; padding: 0 7px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font-size: var(--mini-font-control); cursor: pointer; white-space: nowrap; }
@@ -1024,12 +1031,12 @@ body.is-mini-brow #root { min-height: 0; }
 }
 
 @media (min-width: 390px) and (min-height: 280px) {
-  .mini-shell { grid-template-rows: 24px minmax(0, 1fr) 36px; }
+  .mini-shell { grid-template-rows: 24px minmax(0, 1fr) var(--mini-footer-row); }
   .mini-score-hero, .mini-top-categories, .mini-current, .mini-verdict, .mini-chart { padding-inline: 16px; }
   .mini-top-heading-expanded { display: block; }
   .mini-top-category:nth-of-type(n) { display: grid; }
   .mini-actions, .mini-drag-strip { padding-inline: 16px; }
-  .mini-footer-stats { display: flex; align-items: center; gap: 5px; }
+  .mini-footer-stats { display: grid; }
   .mini-rank::before { content: "·"; margin-right: 5px; color: var(--subtle); }
   .mini-rank { display: block; }
 

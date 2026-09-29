@@ -10,6 +10,7 @@ import { localeForLang } from "./i18n";
 import { useI18n } from "./i18nContext";
 import { parseMiniSettings, applyMiniPreset, defaultMiniLayout, serializeMiniLayout, MINI_BLOCK_IDS, type MiniBlockId, type MiniBlockCfg, type MiniLayout, type MiniMode, type MiniTextSize } from "./miniSettings";
 import { getMiniVerdict } from "./miniVerdict";
+import { useMiniRightDrag } from "./useMiniRightDrag";
 import { MiniActivityChart } from "./components/MiniActivityChart";
 import type { TodayCumulative } from "./components/CumulativeChart";
 
@@ -130,6 +131,7 @@ function requiredMiniSize(mode: MiniMode, textSize: MiniTextSize): { width: numb
 }
 
 export function MiniView() {
+  const rightDrag = useMiniRightDrag();
   const { lang, t } = useI18n();
   const defaultKindLabels: Record<CategoryKind, string> = {
     useful: t("mini.defaultUseful"),
@@ -665,6 +667,8 @@ export function MiniView() {
       className={`mini-shell mini-mode-${mode}${textSize === "large" ? " mini-text-large" : ""}${corner ? " is-corner-pinned" : ""}`}
       onMouseEnter={revealTuck}
       onMouseLeave={scheduleTuck}
+      onContextMenu={(event) => event.preventDefault()}
+      {...rightDrag}
     >
       <header className="mini-drag-strip">
         <div className="mini-header-status">
@@ -710,7 +714,10 @@ export function MiniView() {
 
       <footer className="mini-actions">
         <div className="mini-footer-stats">
-          <EllipsizedText className="mini-productive" text={t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })} />
+          <div className="mini-productive" aria-label={t("mini.productive", { value: scoring?.productive_percent.toFixed(1) ?? "0.0" })}>
+            <strong>{scoring?.productive_percent.toFixed(1) ?? "0.0"}%</strong>
+            <span>{t("mini.productiveLabel")}</span>
+          </div>
           <EllipsizedText className="mini-accounted" text={accountedText} />
           <EllipsizedText className="mini-rank" text={rankText} />
         </div>

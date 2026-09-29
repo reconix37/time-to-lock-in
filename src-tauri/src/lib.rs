@@ -2056,8 +2056,8 @@ fn set_mini_resizable(resizable: bool, app: tauri::AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn set_mini_brow_expanded(expanded: bool, app: tauri::AppHandle) -> Result<(), String> {
-    tray::set_mini_brow_expanded(&app, expanded)
+fn set_mini_brow_expanded(expanded: bool, settings_open: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::set_mini_brow_expanded(&app, expanded, settings_open)
 }
 
 #[tauri::command]
@@ -2090,6 +2090,25 @@ fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
         return Ok(());
     }
     window.start_dragging().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn begin_mini_right_drag(app: tauri::AppHandle) -> Result<(i32, i32, f64), String> {
+    let mini = app.get_webview_window("mini").ok_or("mini-window is unavailable")?;
+    let connection = db::open()?;
+    db::set_setting(&connection, "mini_corner", "")?;
+    db::set_setting(&connection, "mini_corner_tuck", "0")?;
+    drop(connection);
+    let position = mini.outer_position().map_err(|error| error.to_string())?;
+    let scale = mini.scale_factor().map_err(|error| error.to_string())?;
+    Ok((position.x, position.y, scale))
+}
+
+#[tauri::command]
+fn move_mini_right_drag(x: i32, y: i32, app: tauri::AppHandle) -> Result<(), String> {
+    let mini = app.get_webview_window("mini").ok_or("mini-window is unavailable")?;
+    mini.set_position(tauri::PhysicalPosition::new(x, y)).map_err(|error| error.to_string())?;
+    tray::sync_mini_brow(&app)
 }
 
 #[tauri::command]
@@ -2311,6 +2330,8 @@ pub fn run() {
             pin_mini_corner,
             reanchor_mini_corner,
             start_mini_drag,
+            begin_mini_right_drag,
+            move_mini_right_drag,
             get_autostart,
             set_autostart,
             check_for_updates,

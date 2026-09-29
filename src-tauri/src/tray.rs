@@ -19,7 +19,9 @@ const MINI_MARGIN: i32 = 16;
 const MINI_CORNER_MARGIN: i32 = 0;
 const MINI_BROW_COLLAPSED_HEIGHT: f64 = 36.0;
 const MINI_BROW_HEIGHT: f64 = 72.0;
+const MINI_BROW_SETTINGS_HEIGHT: f64 = 132.0;
 static MINI_BROW_EXPANDED: AtomicBool = AtomicBool::new(false);
+static MINI_BROW_SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
 pub struct MiniState {
@@ -105,7 +107,7 @@ pub fn enforce_mini_brow_z_order(app: &AppHandle) -> Result<(), String> {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+            SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE,
         };
 
@@ -137,7 +139,8 @@ pub fn enforce_mini_brow_z_order(app: &AppHandle) -> Result<(), String> {
         }
         .map_err(|error| error.to_string())?;
 
-        let brow_insert_after = if pinned { HWND_TOPMOST } else { HWND_TOP };
+        // Бровь — отдельное окно. Держим её выше тела и при потере фокуса.
+        let brow_insert_after = HWND_TOPMOST;
         unsafe {
             SetWindowPos(
                 brow_hwnd,
@@ -1045,7 +1048,9 @@ pub fn sync_mini_brow(app: &AppHandle) -> Result<(), String> {
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(brow.scale_factor().map_err(|error| error.to_string())?);
-    let target_height = if MINI_BROW_EXPANDED.load(Ordering::Relaxed) {
+    let target_height = if MINI_BROW_SETTINGS_OPEN.load(Ordering::Relaxed) {
+        MINI_BROW_SETTINGS_HEIGHT
+    } else if MINI_BROW_EXPANDED.load(Ordering::Relaxed) {
         MINI_BROW_HEIGHT
     } else {
         MINI_BROW_COLLAPSED_HEIGHT
@@ -1086,8 +1091,9 @@ fn compute_tuck_brow_position(
     })
 }
 
-pub fn set_mini_brow_expanded(app: &AppHandle, expanded: bool) -> Result<(), String> {
+pub fn set_mini_brow_expanded(app: &AppHandle, expanded: bool, settings_open: bool) -> Result<(), String> {
     MINI_BROW_EXPANDED.store(expanded, Ordering::Relaxed);
+    MINI_BROW_SETTINGS_OPEN.store(expanded && settings_open, Ordering::Relaxed);
     sync_mini_brow(app)
 }
 

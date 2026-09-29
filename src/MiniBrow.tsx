@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { MiniIcon } from "./MiniView";
 import { useI18n } from "./i18nContext";
+import { useMiniRightDrag } from "./useMiniRightDrag";
 
 type MiniCorner = "tl" | "tr" | "bl" | "br";
 
@@ -18,6 +19,9 @@ export function MiniBrow() {
   const [pinned, setPinned] = useState(true);
   const [corner, setCorner] = useState<MiniCorner | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [opacity, setOpacity] = useState(100);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const rightDrag = useMiniRightDrag();
   const closeTimerRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
@@ -30,6 +34,7 @@ export function MiniBrow() {
       setClickThroughState(settings.mini_click_through === "1");
       setPinned(state.pinned);
       setCorner(state.corner);
+      setOpacity(Number(settings.mini_opacity ?? "100"));
       setError(null);
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : t("error.miniRefresh"));
@@ -56,8 +61,8 @@ export function MiniBrow() {
   }, [load]);
 
   useEffect(() => {
-    void invoke("set_mini_brow_expanded", { expanded: open });
-  }, [open]);
+    void invoke("set_mini_brow_expanded", { expanded: open, settingsOpen });
+  }, [open, settingsOpen]);
 
   const keepOpen = () => {
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
@@ -66,7 +71,7 @@ export function MiniBrow() {
 
   const scheduleClose = () => {
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = window.setTimeout(() => setOpen(false), 280);
+    closeTimerRef.current = window.setTimeout(() => { setOpen(false); setSettingsOpen(false); }, 280);
   };
 
   async function changeClickThrough(next: boolean): Promise<boolean> {
@@ -85,7 +90,7 @@ export function MiniBrow() {
   async function openBodyPanel(panel: "settings" | "corner"): Promise<void> {
     if (clickThrough && !(await changeClickThrough(false))) return;
     setOpen(false);
-    await invoke("set_mini_brow_expanded", { expanded: false });
+    await invoke("set_mini_brow_expanded", { expanded: false, settingsOpen: false });
     await emitTo("mini", "mini://open-panel", { panel, clickThrough: false });
   }
 
@@ -100,42 +105,47 @@ export function MiniBrow() {
     }
   }
 
+  async function changeOpacity(next: number): Promise<void> {
+    setOpacity(next);
+    try {
+      await invoke("set_setting", { key: "mini_opacity", value: String(next) });
+      await emitTo("mini", "mini://refresh");
+    } catch (reason: unknown) {
+      setError(typeof reason === "string" ? reason : t("error.saveSettings"));
+    }
+  }
+
   return (
     <main
       className="mini-brow-shell"
       onMouseEnter={keepOpen}
       onMouseLeave={scheduleClose}
-      onMouseDown={(event) => {
-        if (event.button === 0 && event.clientY <= 22 && !corner) void invoke("start_mini_drag");
-      }}
+      onContextMenu={(event) => event.preventDefault()}
+      {...rightDrag}
     >
       <button
         type="button"
         className="mini-brow-handle"
         aria-label={t("mini.browReveal")}
-        title={t("mini.browReveal")}
         onClick={() => setOpen((current) => !current)}
       ><MiniIcon name="chevron" /></button>
 
       {open && (
         <nav className="mini-brow-panel" aria-label={t("mini.browActions")}>
+          <div className="mini-brow-actions">
           <button type="button" className="mini-icon-button" aria-label={t("mini.dashboard")} title={t("mini.dashboard")} onClick={() => void invoke("show_dashboard")}>
             <MiniIcon name="dashboard" />
           </button>
-          {!clickThrough && (
-            <button type="button" className={`mini-icon-button${corner ? " is-active" : ""}`} aria-pressed={corner !== null} aria-label={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")} title={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")} onClick={() => void openBodyPanel("corner")}>
+          <button type="button" className={`mini-icon-button${corner ? " is-active" : ""}`} aria-pressed={corner !== null} aria-label={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")} title={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")} onClick={() => void openBodyPanel("corner")}>
               {corner ? t(`mini.corner.${corner}`) : <MiniIcon name="corner" />}
-            </button>
-          )}
+          </button>
           <button type="button" className="mini-icon-button" aria-label={t("mini.hideToTray")} title={t("mini.hideToTray")} onClick={() => void invoke("hide_mini")}>
             <MiniIcon name="hide" />
           </button>
           <span className="mini-brow-sep" aria-hidden="true" />
-          {!clickThrough && (
-            <button type="button" className={`mini-icon-button${pinned ? " is-active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("mini.unpin") : t("mini.pin")} title={pinned ? t("mini.unpin") : t("mini.pin")} onClick={() => void togglePinned()}>
+          <button type="button" className={`mini-icon-button${pinned ? " is-active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("mini.unpin") : t("mini.pin")} title={pinned ? t("mini.unpin") : t("mini.pin")} onClick={() => void togglePinned()}>
               <MiniIcon name="pin" />
-            </button>
-          )}
+          </button>
           <button
             type="button"
             className={`mini-icon-button${clickThrough ? " mini-brow-off-button is-active" : ""}`}
@@ -147,11 +157,14 @@ export function MiniBrow() {
             <MiniIcon name="click" />
             {clickThrough && <span>{t("mini.clickThroughOff")}</span>}
           </button>
-          {!clickThrough && (
-            <button type="button" className="mini-icon-button" aria-label={t("mini.settings")} title={t("mini.settings")} onClick={() => void openBodyPanel("settings")}>
+          <button type="button" className={`mini-icon-button${settingsOpen ? " is-active" : ""}`} aria-label={t("mini.settings")} title={t("mini.settings")} onClick={() => setSettingsOpen((current) => !current)}>
               <MiniIcon name="settings" />
-            </button>
-          )}
+          </button>
+          </div>
+          {settingsOpen && <div className="mini-brow-settings">
+            <label className="mini-settings-opacity"><span>{t("mini.settingsOpacity")}</span><output>{opacity}%</output><input type="range" min="60" max="100" step="5" value={opacity} onChange={(event) => void changeOpacity(Number(event.target.value))} /></label>
+            <button type="button" onClick={() => void openBodyPanel("settings")}>{t("mini.settings")}</button>
+          </div>}
         </nav>
       )}
       {error && <span className="mini-brow-error" role="status" title={error}>!</span>}
