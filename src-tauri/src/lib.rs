@@ -2081,21 +2081,14 @@ fn reanchor_mini_corner(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
-    if window.label() != "mini-brow" {
-        return Err("dragging is only available for the mini-brow window".to_string());
-    }
-    let connection = db::open()?;
-    if db::setting(&connection, "mini_corner")?.is_some_and(|corner| !corner.is_empty()) {
-        return Ok(());
-    }
-    window.start_dragging().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn begin_mini_right_drag(app: tauri::AppHandle) -> Result<(i32, i32, f64), String> {
     let mini = app.get_webview_window("mini").ok_or("mini-window is unavailable")?;
     let connection = db::open()?;
+    let was_tucked = db::setting(&connection, "mini_corner")?.is_some_and(|corner| !corner.is_empty())
+        && db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    if was_tucked {
+        tray::tuck_mini_position(&app, false)?;
+    }
     db::set_setting(&connection, "mini_corner", "")?;
     db::set_setting(&connection, "mini_corner_tuck", "0")?;
     drop(connection);
@@ -2329,7 +2322,6 @@ pub fn run() {
             reset_mini_geometry,
             pin_mini_corner,
             reanchor_mini_corner,
-            start_mini_drag,
             begin_mini_right_drag,
             move_mini_right_drag,
             get_autostart,
