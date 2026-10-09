@@ -1,6 +1,6 @@
 [package]
 name = "time-to-lock-in"
-version = "0.2.41"
+version = "0.2.42"
 description = "Local-first Windows time tracker with meme ranks and shareable challenge cards. No cloud, no accounts."
 authors = ["reconix37"]
 edition = "2021"
@@ -24,7 +24,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 regex = "1"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }

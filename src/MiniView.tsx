@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { singleFlight } from "./singleFlight";
+import { useVisiblePolling } from "./useVisiblePolling";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -185,7 +187,7 @@ export function MiniView() {
     applyMiniState(state);
   }, [applyMiniState]);
 
-  const loadMini = useCallback(async () => {
+  const loadMini = useMemo(() => singleFlight(async () => {
     try {
       const [nextProgress, nextScoring, nextLiveSegment, trackingPaused, settings, miniState] = await Promise.all([
         invoke<ProgressOverview>("get_progress_overview"),
@@ -210,7 +212,7 @@ export function MiniView() {
       setCornerTuck(miniSettings.cornerTuck);
       setLayout(miniSettings.layout);
       if (miniSettings.layout.blocks.some((block) => block.id === "chart" && block.enabled)) {
-        void invoke<TodayCumulative>("get_today_cumulative").then(setDayCumulative).catch(() => undefined);
+        setDayCumulative(await invoke<TodayCumulative>("get_today_cumulative"));
       }
       setKindLabels({
         useful: settings.kind_label_useful ?? defaultKindLabels.useful,
@@ -228,11 +230,12 @@ export function MiniView() {
     } finally {
       setLoaded(true);
     }
-  }, [applyMiniState, t]);
+  }), [applyMiniState, t]);
+
+  useVisiblePolling(loadMini, 5_000);
 
   useEffect(() => {
     document.body.classList.add("is-mini");
-    void loadMini();
     let active = true;
     let geometryTimer: number | null = null;
     let stopResizeListener: (() => void) | null = null;
@@ -268,7 +271,6 @@ export function MiniView() {
       if (active) stopRefreshListener = unlisten;
       else unlisten();
     });
-    const refresh = window.setInterval(() => void loadMini(), 5_000);
     return () => {
       active = false;
       document.body.classList.remove("is-mini");
@@ -278,7 +280,6 @@ export function MiniView() {
       stopRefreshListener?.();
       if (geometryTimer !== null) window.clearTimeout(geometryTimer);
       if (tuckTimerRef.current !== null) window.clearTimeout(tuckTimerRef.current);
-      window.clearInterval(refresh);
     };
   }, [loadMini]);
 

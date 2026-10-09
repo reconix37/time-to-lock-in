@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { singleFlight } from "./singleFlight";
+import { useVisiblePolling } from "./useVisiblePolling";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -261,7 +263,7 @@ function DashboardView() {
   const [tokenRevealed, setTokenRevealed] = useState(false);
   const [managerNotice, setManagerNotice] = useState<string | null>(null);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useMemo(() => singleFlight(async () => {
     try {
       const [nextSegments, nextCategories, nextProgress, nextCumulative, nextDailySeries, nextAfkSeries, nextApps, nextScoring, nextSettings, trackingPaused, nextAutostart, nextDayPrintDates] =
         await Promise.all([
@@ -302,7 +304,7 @@ function DashboardView() {
     } finally {
       setLoading(false);
     }
-  }, [dayPrintDate, t]);
+  }), [dayPrintDate, t]);
 
   useEffect(() => {
     if (dayCumulativeDate === "") return;
@@ -326,15 +328,9 @@ function DashboardView() {
     };
   }, [dayCumulativeDate]);
 
-  useEffect(() => {
-    void loadDashboard();
-    const refresh = window.setInterval(() => void loadDashboard(), 5_000);
-    const clock = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => {
-      window.clearInterval(refresh);
-      window.clearInterval(clock);
-    };
-  }, [loadDashboard]);
+  useVisiblePolling(loadDashboard, 5_000);
+  const updateClock = useCallback(() => setNow(Date.now()), []);
+  useVisiblePolling(updateClock, 1_000);
 
   useEffect(() => {
     if (loading || startupUpdateCheckStarted.current) return;

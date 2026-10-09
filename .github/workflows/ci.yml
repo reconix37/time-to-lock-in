@@ -17,7 +17,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:icons
-      - run: node --test tests/classification.test.mjs tests/duration.test.mjs tests/i18n.test.mjs tests/miniSettings.test.mjs tests/miniVerdict.test.mjs
+      - run: node --test tests/classification.test.mjs tests/duration.test.mjs tests/i18n.test.mjs tests/miniSettings.test.mjs tests/miniVerdict.test.mjs tests/singleFlight.test.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:

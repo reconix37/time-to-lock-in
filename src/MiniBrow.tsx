@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { singleFlight } from "./singleFlight";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { MiniIcon } from "./MiniView";
@@ -24,7 +25,7 @@ export function MiniBrow() {
   const rightDrag = useMiniRightDrag();
   const closeTimerRef = useRef<number | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useMemo(() => singleFlight(async () => {
     try {
       const [settings, state] = await Promise.all([
         invoke<Record<string, string>>("get_settings"),
@@ -39,7 +40,7 @@ export function MiniBrow() {
     } catch (reason: unknown) {
       setError(typeof reason === "string" ? reason : t("error.miniRefresh"));
     }
-  }, [t]);
+  }), [t]);
 
   useEffect(() => {
     document.body.classList.add("is-mini-brow");
@@ -50,13 +51,11 @@ export function MiniBrow() {
       if (active) stopRefreshListener = unlisten;
       else unlisten();
     });
-    const refresh = window.setInterval(() => void load(), 2_000);
     return () => {
       active = false;
       document.body.classList.remove("is-mini-brow");
       stopRefreshListener?.();
       if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-      window.clearInterval(refresh);
     };
   }, [load]);
 
@@ -65,6 +64,7 @@ export function MiniBrow() {
   }, [open, settingsOpen]);
 
   const keepOpen = () => {
+    if (!open) void load();
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
     setOpen(true);
   };

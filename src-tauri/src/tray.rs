@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow};
 
 const MINI_MIN_WIDTH: f64 = 300.0;
 const MINI_MIN_HEIGHT: f64 = 228.0;
@@ -380,9 +380,11 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
     if let Some(main) = app.get_webview_window("main") {
         if onboarding_done || restore_mini {
             main.hide().map_err(|error| error.to_string())?;
+            let _ = main.emit("ui://visibility", false);
         } else {
             // Первый запуск — показать дашборд (окно создаётся скрытым, видимость управляется здесь)
             main.show().map_err(|error| error.to_string())?;
+            let _ = main.emit("ui://visibility", true);
         }
     }
     Ok(())
@@ -392,6 +394,7 @@ pub fn show_dashboard(app: &AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.unminimize();
         let _ = main.show();
+        let _ = main.emit("ui://visibility", true);
         let _ = main.set_focus();
     }
     // После активации дашборда Windows может перемешать не-topmost окна —
@@ -407,6 +410,7 @@ pub fn toggle_mini(app: &AppHandle) {
         let _ = show_mini(app);
     } else if mini.is_visible().unwrap_or(false) {
         let _ = mini.hide();
+        let _ = mini.emit("ui://visibility", false);
         let _ = hide_mini_brow(app);
         if let Ok(connection) = db::open() {
             let _ = db::set_setting(&connection, "mini_visible", "0");
@@ -434,6 +438,7 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
         move_mini_to_corner(&mini, &corner, corner_tuck)?;
     }
     mini.show().map_err(|error| error.to_string())?;
+    let _ = mini.emit("ui://visibility", true);
     mini.set_focus().map_err(|error| error.to_string())?;
     let opacity = saved_mini_opacity(&connection)?;
     #[cfg(target_os = "windows")]
@@ -450,6 +455,7 @@ pub fn minimize_mini(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     let _ = save_mini_geometry(app);
     mini.minimize().map_err(|error| error.to_string())?;
+    let _ = mini.emit("ui://visibility", false);
     if let Some(brow) = app.get_webview_window("mini-brow") {
         brow.minimize().map_err(|error| error.to_string())?;
     }
@@ -462,6 +468,7 @@ pub fn hide_mini(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     let _ = save_mini_geometry(app);
     mini.hide().map_err(|error| error.to_string())?;
+    let _ = mini.emit("ui://visibility", false);
     hide_mini_brow(app)?;
     let connection = db::open()?;
     db::set_setting(&connection, "mini_visible", "0")
@@ -661,6 +668,7 @@ pub fn activate_existing_instance(app: &AppHandle) {
     }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.hide();
+        let _ = main.emit("ui://visibility", false);
     }
 }
 
@@ -993,6 +1001,7 @@ fn distance_squared(point: PhysicalPosition<i32>, origin: PhysicalPosition<i32>)
 fn hide_mini_brow(app: &AppHandle) -> Result<(), String> {
     if let Some(brow) = app.get_webview_window("mini-brow") {
         brow.hide().map_err(|error| error.to_string())?;
+        let _ = brow.emit("ui://visibility", false);
     }
     Ok(())
 }
@@ -1004,6 +1013,7 @@ fn show_mini_brow(app: &AppHandle) -> Result<(), String> {
     sync_mini_brow(app)?;
     brow.unminimize().map_err(|error| error.to_string())?;
     brow.show().map_err(|error| error.to_string())?;
+    let _ = brow.emit("ui://visibility", true);
     enforce_mini_brow_z_order(app)?;
     Ok(())
 }
@@ -1121,7 +1131,14 @@ fn spawn_updater(
     resume_label: &'static str,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        let mut backup_check = std::time::Instant::now() - Duration::from_secs(3600);
         while !stop.load(Ordering::Relaxed) {
+            if backup_check.elapsed() >= Duration::from_secs(3600) {
+                if let Err(error) = crate::storage_safety::backup_daily() {
+                    eprintln!("Database backup failed: {error}");
+                }
+                backup_check = std::time::Instant::now();
+            }
             if let Ok(snapshot) = tray_snapshot() {
                 let useful_minutes = snapshot.useful_ms / 60_000;
                 let _ = tray.set_icon(Some(counter_icon(

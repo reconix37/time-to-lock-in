@@ -3,6 +3,7 @@
 mod db;
 mod http;
 mod rules;
+mod storage_safety;
 mod tray;
 mod watcher;
 
@@ -2222,6 +2223,7 @@ pub fn run() {
                     // и ломает управление телом до конца сессии.
                 }
                 let _ = window.hide();
+                let _ = window.emit("ui://visibility", false);
             }
             tauri::WindowEvent::Focused(false) if window.label() == "mini" => {
                 if !window.is_minimized().unwrap_or(false) {
@@ -2246,9 +2248,6 @@ pub fn run() {
             }
             tauri::WindowEvent::Resized(_) if window.label() == "mini" => {
                 let _ = tray::sync_mini_brow(window.app_handle());
-            }
-            tauri::WindowEvent::Moved(_) if window.label() == "mini-brow" => {
-                let _ = tray::sync_mini_from_brow(window.app_handle());
             }
             _ => {}
         })

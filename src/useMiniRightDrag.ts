@@ -9,6 +9,22 @@ export function useMiniRightDrag() {
   const drag = useRef<Drag | null>(null);
   const pending = useRef(false);
   const activePointer = useRef<number | null>(null);
+  const nextPosition = useRef<{x: number; y: number} | null>(null);
+  const sending = useRef(false);
+  const flushPosition = useCallback(async () => {
+    if (sending.current) return;
+    sending.current = true;
+    try {
+      while (nextPosition.current) {
+        const position = nextPosition.current;
+        nextPosition.current = null;
+        await invoke("move_mini_right_drag", position);
+      }
+    } catch {
+      nextPosition.current = null;
+      drag.current = null;
+    } finally { sending.current = false; }
+  }, []);
 
   const onPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 2 || drag.current || pending.current) return;
@@ -24,7 +40,8 @@ export function useMiniRightDrag() {
       drag.current = { pointerId, startX, startY, originX, originY, scale, moving: false };
       void emitTo("mini", "mini://refresh");
       void emitTo("mini-brow", "mini://refresh");
-    }).finally(() => { pending.current = false; });
+    }).catch(() => { drag.current = null; activePointer.current = null; })
+      .finally(() => { pending.current = false; });
   }, []);
 
   const onPointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -34,11 +51,12 @@ export function useMiniRightDrag() {
     const dy = event.screenY - current.startY;
     if (!current.moving && Math.hypot(dx, dy) < 3) return;
     current.moving = true;
-    void invoke("move_mini_right_drag", {
+    nextPosition.current = {
       x: Math.round(current.originX + dx * current.scale),
       y: Math.round(current.originY + dy * current.scale),
-    });
-  }, []);
+    };
+    void flushPosition();
+  }, [flushPosition]);
 
   const onPointerUpCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (drag.current?.pointerId === event.pointerId) drag.current = null;
@@ -47,7 +65,7 @@ export function useMiniRightDrag() {
   }, []);
 
   useEffect(() => {
-    const clear = () => { drag.current = null; activePointer.current = null; };
+    const clear = () => { drag.current = null; activePointer.current = null; nextPosition.current = null; };
     window.addEventListener("blur", clear);
     return () => window.removeEventListener("blur", clear);
   }, []);
