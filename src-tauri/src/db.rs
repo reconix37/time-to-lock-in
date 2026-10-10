@@ -1509,6 +1509,12 @@ pub fn today_cumulative(
                 SELECT 0
                 UNION ALL
                 SELECT hour + 1 FROM hours WHERE hour < 23
+             ), day_segments AS MATERIALIZED (
+                SELECT segments.ts_start, segments.ts_end, segments.category_id
+                FROM segments CROSS JOIN bounds
+                WHERE segments.status IN ('active', 'crashed')
+                  AND segments.ts_end > bounds.day_start_ms
+                  AND segments.ts_start < MIN(bounds.current_ms, bounds.day_end_ms)
              ), buckets AS (
                 SELECT hours.hour,
                        CAST(strftime('%s', context.local_day, '+' || hours.hour || ' hours', 'utc') AS INTEGER) * 1000 AS bucket_start_ms,
@@ -1525,9 +1531,8 @@ pub fn today_cumulative(
                            MAX(0, MIN(segments.ts_end, buckets.bucket_end_ms, buckets.current_ms) - MAX(segments.ts_start, buckets.bucket_start_ms))
                        ELSE 0 END), 0) AS waste_ms
                 FROM buckets
-                LEFT JOIN segments
-                  ON segments.status IN ('active', 'crashed')
-                 AND segments.ts_end > buckets.bucket_start_ms
+                LEFT JOIN day_segments AS segments
+                  ON segments.ts_end > buckets.bucket_start_ms
                  AND segments.ts_start < MIN(buckets.bucket_end_ms, buckets.current_ms)
                 LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
                 GROUP BY buckets.hour, buckets.bucket_end_ms
@@ -1552,9 +1557,8 @@ pub fn today_cumulative(
                        ELSE 0 END), 0) AS waste_ms,
                        1 AS is_current
                 FROM bounds
-                LEFT JOIN segments
-                  ON segments.status IN ('active', 'crashed')
-                 AND segments.ts_end > bounds.day_start_ms
+                LEFT JOIN day_segments AS segments
+                  ON segments.ts_end > bounds.day_start_ms
                  AND segments.ts_start < MIN(bounds.current_ms, bounds.day_end_ms)
                 LEFT JOIN categories ON categories.id = COALESCE(segments.category_id, 0)
              )
