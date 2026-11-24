@@ -4,7 +4,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'none'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost data:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'none'",
       "capabilities": [
         {
           "identifier": "offline-windows",
