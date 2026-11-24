@@ -451,6 +451,10 @@ pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()
 }
 
 pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64, i64), String> {
+    save_challenge(connection, code, true)
+}
+
+pub fn save_challenge(connection: &Connection, code: &str, change_goals: bool) -> Result<(i64, i64, i64), String> {
     let parts = code.split('-').collect::<Vec<_>>();
     if parts.len() != 4
         || parts[0] != "TF"
@@ -472,6 +476,7 @@ pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    if change_goals {
     for (key, value) in [
         ("useful_goal_min", useful_goal_min),
         ("waste_limit_min", waste_limit_min),
@@ -497,6 +502,7 @@ pub fn import_challenge(connection: &Connection, code: &str) -> Result<(i64, i64
             params![useful_goal_min, waste_limit_min, observed_min],
         )
         .map_err(|error| error.to_string())?;
+    }
     transaction
         .execute(
             "INSERT INTO challenge_history (

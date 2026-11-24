@@ -486,11 +486,19 @@ button:focus-visible {
 .segmented-control button { padding: 5px 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; }
 .segmented-control button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .heatmap-scroll { min-width: 0; overflow-x: auto; padding-bottom: 4px; }
-.heatmap-months { display: grid; min-width: 410px; grid-template-columns: repeat(12, 28px); gap: 5px; margin-left: 34px; height: 18px; color: var(--subtle); font: 10px var(--font-mono); text-transform: capitalize; }
+.heatmap-months { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 5px; margin-left: 34px; height: 18px; color: var(--subtle); font: 10px var(--font-mono); text-transform: capitalize; }
 .heatmap-months span { white-space: nowrap; }
-.heatmap-body { display: flex; min-width: 444px; gap: 8px; }
+.heatmap-body { display: flex; gap: 8px; }
 .heatmap-weekdays { display: grid; width: 26px; flex: none; grid-template-rows: repeat(7, 16px); gap: 5px; color: var(--subtle); font: 9px var(--font-mono); }
-.heatmap-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 16px); grid-auto-columns: 28px; gap: 5px; }
+.heatmap-grid { display: grid; flex: 1; min-width: 0; grid-auto-flow: column; grid-template-rows: repeat(7, 16px); grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 5px; }
+.heatmap-grid button.heat-cell { width: 100%; border: 0; padding: 0; cursor: pointer; }
+.heatmap-grid button[aria-pressed="true"] { outline: 2px solid var(--iris); outline-offset: 1px; }
+.heatmap-grid button:disabled { cursor: default; }
+.heatmap-readout { display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: center; min-height: 28px; color: var(--muted); font: 11px var(--font-mono); }
+.verdict-navigation, .verdict-category, .verdict-week-days { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.verdict-navigation > button, .verdict-category button, .verdict-week-days button { padding: 4px 8px; border: 1px solid var(--hl-med); border-radius: 5px; background: var(--surface); color: var(--text); }
+.verdict-category select { min-width: 0; max-width: 100%; }
+.verdict-challenges { margin-top: 12px; display: grid; gap: 14px; }
 .heat-cell { position: relative; display: inline-block; width: 28px; height: 16px; border-radius: 3px; background: var(--heat-0); }
 .heat-cell.level-1 { background: color-mix(in srgb, var(--heat-color) 22%, var(--heat-0)); }
 .heat-cell.level-2 { background: color-mix(in srgb, var(--heat-color) 42%, var(--heat-0)); }

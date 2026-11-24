@@ -1,6 +1,7 @@
 import type { ProgressOverview } from "../progress";
 import type { KindLabels } from "../share";
 import { localeForLang } from "../i18n";
+import { localizedRank } from "../localizedLabels";
 import { useI18n } from "../i18nContext";
 
 interface DayScorecardProps {
@@ -82,10 +83,10 @@ export function DayScorecard({ overview, formatDuration, kindLabels, observedLab
         <div className="rank-copy">
           <span className="eyebrow">{t("common.publicXp")}</span>
           <strong>{overview.lifetime_xp.toLocaleString(localeForLang(lang))} XP</strong>
-          <span>{overview.current_rank}</span>
+          <span>{localizedRank(overview.current_rank, lang)}</span>
         </div>
         <div className="rank-progress">
-          <div><span>{overview.next_rank ? t("rank.next", { name: overview.next_rank }) : t("rank.maximum")}</span><strong>{overview.next_rank_threshold === null ? "MAX" : `${overview.next_rank_threshold - overview.lifetime_xp} XP`}</strong></div>
+          <div><span>{overview.next_rank ? t("rank.next", { name: localizedRank(overview.next_rank, lang) }) : t("rank.maximum")}</span><strong>{overview.next_rank_threshold === null ? "MAX" : `${overview.next_rank_threshold - overview.lifetime_xp} XP`}</strong></div>
           <span className="rank-rail"><i style={{ width: `${rankProgress}%` }} /></span>
           <small>{t("rank.today", { duration: formatDuration(today.useful_ms), label: kindLabels.useful })}</small>
         </div>

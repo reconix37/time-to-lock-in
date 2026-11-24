@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { singleFlight } from "./singleFlight";
+import { localizedKind, localizedRank } from "./localizedLabels";
 import { useVisiblePolling } from "./useVisiblePolling";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -215,9 +216,9 @@ export function MiniView() {
         setDayCumulative(await invoke<TodayCumulative>("get_today_cumulative"));
       }
       setKindLabels({
-        useful: settings.kind_label_useful ?? defaultKindLabels.useful,
-        neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
-        waste: settings.kind_label_waste ?? defaultKindLabels.waste,
+        useful: localizedKind(settings.kind_label_useful, defaultKindLabels.useful),
+        neutral: localizedKind(settings.kind_label_neutral, defaultKindLabels.neutral),
+        waste: localizedKind(settings.kind_label_waste, defaultKindLabels.waste),
       });
       // режим размера применяется ОДИН раз при переключении (changeMode/changeTextSize)
       // и на старте — НЕ в 5-сек таймере (иначе мышиный ресайз сводится на нет,
@@ -559,7 +560,7 @@ export function MiniView() {
   const currentApp = privacyNow && !paused && loaded && !away ? currentCategory ?? t("mini.hiddenApp") : actualCurrentApp;
   const accountedText = t("mini.accountedToday", { duration: localizedDuration(progress?.today.observed_ms ?? 0, t) });
   const rankText = progress
-    ? t("mini.rank", { rank: progress.current_rank, xp: progress.lifetime_xp.toLocaleString(localeForLang(lang)) })
+    ? t("mini.rank", { rank: localizedRank(progress.current_rank, lang), xp: progress.lifetime_xp.toLocaleString(localeForLang(lang)) })
     : t("mini.rank", { rank: "—", xp: "0" });
   const verdict = progress
     ? getMiniVerdict({

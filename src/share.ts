@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { localizedRank } from "./localizedLabels";
 import { toDataURL as qrToDataURL } from "qrcode";
 import { localeForLang, translate, type Lang, type Translate, type TranslateVars } from "./i18n";
 
@@ -12,6 +13,7 @@ export interface KindLabels {
 }
 
 export interface DayPrintEntry {
+  category_id: number;
   app: string;
   category_name: string;
   category_kind: "useful" | "neutral" | "waste";
@@ -240,7 +242,7 @@ export async function renderDayPrintPng(day: DayPrintData, kindLabels: KindLabel
   context.fillText(day.passed ? t("print.statusPassed") : t("print.statusFailed"), PADDING, 176);
   context.fillStyle = colors.text;
   font(context, 27);
-  context.fillText(`${day.rank} · +${day.public_xp.toLocaleString(locale)} XP`, PADDING, 226);
+  context.fillText(`${localizedRank(day.rank, lang)} · +${day.public_xp.toLocaleString(locale)} XP`, PADDING, 226);
   divider(context, colors, 266);
 
   condition(context, colors, 326, kindLabels.useful.toLocaleUpperCase(locale), minutes(day.useful_ms), day.useful_goal_min, day.useful_passed, false, t);
@@ -304,7 +306,7 @@ export async function renderWeekPng(week: WeekSummaryData, kindLabels: KindLabel
   context.fillText(t("share.passedCount", { count: week.passed_count }), PADDING, 174);
   context.fillStyle = colors.iris;
   font(context, 27);
-  context.fillText(t("share.weekXp", { rank: week.rank, xp: week.week_xp.toLocaleString(locale) }), PADDING, 224);
+  context.fillText(t("share.weekXp", { rank: localizedRank(week.rank, lang), xp: week.week_xp.toLocaleString(locale) }), PADDING, 224);
   divider(context, colors, 266);
 
   week.days.forEach((day, index) => {
@@ -347,34 +349,33 @@ export async function renderWeekPng(week: WeekSummaryData, kindLabels: KindLabel
   return canvas.toDataURL("image/png");
 }
 
-export async function renderChallengePng(day: DayPrintData, kindLabels: KindLabels, lang: Lang): Promise<string> {
+export async function renderChallengePng(code: string, kindLabels: KindLabels, lang: Lang): Promise<string> {
   const t = translator(lang);
   const locale = localeForLang(lang);
   const [canvas, context, colors] = createCanvas(t);
-  const code = challengeCode(day);
+  const [useful, waste, observed] = code.split("-").slice(1).map(Number);
   context.fillStyle = colors.muted;
   font(context, 22);
   context.fillText(t("share.localChallenge"), PADDING, 90);
   context.fillStyle = colors.text;
   font(context, 65, 700);
-  context.fillText(t("share.beatMyDay"), PADDING, 190);
+  context.fillText(t("verdict.challenges"), PADDING, 190);
   context.fillStyle = colors.iris;
   font(context, 38, 700);
   context.fillText(code, PADDING, 264);
   divider(context, colors, 314);
   context.fillStyle = colors.muted;
   font(context, 23);
-  context.fillText(t("share.threeConditions"), PADDING, 374);
-  condition(context, colors, 448, kindLabels.useful.toLocaleUpperCase(locale), minutes(day.useful_ms), minutes(day.useful_ms), true, false, t);
-  condition(context, colors, 516, kindLabels.waste.toLocaleUpperCase(locale), minutes(day.waste_ms), minutes(day.waste_ms), true, true, t);
-  condition(context, colors, 584, kindLabels.observed.toLocaleUpperCase(locale), minutes(day.observed_ms), minutes(day.observed_ms), true, false, t);
+  context.fillText(t("verdict.targets"), PADDING, 374);
+  context.fillStyle = colors.text;
+  font(context, 32, 700);
+  context.fillText(kindLabels.useful.toLocaleUpperCase(locale) + " ≥ " + useful + t("common.minutesShort"), PADDING, 448);
+  context.fillText(kindLabels.waste.toLocaleUpperCase(locale) + " ≤ " + waste + t("common.minutesShort"), PADDING, 516);
+  context.fillText(kindLabels.observed.toLocaleUpperCase(locale) + " ≥ " + observed + t("common.minutesShort"), PADDING, 584);
   divider(context, colors, 636);
   context.fillStyle = colors.text;
-  font(context, 31, 700);
-  context.fillText(t("share.result", { status: day.passed ? t("print.statusPassed") : t("print.statusFailed") }), PADDING, 708);
   context.fillStyle = colors.muted;
   font(context, 25);
-  context.fillText(`${day.rank} · ${day.public_xp} ${t("common.publicXp")}`, PADDING, 756);
   context.fillText(t("share.codeHint"), PADDING, 850);
   context.fillText(t("share.privacyHint"), PADDING, 892);
   await footer(context, colors, t);

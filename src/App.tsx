@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { localizedKind } from "./localizedLabels";
 import { singleFlight } from "./singleFlight";
 import { useVisiblePolling } from "./useVisiblePolling";
 import { getVersion } from "@tauri-apps/api/app";
@@ -27,6 +28,7 @@ import type { ProgressOverview } from "./progress";
 import { formatLocalDate, type AfkDay, type DailySeriesDay } from "./trends";
 import {
   renderChallengePng,
+  challengeCode,
   renderDayPrintPng,
   renderWeekPng,
   savePng,
@@ -203,6 +205,10 @@ function DashboardView() {
   const [dayPrint, setDayPrint] = useState<DayPrintData | null>(null);
   const [dayPrintDates, setDayPrintDates] = useState<string[]>([]);
   const [dayPrintDate, setDayPrintDate] = useState("");
+  const [printMode, setPrintMode] = useState<"day" | "week">("day");
+  const [weekPrint, setWeekPrint] = useState<WeekSummaryData | null>(null);
+  const [printRefresh, setPrintRefresh] = useState(0);
+  const [printSaving, setPrintSaving] = useState(false);
   const [shareBusy, setShareBusy] = useState<"day" | "week" | "challenge" | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [dashboardView, setDashboardView] = useState<"today" | "trends">("today");
@@ -292,10 +298,8 @@ function DashboardView() {
       setApps(nextApps);
       setScoring(nextScoring);
       setDayPrintDates(nextDayPrintDates);
-      const targetDate = dayPrintDate || nextProgress.today.local_date;
       setSettings(nextSettings);
-      setDayPrintDate(targetDate);
-      setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate: targetDate }));
+      setDayPrintDate((current) => current || nextProgress.today.local_date);
       setDark(nextSettings.theme === "dark");
       setPaused(trackingPaused);
       setAutostart(nextAutostart);
@@ -305,7 +309,24 @@ function DashboardView() {
     } finally {
       setLoading(false);
     }
-  }), [dayPrintDate, t]);
+  }), [t]);
+
+  const liveVerdictTick = dayPrintDate === progress?.today.local_date ? Math.floor(now / 30_000) : 0;
+  useEffect(() => {
+    if (!dayPrintDate) return;
+    let active = true;
+    if (printMode === "week") {
+      setWeekPrint(null);
+      void invoke<WeekSummaryData>("get_week_summary", { endDate: dayPrintDate })
+        .then((week) => { if (active) setWeekPrint(week); })
+        .catch(() => { if (active) setShareMessage(t("error.dayPrint")); });
+    } else {
+      void invoke<DayPrintData>("get_day_print", { localDate: dayPrintDate })
+        .then((day) => { if (active) setDayPrint(day); })
+        .catch(() => { if (active) setShareMessage(t("error.dayPrint")); });
+    }
+    return () => { active = false; };
+  }, [dayPrintDate, printMode, printRefresh, liveVerdictTick, t]);
 
   useEffect(() => {
     if (dayCumulativeDate === "") return;
@@ -465,10 +486,10 @@ function DashboardView() {
     : undefined;
   const displaySessions = useMemo(() => groupSegments(segments), [segments]);
   const kindLabels = useMemo<KindLabels>(() => ({
-    useful: settings.kind_label_useful ?? defaultKindLabels.useful,
-    neutral: settings.kind_label_neutral ?? defaultKindLabels.neutral,
-    waste: settings.kind_label_waste ?? defaultKindLabels.waste,
-    observed: settings.kind_label_observed ?? defaultKindLabels.observed,
+    useful: localizedKind(settings.kind_label_useful, defaultKindLabels.useful),
+    neutral: localizedKind(settings.kind_label_neutral, defaultKindLabels.neutral),
+    waste: localizedKind(settings.kind_label_waste, defaultKindLabels.waste),
+    observed: localizedKind(settings.kind_label_observed, defaultKindLabels.observed),
   }), [settings, t]);
   const appTimeline = useMemo<AppTimelineItem[]>(() => apps
     .map((app) => {
@@ -638,10 +659,10 @@ function DashboardView() {
   async function openSettings() {
     setExtensionChromeId(settings.extension_chrome_id ?? "");
     setExtensionEdgeId(settings.extension_edge_id ?? "");
-    setKindLabelUseful(settings.kind_label_useful ?? defaultKindLabels.useful);
-    setKindLabelNeutral(settings.kind_label_neutral ?? defaultKindLabels.neutral);
-    setKindLabelWaste(settings.kind_label_waste ?? defaultKindLabels.waste);
-    setKindLabelObserved(settings.kind_label_observed ?? defaultKindLabels.observed);
+    setKindLabelUseful(localizedKind(settings.kind_label_useful, defaultKindLabels.useful));
+    setKindLabelNeutral(localizedKind(settings.kind_label_neutral, defaultKindLabels.neutral));
+    setKindLabelWaste(localizedKind(settings.kind_label_waste, defaultKindLabels.waste));
+    setKindLabelObserved(localizedKind(settings.kind_label_observed, defaultKindLabels.observed));
     setUsefulGoalMin(settings.useful_goal_min ?? "120");
     setWasteLimitMin(settings.waste_limit_min ?? "60");
     setObservedMin(settings.observed_min ?? "60");
@@ -792,17 +813,42 @@ function DashboardView() {
     }
   }
 
-  async function selectDayPrint(localDate: string) {
+  function selectDayPrint(localDate: string) {
     setDayPrintDate(localDate);
     setShareMessage(null);
+  }
+
+  async function moveDayEntry(appName: string, fromCategory: number, categoryId: number) {
+    setPrintSaving(true);
+    setShareMessage(null);
     try {
-      setDayPrint(await invoke<DayPrintData>("get_day_print", { localDate }));
+      await invoke("set_day_app_category", { localDate: dayPrintDate, appName, fromCategory, categoryId });
+      setPrintRefresh((value) => value + 1);
+      await loadDashboard();
     } catch (reason: unknown) {
-      setError(typeof reason === "string" ? reason : t("error.dayPrint"));
+      setShareMessage(typeof reason === "string" ? reason : t("error.changeCategory"));
+    } finally {
+      setPrintSaving(false);
     }
   }
 
-  async function shareArtifact(kind: "day" | "week" | "challenge") {
+  async function acceptDayChallenge(code: string) {
+    setPrintSaving(true);
+    setShareMessage(null);
+    try {
+      await invoke("accept_day_challenge", { code });
+      setPrintMode("day");
+      setDayPrintDate(progress?.today.local_date ?? dayPrintDate);
+      setPrintRefresh((value) => value + 1);
+      setShareMessage(t("settings.challengeAccepted"));
+    } catch {
+      setShareMessage(t("error.importChallenge"));
+    } finally {
+      setPrintSaving(false);
+    }
+  }
+
+  async function shareArtifact(kind: "day" | "week" | "challenge", selectedCode?: string) {
     if (!dayPrint) return;
     setShareBusy(kind);
     setShareMessage(null);
@@ -810,18 +856,18 @@ function DashboardView() {
       let dataUrl: string;
       let fileName: string;
       if (kind === "week") {
-        const week = await invoke<WeekSummaryData>("get_week_summary");
+        const week = await invoke<WeekSummaryData>("get_week_summary", { endDate: dayPrintDate });
         dataUrl = await renderWeekPng(week, kindLabels, lang);
         fileName = `ttli-week-${week.days[0]?.local_date ?? dayPrint.local_date}.png`;
       } else if (kind === "challenge") {
-        dataUrl = await renderChallengePng(dayPrint, kindLabels, lang);
+        dataUrl = await renderChallengePng(selectedCode ?? challengeCode(dayPrint), kindLabels, lang);
         fileName = `ttli-challenge-${dayPrint.local_date}.png`;
       } else {
         dataUrl = await renderDayPrintPng(dayPrint, kindLabels, lang);
         fileName = `ttli-day-print-${dayPrint.local_date}.png`;
       }
       const saved = await savePng(dataUrl, fileName);
-      if (saved) setShareMessage(t("toast.pngSaved"));
+      setShareMessage(saved ? t("toast.pngSaved") : t("verdict.cancelled"));
     } catch (reason: unknown) {
       setShareMessage(typeof reason === "string" ? reason : t("error.savePng"));
     } finally {
@@ -1306,29 +1352,46 @@ function DashboardView() {
       {progress && (
         <CalendarHeatmap
           days={progress.calendar}
+          selectedDate={dayPrintDate}
+          onDateSelect={(date) => {
+            setPrintMode("day");
+            selectDayPrint(date);
+            document.getElementById("day-print-title")?.scrollIntoView({ block: "start" });
+          }}
           todayDate={progress.today.local_date}
           formatDuration={formatDuration}
           kindLabels={kindLabels}
         />
       )}
 
-      {dayPrint && (
+      {dayPrintDate && (
         <DayPrint
-          data={dayPrint}
+          data={dayPrint?.local_date === dayPrintDate ? dayPrint : null}
+          mode={printMode}
+          week={weekPrint}
+          todayDate={progress?.today.local_date ?? dayPrintDate}
+          categories={categories}
+          saving={printSaving}
+          selectedDayCode={dayPrint?.local_date === dayPrintDate ? challengeCode(dayPrint) : null}
           availableDates={Array.from(new Set([
-            progress?.today.local_date ?? dayPrint.local_date,
+            progress?.today.local_date ?? dayPrintDate,
             ...dayPrintDates,
-          ]))}
+            ...(progress?.calendar.filter((day) => !day.future).map((day) => day.local_date) ?? []),
+            dayPrintDate,
+          ])).filter(Boolean).sort().reverse()}
           selectedDate={dayPrintDate}
           busyAction={shareBusy}
           message={shareMessage}
           formatDuration={formatDuration}
           kindLabels={kindLabels}
           observedLabel={kindLabels.observed}
-          onDateChange={(localDate) => void selectDayPrint(localDate)}
+          onDateChange={selectDayPrint}
+          onModeChange={setPrintMode}
+          onMoveEntry={(app, from, to) => void moveDayEntry(app, from, to)}
+          onAcceptChallenge={(code) => void acceptDayChallenge(code)}
           onShareDay={() => void shareArtifact("day")}
           onShareWeek={() => void shareArtifact("week")}
-          onShareChallenge={() => void shareArtifact("challenge")}
+          onShareChallenge={(code) => void shareArtifact("challenge", code)}
         />
       )}
       </> : (

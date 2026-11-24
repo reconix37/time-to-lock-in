@@ -215,6 +215,7 @@ pub(crate) fn category_icon_or_fallback(icon: String) -> String {
 
 #[derive(Clone, Serialize)]
 struct DayPrintEntry {
+    category_id: i64,
     app: String,
     category_name: String,
     category_kind: String,
@@ -540,14 +541,13 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
         .prepare(
             "SELECT s.app, COALESCE(c.name, 'Без категории'), COALESCE(c.kind, 'neutral'),
                     COALESCE(c.id, 0) = 0,
-                    SUM(o.duration_ms) AS duration_ms
+                    SUM(o.duration_ms) AS duration_ms, COALESCE(c.id, 0)
              FROM segment_day_overlaps o
              JOIN segments s ON s.id = o.segment_id
              LEFT JOIN categories c ON c.id = o.category_id
              WHERE o.local_date = ?1
              GROUP BY s.app, c.id
-             ORDER BY duration_ms DESC, s.app ASC
-             LIMIT 5",
+             ORDER BY duration_ms DESC, s.app ASC",
         )
         .map_err(|error| error.to_string())?;
     let top_entries = statement
@@ -558,6 +558,7 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
                 category_kind: row.get(2)?,
                 is_uncategorized: row.get(3)?,
                 duration_ms: row.get(4)?,
+                category_id: row.get(5)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -611,9 +612,13 @@ fn load_day_print(connection: &rusqlite::Connection, local_date: &str) -> Result
 }
 
 #[tauri::command]
-fn get_day_print(local_date: String) -> Result<DayPrint, String> {
-    let connection = db::open()?;
-    load_day_print(&connection, &local_date)
+async fn get_day_print(local_date: String) -> Result<DayPrint, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open()?;
+        load_day_print(&connection, &local_date)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -658,19 +663,29 @@ fn get_day_print_dates() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn get_week_summary() -> Result<WeekSummary, String> {
+async fn get_week_summary(end_date: Option<String>) -> Result<WeekSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || load_week_summary(end_date.as_deref()))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn load_week_summary(end_date: Option<&str>) -> Result<WeekSummary, String> {
     let connection = db::open()?;
+    if let Some(date) = end_date {
+        if !local_date_format_is_valid(date) {
+            return Err("Invalid week ending date".into());
+        }
+    }
     let mut statement = connection
         .prepare(
             "WITH RECURSIVE dates(local_date, position) AS (
-                SELECT date('now', 'localtime', '-6 days'), 0
+                SELECT date(COALESCE(?1, date('now', 'localtime')), '-6 days'), 0
                 UNION ALL
                 SELECT date(local_date, '+1 day'), position + 1 FROM dates WHERE position < 6
              ) SELECT local_date FROM dates ORDER BY local_date",
         )
         .map_err(|error| error.to_string())?;
     let dates = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([end_date], |row| row.get::<_, String>(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -720,6 +735,43 @@ fn get_week_summary() -> Result<WeekSummary, String> {
 }
 
 #[tauri::command]
+async fn set_day_app_category(local_date: String, app_name: String, from_category: i64, category_id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || move_day_app_category(&local_date, &app_name, from_category, category_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn move_day_app_category(local_date: &str, app_name: &str, from_category: i64, category_id: i64) -> Result<(), String> {
+    if !local_date_format_is_valid(local_date) || app_name.is_empty() {
+        return Err("Invalid activity selection".into());
+    }
+    let mut connection = db::open()?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let affected = {
+        let mut statement = transaction.prepare(
+            "SELECT DISTINCT local_date FROM segment_day_overlaps WHERE segment_id IN (
+                SELECT o.segment_id FROM segment_day_overlaps o JOIN segments s ON s.id = o.segment_id
+                WHERE o.local_date = ?1 AND s.app = ?2 AND o.category_id = ?3
+            )"
+        ).map_err(|error| error.to_string())?;
+        let dates = statement.query_map(params![local_date, app_name, from_category], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        dates
+    };
+    transaction.execute(
+        "UPDATE segments SET category_id = ?4, manual_category = 1 WHERE id IN (
+            SELECT o.segment_id FROM segment_day_overlaps o JOIN segments s ON s.id = o.segment_id
+            WHERE o.local_date = ?1 AND s.app = ?2 AND o.category_id = ?3
+        )", params![local_date, app_name, from_category, category_id]
+    ).map_err(|error| error.to_string())?;
+    for date in affected {
+        db::refresh_daily_stats(&transaction, &date)?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn import_challenge(code: String) -> Result<ImportedChallenge, String> {
     let connection = db::open()?;
     let (useful_goal_min, waste_limit_min, observed_min) =
@@ -730,6 +782,13 @@ fn import_challenge(code: String) -> Result<ImportedChallenge, String> {
         waste_limit_min,
         observed_min,
     })
+}
+
+#[tauri::command]
+fn accept_day_challenge(code: String) -> Result<(), String> {
+    let connection = db::open()?;
+    db::save_challenge(&connection, &code, false)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2313,6 +2372,8 @@ pub fn run() {
             get_day_print_dates,
             get_week_summary,
             import_challenge,
+            accept_day_challenge,
+            set_day_app_category,
             save_png,
             get_categories,
             create_category,
