@@ -15,6 +15,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
+#[cfg(feature = "online-updater")]
 use tauri_plugin_updater::UpdaterExt;
 
 struct TrackingControl {
@@ -2128,12 +2129,19 @@ struct UpdateInfo {
     version: String,
 }
 
+#[cfg(feature = "online-updater")]
 #[derive(Clone, serde::Serialize)]
 struct UpdateProgress {
     downloaded: u64,
     total: u64,
 }
 
+#[tauri::command]
+fn updates_enabled() -> bool {
+    cfg!(feature = "online-updater")
+}
+
+#[cfg(feature = "online-updater")]
 #[tauri::command]
 async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
     let updater = app.updater().map_err(|error| error.to_string())?;
@@ -2143,6 +2151,7 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, 
     }))
 }
 
+#[cfg(feature = "online-updater")]
 #[tauri::command]
 async fn download_and_install_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
     let updater = app.updater().map_err(|error| error.to_string())?;
@@ -2179,6 +2188,18 @@ async fn download_and_install_update(app: tauri::AppHandle, version: String) -> 
         .map_err(|error| error.to_string())
 }
 
+#[cfg(not(feature = "online-updater"))]
+#[tauri::command]
+fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
+    Err("Updates are disabled in this build".into())
+}
+
+#[cfg(not(feature = "online-updater"))]
+#[tauri::command]
+fn download_and_install_update() -> Result<(), String> {
+    Err("Updates are disabled in this build".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let paused = Arc::new(AtomicBool::new(false));
@@ -2196,10 +2217,14 @@ pub fn run() {
         }));
     }
 
+    #[cfg(feature = "online-updater")]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
     builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -2252,7 +2277,11 @@ pub fn run() {
             _ => {}
         })
         .setup(move |app| {
-            db::initialize().map_err(std::io::Error::other)?;
+            if let Err(error) = storage_safety::check_startup().and_then(|()| db::initialize()) {
+                let handle = app.handle().clone();
+                app.dialog().message(error).title("Time To Lock In").show(move |_| handle.exit(1));
+                return Ok(());
+            }
             let stop = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::channel();
             let watcher_handle =
@@ -2325,6 +2354,7 @@ pub fn run() {
             move_mini_right_drag,
             get_autostart,
             set_autostart,
+            updates_enabled,
             check_for_updates,
             download_and_install_update,
         ])

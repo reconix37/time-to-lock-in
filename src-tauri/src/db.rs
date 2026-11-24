@@ -226,8 +226,16 @@ pub fn database_path() -> Result<PathBuf, String> {
 }
 
 pub fn open() -> Result<Connection, String> {
+    open_database(false)
+}
+
+fn open_database(create: bool) -> Result<Connection, String> {
     let path = database_path()?;
-    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    let mut flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
+    if create {
+        flags |= rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
+    }
+    let connection = Connection::open_with_flags(path, flags).map_err(|error| error.to_string())?;
     connection
         .execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")
         .map_err(|error| error.to_string())?;
@@ -235,7 +243,7 @@ pub fn open() -> Result<Connection, String> {
 }
 
 pub fn initialize() -> Result<(), String> {
-    let mut connection = open()?;
+    let mut connection = open_database(true)?;
     let previous_version = connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .map_err(|error| error.to_string())?;

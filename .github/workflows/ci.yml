@@ -23,7 +23,10 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npm run tauri -- build --bundles nsis --config src-tauri/tauri.ci.conf.json --ci
+      - if: github.ref_name != 'fix/ttl-personal-offline'
+        run: npm run tauri -- build --bundles nsis --config src-tauri/tauri.ci.conf.json --ci
+      - if: github.ref_name == 'fix/ttl-personal-offline'
+        run: npm run tauri -- build --bundles nsis --config src-tauri/tauri.ci.conf.json --config src-tauri/tauri.offline.conf.json --ci -- --no-default-features
       - uses: actions/upload-artifact@v4
         with:
           name: Time-To-Lock-In-Windows

@@ -231,6 +231,7 @@ function DashboardView() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheck>("unknown");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updatesEnabled, setUpdatesEnabled] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateDownloading, setUpdateDownloading] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
@@ -333,10 +334,14 @@ function DashboardView() {
   useVisiblePolling(updateClock, 1_000);
 
   useEffect(() => {
-    if (loading || startupUpdateCheckStarted.current) return;
+    void invoke<boolean>("updates_enabled").then(setUpdatesEnabled).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!updatesEnabled || loading || startupUpdateCheckStarted.current) return;
     startupUpdateCheckStarted.current = true;
     void checkForUpdates(true);
-  }, [loading]);
+  }, [loading, updatesEnabled]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1652,7 +1657,7 @@ function DashboardView() {
               <section id="about-settings" className="settings-section" aria-labelledby="about-settings-title">
                 <div className="settings-section-heading">
                   <h3 id="about-settings-title">{t("settings.about")}</h3>
-                  <span>{t("updates.autoCheckNote")}</span>
+                  {updatesEnabled && <span>{t("updates.autoCheckNote")}</span>}
                 </div>
                 {installedVersion && (
                   <div className="update-status">
@@ -1691,14 +1696,14 @@ function DashboardView() {
                     </div>
                   );
                 })()}
-                <button
+                {updatesEnabled && <button
                   type="button"
                   className="update-check-button"
                   disabled={updateCheck === "checking" || updateDownloading}
                   onClick={() => void checkForUpdates()}
                 >
                   {updateCheck === "checking" ? t("updates.checking") : t("updates.check")}
-                </button>
+                </button>}
                 <div className="update-status" aria-live="polite">
                   {updateCheck === "latest" && t("updates.latest")}
                   {updateCheck === "error" && updateError && (
